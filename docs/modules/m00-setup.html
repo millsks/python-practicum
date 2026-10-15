@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M00 · Setup: Python 3.14 with Pixi · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m00">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 0 · Orientation · Module 00</p>
+    <h1>Setup: Python 3.14 with Pixi</h1>
+    <p class="lede">Before you can learn to program, you need a place to run programs. In this module you will learn how
+      this course works, install Pixi, use it to get Python 3.14, and run your very first script. Every professional
+      Python developer does this same setup, so nothing here is "just for beginners".</p>
+    <div class="lesson-meta"><span>⏱ ~1 hour</span><span>Prerequisites: none, just a computer and curiosity</span></div>
+    <ul class="objectives">
+      <li>Use this course effectively: read, run, predict, practise, quiz, build</li>
+      <li>Explain what a package manager and an environment are, and why we use Pixi</li>
+      <li>Install Pixi on macOS, Linux, or Windows and create a workspace with Python 3.14</li>
+      <li>Read a <code>pixi.toml</code> file and run code with <code>pixi run</code>, <code>pixi shell</code>, and tasks</li>
+      <li>Clone this course, serve it locally, and start and grade a project</li>
+      <li>Use the Python 3.14 REPL and an editor, and write and run a first script</li>
+      <li>Read an error message calmly and use it to fix your code</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="how-to-use">
+    <h2>How to use this course</h2>
+    <p>Welcome! This course is designed for <strong>active</strong> learning. Research on learning is very clear on one
+      point: you remember what you <em>do</em> far better than what you only read. So every page asks you to do
+      something every few minutes. Here is the rhythm each module follows:</p>
+    <ol>
+      <li><strong>Read</strong> a short explanation of one idea. Every new term is defined the first time it appears.</li>
+      <li><strong>Run</strong> the example. Code boxes with a <em>Run</em> button execute real Python 3.14 right in your
+        browser (using a technology called <em>Pyodide</em>, which is CPython compiled to run inside a web page). You can
+        edit the code and run it again. Breaking things is encouraged; you cannot damage anything.</li>
+      <li><strong>Predict</strong> before you run. Boxes marked "Predict the output" ask you to type what you think
+        the program will print, then compare with reality. Wrong guesses are the most valuable moments in learning,
+        because they show you exactly where your mental model differs from how Python really works.</li>
+      <li><strong>Exercise.</strong> In the Practice section you write code that is checked automatically by tests. A
+        <em>test</em> is a small piece of code that checks whether your code behaves correctly.</li>
+      <li><strong>Quiz.</strong> A short quiz at the end of every module checks your understanding. Each answer comes
+        with an explanation, so read them even when you are right.</li>
+      <li><strong>Mini-project.</strong> A small program you build on your own computer with Pixi, with a checklist of
+        acceptance criteria (the conditions that mean "done").</li>
+      <li><strong>Part project.</strong> Each part of the course ends with a larger graded project that combines
+        everything from that part. You start it with <code>pixi run start p01</code> and grade it with
+        <code>pixi run grade p01</code> (you will set this up below).</li>
+    </ol>
+
+    <h3>Your progress is saved in your browser</h3>
+    <p>Quiz scores, exercise results, checklists, and "Mark complete" buttons are saved in your browser's local
+      storage. That means there is no account and no server; your data stays on your computer. It also means that
+      if you switch browsers or clear your browser data, the progress is gone. To keep a backup, use the
+      <strong>Export progress</strong> button on the <a href="../index.html">home page</a>; it downloads a small
+      JSON file. <strong>Import progress</strong> on the same page loads it back, for example on another computer.</p>
+
+    <h3>The notes box</h3>
+    <p>At the bottom of every page there is a <strong>My notes</strong> box. Use it! Write what you learned in your
+      own words, what confused you, and questions to come back to. Explaining an idea in your own words is one of
+      the most effective ways to learn it. Notes are saved in the browser too and are included in the export.</p>
+
+    <aside class="callout tip"><p>Go slowly. A module takes one to three hours if you really do the exercises. Spreading
+      it over a few sessions is better than rushing it in one. Coming back to an idea after a night's sleep is how it
+      sticks.</p></aside>
+
+    <p>Try your first runnable cell now. Press <strong>Run</strong>. Then change the text between the quotes and run it
+      again.</p>
+    <div class="runnable" data-title="Your first run">
+<textarea>
+print("Hello! I am learning Python.")
+print("This code is running in Python", __import__("sys").version.split()[0])
+</textarea>
+    </div>
+    <p>The second line looks a bit mysterious right now. That is fine: you will understand every part of it by the end of
+      Part 1. For now, notice that it reports a version starting with <code>3.14</code>.</p>
+    <aside class="callout think"><p>What do you think happens if you delete one of the quotation marks and press Run?
+      Try it. You will see an <em>error message</em>. We will learn to read those at the end of this module.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="package-managers">
+    <h2>Package managers and environments</h2>
+    <p>The browser cells are great for experiments, but real programs live in files on your computer. To run them you
+      need Python installed. Before installing anything, let us understand two words you will hear constantly.</p>
+
+    <h3>What is a package?</h3>
+    <p>A <strong>package</strong> is a bundle of code someone else wrote so that you do not have to. Python itself
+      comes with a big <em>standard library</em> (math, dates, files, and much more), but there are hundreds of
+      thousands of extra packages: <code>numpy</code> for numbers, <code>pandas</code> for tables, <code>pytest</code>
+      for testing. Even Python itself is distributed as a package.</p>
+
+    <h3>What is a package manager?</h3>
+    <p>A <strong>package manager</strong> is a program that downloads packages, installs them in the right place, and
+      makes sure the versions fit together. Packages depend on other packages (these are called
+      <strong>dependencies</strong>), and those depend on yet others. Working out a set of versions that are all
+      compatible is called <strong>dependency resolution</strong>, and it is a hard problem that you want a tool to
+      solve for you.</p>
+
+    <h3>What is an environment?</h3>
+    <p>An <strong>environment</strong> is a folder containing one particular Python interpreter plus one particular set
+      of packages. Why not just install everything once, globally? Because projects disagree. Your data project might
+      need <code>pandas 2</code> while an old script needs <code>pandas 1</code>. If both share one installation,
+      upgrading for one breaks the other. With one environment <em>per project</em>, each project gets exactly what
+      it needs and nothing leaks between them.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 230" role="img" aria-label="Two project folders, each with its own environment">
+        <rect x="10" y="10" width="300" height="210" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5"/>
+        <text x="30" y="38" fill="var(--fg)" font-size="16" font-weight="bold">budget-app/</text>
+        <rect x="30" y="52" width="260" height="34" rx="6" fill="var(--viz-1)" opacity="0.25"/>
+        <text x="42" y="74" fill="var(--fg)" font-size="14">pixi.toml   (what I need)</text>
+        <rect x="30" y="94" width="260" height="34" rx="6" fill="var(--viz-2)" opacity="0.25"/>
+        <text x="42" y="116" fill="var(--fg)" font-size="14">pixi.lock   (exact versions)</text>
+        <rect x="30" y="136" width="260" height="70" rx="6" fill="var(--viz-3)" opacity="0.25"/>
+        <text x="42" y="158" fill="var(--fg)" font-size="14">.pixi/envs/default/</text>
+        <text x="42" y="180" fill="var(--fg-muted)" font-size="13">python 3.14, pandas 2.3</text>
+        <rect x="330" y="10" width="300" height="210" rx="10" fill="none" stroke="var(--fg-muted)" stroke-width="1.5"/>
+        <text x="350" y="38" fill="var(--fg)" font-size="16" font-weight="bold">old-script/</text>
+        <rect x="350" y="52" width="260" height="34" rx="6" fill="var(--viz-1)" opacity="0.25"/>
+        <text x="362" y="74" fill="var(--fg)" font-size="14">pixi.toml</text>
+        <rect x="350" y="94" width="260" height="34" rx="6" fill="var(--viz-2)" opacity="0.25"/>
+        <text x="362" y="116" fill="var(--fg)" font-size="14">pixi.lock</text>
+        <rect x="350" y="136" width="260" height="70" rx="6" fill="var(--viz-3)" opacity="0.25"/>
+        <text x="362" y="158" fill="var(--fg)" font-size="14">.pixi/envs/default/</text>
+        <text x="362" y="180" fill="var(--fg-muted)" font-size="13">python 3.12, pandas 1.5</text>
+      </svg>
+      <figcaption>Each project folder carries its own manifest, lockfile, and environment. They never interfere.</figcaption>
+    </figure>
+
+    <h3>Why Pixi?</h3>
+    <p>This course uses <strong>Pixi</strong> as its one and only tool for installing Python, installing packages, and
+      running code. Pixi gives you:</p>
+    <div class="card-grid">
+      <div class="card"><h4>conda-forge</h4><p>Packages come from <em>conda-forge</em>, a huge community-maintained
+        collection of pre-built packages, including Python itself and libraries written in C, C++, Fortran, and Rust. No
+        compilers needed.</p></div>
+      <div class="card"><h4>Per-project environments</h4><p>Every project folder gets its own environment in a hidden
+        <code>.pixi/</code> folder. Delete the folder and it is gone; nothing else on your system changes.</p></div>
+      <div class="card"><h4>Lockfiles</h4><p><code>pixi.lock</code> records the exact version of every package. Anyone who
+        clones your project gets the identical environment: "it works on my machine" becomes "it works on every
+        machine".</p></div>
+      <div class="card"><h4>Tasks</h4><p>Named commands such as <code>pixi run test</code> or <code>pixi run serve</code>
+        live in <code>pixi.toml</code>, so you never have to remember long command lines.</p></div>
+    </div>
+    <aside class="callout pixi"><p>One rule for the whole course: you run Python <em>through</em> Pixi. You type
+      <code>pixi run python script.py</code>, not <code>python script.py</code>; you add packages with
+      <code>pixi add</code>. This guarantees the right interpreter and packages every single time.</p></aside>
+    <aside class="callout note"><p>You will see other tools in tutorials online (pip, venv, conda, uv). They solve similar
+      problems in different ways. Learning one tool well is far better than juggling several, so this course sticks
+      to Pixi. The concepts (packages, environments, lockfiles) transfer to any tool.</p></aside>
+    <p><strong>Remember:</strong> a package manager installs code; an environment is an isolated folder of
+      interpreter plus packages; Pixi gives each project its own environment, locked to exact versions.</p>
+  </section>
+
+  <section class="lesson-section" id="install-pixi">
+    <h2>Installing Pixi</h2>
+    <p>You will type commands into a <strong>terminal</strong> (also called a shell or command line): a text window where
+      you type a command, press Enter, and the computer prints a response. On macOS open the <em>Terminal</em> app; on
+      Linux open your terminal emulator; on Windows open <em>PowerShell</em> from the Start menu. In this course, lines
+      in a box labelled "Terminal" are commands you type.</p>
+    <div class="tabs">
+      <div class="tab" data-label="macOS / Linux">
+        <pre data-label="Terminal"><code class="language-bash">curl -fsSL https://pixi.sh/install.sh | bash</code></pre>
+        <p><code>curl</code> downloads the installer script and <code>| bash</code> (a "pipe") hands it to the shell to
+          run. It installs Pixi into <code>~/.pixi/bin</code> and adds that folder to your <code>PATH</code>, the list of
+          folders your shell searches for programs.</p>
+      </div>
+      <div class="tab" data-label="Windows">
+        <pre data-label="PowerShell"><code class="language-bash">powershell -ExecutionPolicy Bypass -c "irm -useb https://pixi.sh/install.ps1 | iex"</code></pre>
+        <p><code>irm</code> (Invoke-RestMethod) downloads the installer and <code>iex</code> (Invoke-Expression) runs it.
+          <code>-ExecutionPolicy Bypass</code> allows this one script to run.</p>
+      </div>
+    </div>
+    <p><strong>Close the terminal and open a new one</strong> so it picks up the new <code>PATH</code>. Then check that
+      it worked:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi --version</code></pre>
+    <p>You should see something like <code>pixi 0.x.y</code>. If instead you see "command not found", the new terminal
+      did not pick up the <code>PATH</code> change yet: open another fresh terminal, or log out and back in.</p>
+    <aside class="callout warn"><p>Notice that you did <em>not</em> install Python. You do not need to. Pixi will download
+      Python 3.14 into each project when you ask for it. If your computer already has some other Python, leave it
+      alone; Pixi ignores it.</p></aside>
+    <aside class="callout tip"><p>Later, to update Pixi itself, run <code>pixi self-update</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="first-workspace">
+    <h2>Your first Pixi workspace</h2>
+    <p>A <strong>workspace</strong> is a project folder that Pixi manages. Let us make one called <code>hello</code>.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi init hello
+cd hello
+pixi add python=3.14</code></pre>
+    <p>Line by line: <code>pixi init hello</code> creates a folder <code>hello</code> containing a starter
+      <code>pixi.toml</code>. <code>cd hello</code> ("change directory") moves your terminal into that folder.
+      <code>pixi add python=3.14</code> asks Pixi to add Python 3.14 as a dependency; Pixi resolves versions, downloads
+      Python from conda-forge, creates the environment, and writes the lockfile. The first time takes a minute; after
+      that Pixi reuses its download cache.</p>
+
+    <h3>Anatomy of <code>pixi.toml</code></h3>
+    <p><code>pixi.toml</code> is the workspace <strong>manifest</strong>: a file that declares what the project needs. It
+      is written in TOML ("Tom's Obvious Minimal Language"), a simple format made of <code>[tables]</code> (section
+      headers in square brackets) and <code>key = value</code> lines. After the commands above it looks like this:</p>
+    <pre data-label="pixi.toml"><code class="language-toml">[workspace]
+authors = ["Ada Lovelace &lt;ada@example.com&gt;"]
+channels = ["conda-forge"]
+name = "hello"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.14.*"</code></pre>
+    <ul>
+      <li><code>[workspace]</code> holds metadata. <code>channels</code> are where packages come from (conda-forge).
+        <code>platforms</code> lists the operating systems and CPU types the lockfile supports; yours will match your
+        computer, such as <code>linux-64</code>, <code>osx-arm64</code> (Apple Silicon Macs), or <code>win-64</code>.</li>
+      <li><code>[dependencies]</code> lists the packages you asked for. <code>"3.14.*"</code> means "any 3.14 release",
+        so you automatically get bug-fix releases such as 3.14.1, 3.14.2.</li>
+      <li><code>[tasks]</code> holds named commands; it is empty for now.</li>
+    </ul>
+
+    <h3>Files Pixi created</h3>
+    <ul>
+      <li><code>pixi.lock</code>: the <strong>lockfile</strong>. It records the exact version and download address of
+        every package, including dependencies of dependencies. You do not edit it by hand. Commit it to version control
+        so collaborators get the identical environment.</li>
+      <li><code>.pixi/</code>: the actual environment lives in <code>.pixi/envs/default/</code>. It is disposable; Pixi
+        can rebuild it from the lockfile at any time, so it is listed in <code>.gitignore</code>.</li>
+    </ul>
+
+    <h3>Running Python</h3>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python --version
+pixi run python -c "print('hi from 3.14')"</code></pre>
+    <p><code>pixi run</code> means "run this command inside the workspace's environment". If the environment is missing
+      or out of date, Pixi fixes that first. You can also open a shell where the environment is <em>activated</em>, so
+      plain commands use it, and leave it with <code>exit</code>:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi shell
+python --version     # inside pixi shell, this is the workspace's Python
+exit</code></pre>
+    <aside class="callout note"><p>Inside <code>pixi shell</code>, typing <code>python</code> is fine because the shell
+      was activated by Pixi. Outside it, always write <code>pixi run python</code>. When in doubt, use
+      <code>pixi run</code>.</p></aside>
+
+    <h3>Tasks</h3>
+    <p>Add a task so that one short word runs a longer command:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi task add hello "python hello.py"
+pixi run hello</code></pre>
+    <p>This adds <code>hello = "python hello.py"</code> under <code>[tasks]</code>. (It fails until you create
+      <code>hello.py</code>; we do that in a moment.)</p>
+
+    <h3>Global tools</h3>
+    <p>Some programs are tools you want everywhere, not dependencies of one project. <code>pixi global install</code>
+      installs a tool into its own private environment and puts its command on your <code>PATH</code>:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi global install git
+pixi global list</code></pre>
+
+    <p>Test your understanding of the manifest. The cell below parses a <code>pixi.toml</code> with Python's built-in
+      <code>tomllib</code> module and prints what Pixi would see. Predict the last line first.</p>
+    <div class="runnable" data-title="Predict: what does Pixi read from pixi.toml?" data-predict>
+<textarea>
+import tomllib
+
+manifest = tomllib.loads("""
+[workspace]
+name = "hello"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
+
+[tasks]
+hello = "python hello.py"
+
+[dependencies]
+python = "3.14.*"
+""")
+print(manifest["workspace"]["name"])
+print(manifest["dependencies"]["python"])
+print(len(manifest["workspace"]["platforms"]))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>pixi init</code> creates a workspace, <code>pixi add</code> adds dependencies,
+      <code>pixi run</code> runs commands in the environment, <code>pixi.lock</code> pins exact versions, and
+      <code>.pixi/</code> is disposable.</p>
+  </section>
+
+  <section class="lesson-section" id="this-course">
+    <h2>Getting this course on your computer</h2>
+    <p>This course is itself a Pixi workspace. You get a copy with <strong>git</strong>, the version-control tool
+      professionals use to track changes to code. <strong>Cloning</strong> means downloading a full copy of a
+      repository (a project tracked by git).</p>
+    <pre data-label="Terminal"><code class="language-bash">git clone https://github.com/millsks/python-practicum.git
+cd python-practicum
+pixi install</code></pre>
+    <p><code>pixi install</code> builds the environment from the lockfile without running anything. It installs Python
+      3.14 and every library the course uses (numpy, pandas, pytest, and more), so expect it to take a few minutes the
+      first time.</p>
+    <h3>The course helpers</h3>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi run serve</code></td><td>Serves this website locally at <code>http://127.0.0.1:8000</code> and
+          opens your browser. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> in the terminal to stop it.</td></tr>
+        <tr><td><code>pixi run projects</code></td><td>Lists every graded project and whether you have started it.</td></tr>
+        <tr><td><code>pixi run start p01</code></td><td>Copies Project 1's starter code into <code>work/</code>, where you
+          write your solution.</td></tr>
+        <tr><td><code>pixi run grade p01</code></td><td>Runs the project's tests against your code in <code>work/</code> and
+          reports which pass.</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p>The graded projects need what you learn in Part 1, so do not worry about
+      <code>p01</code> yet. It is fine to run <code>pixi run start p01</code> and <code>pixi run grade p01</code> now just
+      to see the workflow: every test will fail, which is exactly what a fresh start looks like.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="repl">
+    <h2>The Python 3.14 REPL</h2>
+    <p>A <strong>REPL</strong> (Read–Eval–Print Loop) is an interactive Python prompt. It <em>reads</em> what you type,
+      <em>evaluates</em> it, <em>prints</em> the result, and loops back for more. It is the fastest way to try a small
+      idea. Start it from inside any workspace:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python</code></pre>
+    <p>You will see a version banner and the prompt <code>&gt;&gt;&gt;</code>. Type an expression and press Enter:</p>
+    <pre><code class="language-python">&gt;&gt;&gt; 2 + 3
+5
+&gt;&gt;&gt; "Py" * 3
+'PyPyPy'
+&gt;&gt;&gt; for n in range(3):
+...     print(n)
+...
+0
+1
+2</code></pre>
+    <p>The <code>...</code> prompt means Python is waiting for more lines of a multi-line statement. Press Enter on an
+      empty line to finish it.</p>
+    <aside class="callout py314"><p>The REPL in Python 3.14 highlights your code in color as you type (keywords, strings,
+      numbers, comments), and tracebacks are colored too. It also autocompletes module names after
+      <code>import</code> when you press <kbd>Tab</kbd>. If you prefer no color, set the environment variable
+      <code>PYTHON_COLORS=0</code> (or <code>NO_COLOR=1</code>).</p></aside>
+    <h3>Handy REPL features</h3>
+    <ul>
+      <li><strong>Multi-line editing:</strong> press the <kbd>Up</kbd> arrow to recall a whole previous block (like the
+        <code>for</code> loop above) and edit it as one unit.</li>
+      <li><strong>Leaving:</strong> type <code>exit</code> (or <code>quit</code>) and Enter, or press
+        <kbd>Ctrl</kbd>+<kbd>D</kbd> (macOS/Linux) / <kbd>Ctrl</kbd>+<kbd>Z</kbd> then Enter (Windows).</li>
+      <li><strong>Help:</strong> <code>help(len)</code> shows the documentation for <code>len</code>; <code>help()</code>
+        on its own starts an interactive help browser (type <code>q</code> to leave a page, <code>quit</code> to leave
+        help). Press <kbd>F1</kbd> for help mode, <kbd>F2</kbd> to browse history, <kbd>F3</kbd> for paste mode.</li>
+      <li><strong>The last result:</strong> <code>_</code> holds the value of the last expression.</li>
+    </ul>
+    <p>The browser cells behave much like a script rather than a REPL: only what you <code>print</code> is shown. Try
+      <code>help</code> here:</p>
+    <div class="runnable" data-title="Ask Python for help">
+<textarea>
+help(len)
+print(len("Pixi"))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="editor-and-script">
+    <h2>An editor and your first script</h2>
+    <p>The REPL forgets everything when you exit. Real programs are saved in <strong>scripts</strong>: plain text files
+      ending in <code>.py</code>. You write them in a <strong>code editor</strong>, a text editor that understands code
+      (colors, autocompletion, error underlines).</p>
+    <h3>VS Code setup</h3>
+    <ol>
+      <li>Install <a href="https://code.visualstudio.com/">Visual Studio Code</a> (free) and, from its Extensions panel,
+        the <strong>Python</strong> extension by Microsoft.</li>
+      <li>Open your workspace folder: <em>File → Open Folder…</em> and choose <code>hello</code>.</li>
+      <li>Open the Command Palette (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>), run <em>Python: Select
+        Interpreter</em>, and choose the one inside <code>.pixi/envs/default</code> (on macOS/Linux
+        <code>.pixi/envs/default/bin/python</code>; on Windows <code>.pixi\envs\default\python.exe</code>). Now the
+        editor's autocompletion and error checks use exactly the Python that <code>pixi run</code> uses.</li>
+    </ol>
+    <aside class="callout note"><p>Any editor works: PyCharm, Zed, Sublime Text, Vim, or Emacs. The only requirement is
+      that it saves plain text and that you point it at the Pixi environment's interpreter.</p></aside>
+    <h3>Write and run <code>hello.py</code></h3>
+    <p>Create a file named <code>hello.py</code> in the <code>hello</code> folder with this content:</p>
+    <pre data-label="hello.py"><code class="language-python"># My first Python script.
+name = "world"
+print(f"Hello, {name}!")
+print("Python is adding:", 2 + 2)</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python hello.py
+pixi run hello        # the task you added earlier</code></pre>
+    <p>Python reads the file top to bottom and runs each line in order. Lines starting with <code>#</code> are
+      <em>comments</em>: notes for humans that Python ignores. Run the same script here and compare:</p>
+    <div class="runnable" data-title="hello.py in the browser">
+<textarea>
+# My first Python script.
+name = "world"
+print(f"Hello, {name}!")
+print("Python is adding:", 2 + 2)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+greeting = "Hi"
+print(greeting + "!", greeting * 2)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="errors">
+    <h2>Reading error messages</h2>
+    <p>Every programmer, from day one to year thirty, sees error messages every day. An error is not a sign that you
+      are bad at this; it is Python telling you precisely what confused it. Learning to read errors calmly is the single
+      most useful beginner skill.</p>
+    <p>When something goes wrong, Python prints a <strong>traceback</strong>: a report of where the program was when the
+      error happened. <strong>Read it from the bottom up.</strong></p>
+    <pre><code class="language-python">Traceback (most recent call last):
+  File "hello.py", line 3, in &lt;module&gt;
+    print(f"Hello, {nme}!")
+                    ^^^
+NameError: name 'nme' is not defined. Did you mean: 'name'?</code></pre>
+    <ol>
+      <li><strong>The last line</strong> is the most important: the <em>exception type</em> (<code>NameError</code>) and
+        a message. Python even suggests a fix: did you mean <code>name</code>?</li>
+      <li><strong>The lines above it</strong> show the file, the line number (<code>line 3</code>), the line of code,
+        and carets (<code>^^^</code>) pointing at the exact problem.</li>
+      <li><strong>"most recent call last"</strong> means the deepest point of the program is at the bottom, closest to
+        the error message.</li>
+    </ol>
+    <table>
+      <thead><tr><th>Error</th><th>Usually means</th></tr></thead>
+      <tbody>
+        <tr><td><code>SyntaxError</code></td><td>The code is not valid Python: a missing quote, bracket, or colon. Python
+          refuses to run any of the file.</td></tr>
+        <tr><td><code>NameError</code></td><td>You used a name that was never assigned, often a typo.</td></tr>
+        <tr><td><code>TypeError</code></td><td>An operation got the wrong kind of value, such as <code>"age " + 5</code>.</td></tr>
+        <tr><td><code>IndentationError</code></td><td>The spaces at the start of a line do not line up.</td></tr>
+      </tbody>
+    </table>
+    <p>Run this broken cell, read the traceback bottom-up, and fix it:</p>
+    <div class="runnable" data-title="Fix me">
+<textarea>
+language = "Python"
+print("I am learning " + langauge)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Professionals copy the last line of a traceback into a search engine when it is
+      unfamiliar. Doing so is not cheating; it is the job. But first, always read the line number and the carets.</p></aside>
+    <p><strong>Remember:</strong> read tracebacks from the bottom; the last line names the problem, the lines above say
+      where.</p>
+  </section>
+
+  <section class="lesson-section" id="python-315">
+    <h2>A peek at Python 3.15</h2>
+    <p>Python releases a new version every October. While 3.14 is current, 3.15 is in development, and you can try it
+      without changing any project. <code>pixi exec</code> creates a temporary environment, runs one command in it, and
+      throws the environment away:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi exec --spec "python=3.15" python</code></pre>
+    <aside class="callout py315"><p>Throughout the course, boxes like this preview Python 3.15 features, such as
+      <code>lazy import</code> and the built-in <code>frozendict</code>. Code cells marked 3.15 cannot run in the
+      browser; save them to a file and run <code>pixi exec --spec "python=3.15" python file.py</code>. See the
+      <a href="../reference/python-315.html">Python 3.15 reference</a>.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="A 3.15 preview: the frozendict built-in">
+<textarea>
+settings = frozendict(theme="dark", size=12)
+print(settings["theme"])
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise is checked by tests when you press Run. Read the test messages: they tell you what to fix.</p>
+
+    <div class="exercise" data-id="m00-e1" data-title="Say hello exactly">
+      <div class="exercise-prompt"><p>Print exactly <code>Hello, Pixi!</code> (capital H and P, a comma, a space, and an
+        exclamation mark). Computers are literal: one wrong character and the test fails.</p></div>
+<textarea class="starter">
+# Replace the text inside the quotes
+print("...")
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_hello():
+    assert program_output.strip() == "Hello, Pixi!", f"expected 'Hello, Pixi!' but your program printed {program_output.strip()!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Everything between the quotes is printed as-is. Check capitals and
+        punctuation.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">print("Hello, Pixi!")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m00-e2" data-title="Three lines about you">
+      <div class="exercise-prompt"><p>Print exactly three lines, in this order: <code>Name: Ada</code>,
+        <code>Learning: Python 3.14</code>, and <code>Tool: Pixi</code>. Use one <code>print</code> per line.</p></div>
+<textarea class="starter">
+print("Name: Ada")
+# add two more print calls
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_three_lines():
+    lines = program_output.strip().splitlines()
+    assert len(lines) == 3, f"print exactly 3 lines, you printed {len(lines)}"
+
+def test_content():
+    lines = [line.strip() for line in program_output.strip().splitlines()]
+    assert lines == ["Name: Ada", "Learning: Python 3.14", "Tool: Pixi"], f"got {lines}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Each <code>print(...)</code> call ends with a new line.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">print("Name: Ada")
+print("Learning: Python 3.14")
+print("Tool: Pixi")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m00-e3" data-title="Read the error, fix the code">
+      <div class="exercise-prompt"><p>This program has two bugs. Run it, read the traceback from the bottom, fix the first
+        error, then run it again to find the second. When fixed it prints <code>Total: 10</code>.</p></div>
+<textarea class="starter">
+apples = 4
+pears = 6
+total = apples + paers
+print("Total:", total
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_total_value():
+    assert total == 10, "total should be apples + pears = 10"
+
+def test_output():
+    assert program_output.strip() == "Total: 10", f"expected 'Total: 10', got {program_output.strip()!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Python reports the <code>SyntaxError</code> (a missing closing
+        parenthesis) first, because it checks the whole file before running anything. Then look at the spelling of
+        <code>pears</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">apples = 4
+pears = 6
+total = apples + pears
+print("Total:", total)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m00-e4" data-title="Write a pixi.toml">
+      <div class="exercise-prompt"><p>Store the text of a valid <code>pixi.toml</code> in the variable
+        <code>manifest_text</code>. It must have a <code>[workspace]</code> table with <code>name = "practice"</code> and
+        <code>channels = ["conda-forge"]</code>; a <code>[dependencies]</code> table with <code>python = "3.14.*"</code>;
+        and a <code>[tasks]</code> table with a task named <code>hello</code> that runs <code>python hello.py</code>.
+        The tests parse it with <code>tomllib</code>, just like Pixi would.</p></div>
+<textarea class="starter">
+manifest_text = """
+[workspace]
+name = "practice"
+
+[dependencies]
+
+[tasks]
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import tomllib
+
+def _parsed():
+    return tomllib.loads(manifest_text)
+
+def test_valid_toml():
+    try:
+        _parsed()
+    except tomllib.TOMLDecodeError as exc:
+        raise AssertionError(f"manifest_text is not valid TOML: {exc}")
+
+def test_workspace():
+    ws = _parsed().get("workspace", {})
+    assert ws.get("name") == "practice", "workspace name should be 'practice'"
+    assert ws.get("channels") == ["conda-forge"], "channels should be [\"conda-forge\"]"
+
+def test_python_dependency():
+    deps = _parsed().get("dependencies", {})
+    assert deps.get("python") == "3.14.*", "dependencies should contain python = \"3.14.*\""
+
+def test_task():
+    tasks = _parsed().get("tasks", {})
+    assert tasks.get("hello") == "python hello.py", "add a task: hello = \"python hello.py\""
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Every value goes under its table header. Strings need double quotes
+        and lists use square brackets: <code>channels = ["conda-forge"]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">manifest_text = """
+[workspace]
+name = "practice"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
+
+[dependencies]
+python = "3.14.*"
+
+[tasks]
+hello = "python hello.py"
+"""</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: your practice workspace</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Set up a <code>practice</code> workspace</span></div>
+      <div class="widget-body">
+        <p>You will use this workspace for every mini-project in Part 1, so it is worth setting up carefully. Work in a
+          folder outside the course repository, for example in your home directory.</p>
+        <h4>Steps</h4>
+        <ol>
+          <li><code>pixi init practice</code>, then <code>cd practice</code>.</li>
+          <li><code>pixi add python=3.14</code>. Open <code>pixi.toml</code> and find the new line.</li>
+          <li>Create <code>hello.py</code> that prints a greeting and the Python version:
+<pre data-label="hello.py"><code class="language-python">import sys
+
+print("Hello from my practice workspace!")
+print("Python", sys.version.split()[0])</code></pre></li>
+          <li><code>pixi task add hello "python hello.py"</code>, then <code>pixi run hello</code>.</li>
+          <li>Open the folder in your editor and select the <code>.pixi/envs/default</code> interpreter.</li>
+          <li>Start the REPL with <code>pixi run python</code>, try <code>help(print)</code>, and leave with
+            <code>exit</code>.</li>
+        </ol>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m00-mini">
+          <li><code>pixi --version</code> prints a version number</li>
+          <li><code>practice/pixi.toml</code> has <code>python = "3.14.*"</code> under <code>[dependencies]</code></li>
+          <li><code>pixi.lock</code> and <code>.pixi/</code> exist in the workspace</li>
+          <li><code>pixi run hello</code> prints your greeting and a version starting with 3.14</li>
+          <li>Your editor uses the interpreter in <code>.pixi/envs/default</code></li>
+          <li>The course repository is cloned and <code>pixi run serve</code> opens this site locally</li>
+          <li>You ran <code>pixi run projects</code> and saw the list of projects</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a second task, <code>repl = "python"</code>, and start the REPL with <code>pixi run repl</code>.</li>
+          <li>Run <code>pixi exec --spec "python=3.15" python --version</code> to meet the next version.</li>
+          <li>Run <code>pixi list</code> and count how many packages Python 3.14 brought with it.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m00-quiz">
+<script type="application/json">
+{"title": "Setup quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is an <em>environment</em>?", "options": ["A text editor for Python", "An isolated folder containing one Python interpreter and a set of packages", "The internet connection Python uses", "A Python error type"], "answer": 1, "explanation": "<p>An environment isolates one project's interpreter and packages from every other project, so upgrading one never breaks another.</p>"},
+  {"type": "single", "prompt": "Which command runs <code>app.py</code> with the workspace's Python?", "options": ["<code>python app.py</code>", "<code>pixi run python app.py</code>", "<code>pixi add app.py</code>", "<code>pixi init app.py</code>"], "answer": 1, "explanation": "<p><code>pixi run</code> runs the command inside the workspace environment (creating or updating it first if needed). Bare <code>python</code> might find some other interpreter.</p>"},
+  {"type": "multi", "prompt": "Which statements about <code>pixi.lock</code> are true?", "options": ["It records the exact version of every package", "You edit it by hand to add packages", "It should be committed to version control", "Pixi updates it when you run <code>pixi add</code>"], "answer": [0, 2, 3], "explanation": "<p>The lockfile pins exact versions so everyone gets the same environment. Pixi writes it; you never edit it by hand. You change <code>pixi.toml</code> (usually via <code>pixi add</code>) and Pixi regenerates the lock.</p>"},
+  {"type": "text", "prompt": "Which Pixi command creates a new workspace folder with a starter <code>pixi.toml</code>? (two words)", "answer": ["pixi init"], "explanation": "<p><code>pixi init name</code> creates the folder and its manifest.</p>"},
+  {"type": "single", "prompt": "Where does Pixi put a workspace's default environment?", "options": ["<code>~/python</code>", "<code>.pixi/envs/default/</code>", "<code>/usr/bin</code>", "Inside <code>pixi.toml</code>"], "answer": 1, "explanation": "<p>The environment lives in the hidden <code>.pixi/envs/default/</code> folder of the workspace. Point your editor's interpreter there.</p>"},
+  {"type": "single", "prompt": "In <code>pixi.toml</code>, which table lists the packages your project needs?", "options": ["<code>[workspace]</code>", "<code>[tasks]</code>", "<code>[dependencies]</code>", "<code>[channels]</code>"], "answer": 2, "explanation": "<p><code>[dependencies]</code> holds packages such as <code>python = \"3.14.*\"</code>. <code>channels</code> is a key inside <code>[workspace]</code>, not a table.</p>"},
+  {"type": "single", "prompt": "You want a tool like <code>git</code> available in every terminal, not tied to one project. What do you run?", "options": ["<code>pixi add git</code>", "<code>pixi global install git</code>", "<code>pixi run git</code>", "<code>pixi shell git</code>"], "answer": 1, "explanation": "<p><code>pixi global install</code> gives the tool its own environment and puts it on your PATH. <code>pixi add</code> would make it a dependency of the current project only.</p>"},
+  {"type": "single", "prompt": "In a traceback, where should you look first?", "options": ["The first line", "The last line", "The middle", "Tracebacks are not useful"], "answer": 1, "explanation": "<p>The last line names the exception type and message. The lines above it show where in the code the error happened.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"Py\" * 2, 3 + 4)", "answer": "PyPy 7", "explanation": "<p>Multiplying a string by 2 repeats it. <code>print</code> separates its two arguments with a space.</p>"},
+  {"type": "single", "prompt": "What does <code>pixi exec --spec \"python=3.15\" python</code> do?", "options": ["Upgrades your workspace to Python 3.15 permanently", "Runs Python 3.15 in a temporary environment without changing any project", "Installs 3.15 globally", "Nothing; 3.15 does not exist"], "answer": 1, "explanation": "<p><code>pixi exec</code> builds a throwaway environment for a single command, which is perfect for trying a preview version.</p>"},
+  {"type": "multi", "prompt": "Which ways leave the Python 3.14 REPL?", "options": ["Type <code>exit</code> and press Enter", "Press Ctrl+D on macOS/Linux", "Type <code>leave()</code>", "Type <code>quit</code> and press Enter"], "answer": [0, 1, 3], "explanation": "<p>Since Python 3.13 you can type <code>exit</code> or <code>quit</code> without parentheses. Ctrl+D sends end-of-input on macOS and Linux (Ctrl+Z then Enter on Windows). There is no <code>leave()</code>.</p>"},
+  {"type": "single", "prompt": "Which command lists the graded projects in this course repository?", "options": ["<code>pixi run projects</code>", "<code>pixi run grade</code>", "<code>pixi list projects</code>", "<code>pixi projects</code>"], "answer": 0, "explanation": "<p><code>pixi run projects</code> runs the course's <code>projects</code> task. Then <code>pixi run start p01</code> and <code>pixi run grade p01</code> start and grade a project.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Learn actively: run every cell, predict before running, do the exercises, take the quiz, build the mini-project.</li>
+      <li>Progress and notes live in your browser; export them from the home page to keep a backup.</li>
+      <li>A package manager installs packages and resolves dependencies; an environment isolates one project's
+        interpreter and packages.</li>
+      <li>Pixi gives each workspace its own environment from conda-forge, pinned by <code>pixi.lock</code>, with tasks in
+        <code>pixi.toml</code>.</li>
+      <li><code>pixi init</code>, <code>pixi add python=3.14</code>, <code>pixi run python file.py</code>,
+        <code>pixi shell</code>, <code>pixi task add</code>, <code>pixi global install</code>, <code>pixi exec</code>.</li>
+      <li>The REPL is for quick experiments; scripts are for programs you keep.</li>
+      <li>Read tracebacks from the bottom up.</li>
+    </ul>
+    <div class="flashcards" data-title="Setup essentials">
+<script type="application/json">
+[{"front": "Package manager", "back": "A tool that downloads and installs packages and resolves compatible versions of their dependencies."},
+ {"front": "Environment", "back": "An isolated folder with one Python interpreter and one set of packages, usually one per project."},
+ {"front": "<code>pixi.toml</code>", "back": "The workspace manifest: what the project needs (<code>[workspace]</code>, <code>[dependencies]</code>, <code>[tasks]</code>)."},
+ {"front": "<code>pixi.lock</code>", "back": "The lockfile: exact versions of every package. Generated by Pixi, committed to git, never hand-edited."},
+ {"front": "<code>pixi run python app.py</code>", "back": "Run a script with the workspace's Python, updating the environment first if needed."},
+ {"front": "<code>pixi shell</code>", "back": "Open a shell with the environment activated; leave with <code>exit</code>."},
+ {"front": "<code>pixi global install tool</code>", "back": "Install a command-line tool for use everywhere, in its own isolated environment."},
+ {"front": "REPL", "back": "Read–Eval–Print Loop: the interactive <code>&gt;&gt;&gt;</code> prompt. Start with <code>pixi run python</code>."},
+ {"front": "Traceback", "back": "Python's error report. Read from the bottom: exception type and message last, location above."},
+ {"front": "<code>pixi exec --spec \"python=3.15\" python</code>", "back": "Run Python 3.15 in a temporary environment without touching your project."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a>, especially "Getting started" and "Tasks"</li>
+      <li><a href="../reference/pixi-cheatsheet.html">Pixi cheatsheet</a> for this course</li>
+      <li><a href="https://docs.python.org/3.14/tutorial/interpreter.html">Using the Python interpreter</a> (official tutorial)</li>
+      <li><a href="https://docs.python.org/3.14/whatsnew/3.14.html">What's new in Python 3.14</a> and the course's
+        <a href="../reference/python-314.html">Python 3.14 reference</a></li>
+      <li><a href="https://code.visualstudio.com/docs/python/python-tutorial">VS Code Python tutorial</a></li>
+      <li>Next: <a href="m01-first-steps.html">M01 · First Steps</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

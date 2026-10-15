@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 6 · Habit Tracker Service · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p06">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Graded project</p>
+    <h1>Project 6: Habit Tracker Service</h1>
+    <p class="lede">Build a professional-grade habit tracker the way teams build real services: a pure domain at the
+      center, Protocol ports around it, swappable in-memory and SQLite adapters, a service layer of use cases, and a
+      structlog-instrumented CLI on the outside. Ninety-seven tests tell you when each layer is right.</p>
+    <div class="lesson-meta"><span>⏱ ~8–12 hours</span><span>Prerequisites: <a href="../modules/m44-data-databases.html">M44</a>, <a href="../modules/m45-web-apis.html">M45</a>, <a href="../modules/m46-design.html">M46</a>, <a href="../modules/m42-tooling.html">M42</a></span></div>
+    <ul class="objectives">
+      <li>Model a domain with frozen dataclasses and pure functions that are trivial to test</li>
+      <li>Define ports as <code>typing.Protocol</code>s and write two adapters that satisfy the same contract</li>
+      <li>Use sqlite3 professionally: versioned migrations, transactions, and parameterized queries</li>
+      <li>Write use cases that depend on a <code>Clock</code> abstraction instead of the real date</li>
+      <li>Build an argparse CLI that separates results (stdout) from structured logs (stderr)</li>
+      <li>Run one contract test suite against several implementations with a parametrized fixture</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>A small product team wants a habit tracker. Users create habits ("Drink water", "Gym on Mon/Wed/Fri", "Weekly
+      review"), check in when they do them, and look at their <strong>streaks</strong> (how many periods in a row they
+      kept the habit) and <strong>completion rate</strong> (what fraction of due periods they kept). Today it is a
+      command-line tool backed by a SQLite file. Next quarter the team wants a web API (Module 45's FastAPI) and maybe
+      PostgreSQL. Your job is to build version 1 so that those changes touch <em>only the edges</em> of the code.</p>
+    <p>That requirement drives the architecture. The rules about dates and streaks are the valuable, subtle part, so
+      they live in a <strong>domain</strong> module with no I/O at all. Storage is hidden behind a
+      <strong>port</strong> (an interface), so a SQLite adapter and an in-memory adapter are interchangeable. The
+      <strong>service layer</strong> expresses each use case once. The <strong>CLI</strong> is a thin
+      <em>composition root</em>: the one place that picks concrete classes and wires them together.</p>
+    <aside class="callout think"><p>Before reading further: if "today" were read with <code>date.today()</code> deep
+      inside the streak code, how would you write a test for "the streak survives until midnight"? Keep your answer in
+      mind when you meet the <code>Clock</code> port.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Design</h4><p>Layered (hexagonal) architecture, dependency inversion, ports and adapters,
+        and a composition root, straight from <a href="../modules/m46-design.html">M46</a>.</p></div>
+      <div class="card"><h4>Data</h4><p>Schema design, migrations tracked in a version table, atomic transactions, and
+        injection-proof parameterized SQL from <a href="../modules/m44-data-databases.html">M44</a>.</p></div>
+      <div class="card"><h4>Testing</h4><p>Pure-function unit tests, contract tests over two adapters, fakes instead of
+        mocks, and CLI tests against real files in <code>tmp_path</code>.</p></div>
+      <div class="card"><h4>Operations</h4><p>structlog <code>key=value</code> logs on stderr, clean machine-readable
+        output on stdout, meaningful exit codes, and CSV/JSON export.</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <h3>Frequencies and periods</h3>
+    <p>Every habit has a <strong>frequency</strong>, and every frequency splits time into <strong>periods</strong>.
+      A period is identified by its <em>key</em>, the date it starts on.</p>
+    <table>
+      <thead><tr><th>Frequency</th><th>Text form</th><th>Period</th><th>Due days</th></tr></thead>
+      <tbody>
+        <tr><td>Daily</td><td><code>daily</code></td><td>one day (key = the day)</td><td>every day</td></tr>
+        <tr><td>Weekly</td><td><code>weekly</code></td><td>one ISO week (key = its Monday)</td><td>every day of the week</td></tr>
+        <tr><td>Specific weekdays</td><td><code>mon,wed,fri</code></td><td>one day</td><td>only the listed days</td></tr>
+      </tbody>
+    </table>
+    <h3>Rules</h3>
+    <ul>
+      <li><strong>Habit ids</strong> are slugs of the name: <code>"Drink Water!"</code> becomes <code>drink-water</code>.
+        Names are 1–80 characters after stripping; duplicate ids are rejected.</li>
+      <li><strong>Check-in is idempotent per period.</strong> Checking in a weekly habit on Monday and again on Thursday
+        stores one completion; the second call returns <code>False</code>.</li>
+      <li>Check-ins in the future, before the habit was created, on a day that is not due, or on an archived habit
+        raise <code>ValidationError</code>. Unknown ids raise <code>NotFoundError</code>.</li>
+      <li><strong>Undo</strong> removes the check-in for the period that contains the given day (default today).</li>
+      <li><strong>Current streak</strong>: consecutive satisfied periods ending at the current one. Today's period is
+        still in progress, so leaving it unchecked does not break the streak; a missed <em>finished</em> period
+        does.</li>
+      <li><strong>Longest streak</strong>: the best run of consecutive satisfied periods from creation until today.</li>
+      <li><strong>Completion rate</strong> over <code>start..end</code>: satisfied due periods divided by due periods,
+        ignoring periods before creation (0.0 if there are none). The default window is the 30 days ending today.</li>
+      <li><strong>Export</strong>: JSON (every habit with its list of check-in dates and streaks) and CSV (one row per
+        habit with the check-in count).</li>
+    </ul>
+    <h3>The CLI</h3>
+<pre data-label="Terminal"><code class="language-bash">pixi run python -m habits --db demo.db add "Gym" --frequency mon,wed,fri
+created gym (mon,wed,fri)
+pixi run python -m habits --db demo.db checkin gym
+checked in gym
+pixi run python -m habits --db demo.db checkin gym --date 2026-01-05   # backfill
+pixi run python -m habits --db demo.db list --all
+pixi run python -m habits --db demo.db stats gym --from 2026-01-01 --to 2026-01-31
+habit: gym
+current_streak: 4
+longest_streak: 6
+completed: 10/13
+completion_rate: 76.9%
+pixi run python -m habits --db demo.db export --format json &gt; backup.json
+pixi run python -m habits -v --today 2026-02-01 undo gym       # -v shows info logs on stderr</code></pre>
+    <p>Global options: <code>--db PATH</code> (default <code>$HABITS_DB</code>, else <code>habits.db</code>),
+      <code>--today YYYY-MM-DD</code> (pretend it is that date; great for demos and tests), and <code>-v</code>. Exit
+      code 0 means success, 1 means a <code>HabitError</code> (message on stderr as <code>error: ...</code>), and 2 is
+      argparse's usage error.</p>
+    <aside class="callout pro" data-title="Output policy (decided and documented)"><p>Results go to
+      <strong>stdout</strong> through <code>sys.stdout.write</code> in <code>cli.py</code> only, so
+      <code>export &gt; backup.json</code> produces a clean file. Diagnostics are structlog events rendered as
+      <code>key=value</code> on <strong>stderr</strong>, for example
+      <code>timestamp='2026-01-05T09:00:00Z' level='info' event='checked_in' day='2026-01-05' habit_id='gym'</code>.
+      No library module calls <code>print()</code>. This is the Unix convention: data on stdout, chatter on
+      stderr.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>Dependencies point <em>inward</em>. The domain imports nothing from the project. Ports import only the domain.
+      The service imports the domain and the ports, never an adapter. Only the CLI knows that SQLite exists.</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph Outside["Driving side"]
+    CLI["cli.py<br/>argparse + structlog<br/>(composition root)"]
+  end
+  subgraph Core["Application core"]
+    SVC["service.py<br/>HabitService use cases"]
+    DOM["domain.py<br/>Habit, Frequency, Completion<br/>streaks, rates"]
+    PORTS["ports.py<br/>HabitRepository, Clock<br/>(Protocols)"]
+  end
+  subgraph Driven["Driven side (adapters)"]
+    MEM["memory.py<br/>InMemoryRepository"]
+    SQL["sqlite_repo.py<br/>SqliteRepository<br/>migrations + transactions"]
+    CLK["SystemClock / FixedClock"]
+  end
+  CLI --> SVC
+  CLI -. builds .-> SQL
+  CLI -. builds .-> CLK
+  SVC --> PORTS
+  SVC --> DOM
+  PORTS --> DOM
+  MEM -. satisfies .-> PORTS
+  SQL -. satisfies .-> PORTS
+  CLK -. satisfies .-> PORTS
+    </pre>
+<pre data-label="Layout"><code class="language-bash">projects/p06_habit_tracker/
+  starter/habits/          # what you copy with `pixi run start p06`
+    domain.py  ports.py  memory.py  sqlite_repo.py  service.py  cli.py  logging_config.py  __main__.py
+  tests/
+    test_habits_domain.py  test_habits_repository.py  test_habits_service.py  test_habits_cli.py</code></pre>
+    <p>The SQLite schema (given in <code>MIGRATIONS</code>; you write the code that applies it):</p>
+    <pre class="mermaid">
+erDiagram
+  HABITS ||--o{ COMPLETIONS : has
+  HABITS {
+    TEXT id PK
+    TEXT name
+    TEXT frequency
+    TEXT created_on
+    INTEGER archived
+  }
+  COMPLETIONS {
+    TEXT habit_id FK
+    TEXT day
+  }
+  SCHEMA_VERSION {
+    INTEGER version
+  }
+    </pre>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started with Pixi</h2>
+<pre data-label="Terminal"><code class="language-bash">pixi run projects            # list projects and whether you've started them
+pixi run start p06           # copy the starter into work/p06_habit_tracker/
+pixi run grade p06           # run all 97 tests against your work/ copy
+pixi run practicum grade p06 -k domain       # only Milestone 1
+pixi run practicum grade p06 -k repository   # only Milestone 2
+pixi run ruff check work/p06_habit_tracker
+pixi run mypy --strict work/p06_habit_tracker</code></pre>
+    <aside class="callout pixi"><p>Everything you need (sqlite3 from the standard library, structlog, pytest, ruff,
+      mypy) is already in the course environment. Do not add dependencies for this project. If you were starting your
+      own copy from scratch, you would run <code>pixi init habits</code> and <code>pixi add structlog</code>, then
+      <code>pixi add --feature dev pytest ruff mypy</code>.</p></aside>
+    <p>The starter has every public class and function with its full signature, type hints, and docstring. Bodies
+      raise <code>NotImplementedError</code> and carry <code>TODO</code> comments. The Protocols in
+      <code>ports.py</code>, the structlog setup, the migration SQL, and the argparse parser are given so you can focus
+      on behavior. At the top of some modules a comment lists the imports the reference solution uses.</p>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h4>Milestone 1 · The domain (<code>domain.py</code>, 34 tests)</h4>
+      <p>Implement <code>Frequency</code> (validation, <code>parse</code>, <code>__str__</code>, period math),
+        <code>slugify</code>, <code>Habit.create</code>, and the streak and rate functions. Everything takes dates as
+        arguments, so no clock is needed.</p>
+      <ul class="checklist" data-id="p06-m1">
+        <li><code>Frequency.parse</code> and <code>str()</code> round-trip for daily, weekly, and weekday lists</li>
+        <li><code>period_start</code>, <code>is_due</code>, <code>periods</code>, and <code>previous_period</code> pass</li>
+        <li><code>current_streak</code> treats today's open period as "not yet missed"</li>
+        <li><code>longest_streak</code> and <code>completion_rate</code> ignore check-ins before creation and on rest days</li>
+        <li><code>pixi run practicum grade p06 -k domain</code> is green</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 2 · Adapters (<code>memory.py</code>, <code>sqlite_repo.py</code>, 31 tests)</h4>
+      <p>Make both repositories pass the same contract. The test file defines one fixture with
+        <code>params=["memory", "sqlite"]</code>, so every contract test runs twice. Then implement migrations:
+        <code>schema_version()</code> and <code>migrate()</code> apply each pending entry of <code>MIGRATIONS</code>
+        atomically and record the new version.</p>
+      <ul class="checklist" data-id="p06-m2">
+        <li><code>InMemoryRepository</code> passes all twelve contract tests</li>
+        <li><code>SqliteRepository</code> passes the same twelve tests unchanged</li>
+        <li>A fresh database ends at <code>LATEST_VERSION</code>; a version-1 database upgrades to it</li>
+        <li>Every query uses <code>?</code> placeholders; a hostile name is stored verbatim</li>
+        <li>A failed insert raises <code>DuplicateHabitError</code> and leaves no partial data</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 3 · The service layer (<code>service.py</code>, <code>ports.py</code> clocks, 20 tests)</h4>
+      <p>Implement <code>FixedClock</code>, <code>SystemClock</code>, and <code>HabitService</code>. Each use case is a
+        short method: load, apply a domain rule, store, log a structlog event.</p>
+      <ul class="checklist" data-id="p06-m3">
+        <li><code>create_habit</code> uses the injected clock for <code>created_on</code></li>
+        <li><code>check_in</code> is idempotent per period and validates the day</li>
+        <li><code>undo</code> clears the period containing the day; <code>archive_habit</code> is idempotent</li>
+        <li><code>stats</code> defaults to the 30-day window ending today</li>
+        <li><code>export_json</code> and <code>export_csv</code> match the documented fields</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 4 · The CLI (<code>cli.py</code>, 12 tests)</h4>
+      <p>Implement <code>main()</code> (the composition root) and <code>_run()</code> (dispatch with
+        <code>match</code>/<code>case</code>). The CLI tests use real SQLite files under <code>tmp_path</code> and
+        pytest's <code>capsys</code> to check stdout and stderr separately.</p>
+      <ul class="checklist" data-id="p06-m4">
+        <li>Every subcommand writes its result to stdout and returns 0</li>
+        <li>A <code>HabitError</code> becomes <code>error: ...</code> on stderr and exit code 1, with empty stdout</li>
+        <li><code>--db</code>, <code>$HABITS_DB</code>, and <code>--today</code> are honored</li>
+        <li><code>-v</code> shows <code>key=value</code> structlog lines on stderr only</li>
+        <li><code>pixi run grade p06</code> reports 97 passed; ruff and strict mypy are clean</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>Hint: the streak walk</summary>
+      <p>Think in period keys, not dates. Build the set of satisfied keys once
+        (<code>{freq.period_start(c.day) for c in completions if ...}</code>). Then start at the last due period on or
+        before today and step backwards with <code>previous_period</code> while the key is in the set. The only special
+        case: if that starting key is <em>today's</em> period and it is not satisfied yet, step back once before
+        counting.</p>
+<pre><code class="language-python">key = last_due_period(habit, today)
+if key not in done and key == freq.period_start(today):
+    key = freq.previous_period(key)       # today is still in progress
+streak = 0
+while key &gt;= first and key in done:
+    streak += 1
+    key = freq.previous_period(key)</code></pre>
+    </details>
+    <details class="reveal"><summary>Hint: atomic migrations in sqlite3</summary>
+      <p>Python's sqlite3 module implicitly opens a transaction only before <code>INSERT</code>/<code>UPDATE</code>/
+        <code>DELETE</code>, not before <code>CREATE TABLE</code>. To make "run these DDL statements and bump the
+        version" all-or-nothing, issue <code>BEGIN</code> yourself inside <code>with conn:</code>; the context manager
+        commits on success and rolls back on an exception.</p>
+<pre><code class="language-python">for version in range(current, LATEST_VERSION):
+    with conn:
+        conn.execute("BEGIN")
+        for statement in MIGRATIONS[version]:
+            conn.execute(statement)
+        conn.execute("UPDATE schema_version SET version = ?", (version + 1,))</code></pre>
+    </details>
+    <details class="reveal"><summary>Hint: detecting duplicates without a race</summary>
+      <p>Don't <code>SELECT</code> first and then <code>INSERT</code>: another process could insert in between. Let the
+        database enforce the rule. For habits, catch <code>sqlite3.IntegrityError</code> from the primary key and
+        re-raise <code>DuplicateHabitError(...) from exc</code>. For completions, <code>INSERT OR IGNORE</code> and check
+        <code>cursor.rowcount</code>.</p>
+    </details>
+    <details class="reveal"><summary>Hint: structlog and swapped streams in tests</summary>
+      <p><code>structlog.PrintLoggerFactory(file=sys.stderr)</code> captures the stream object at configuration time.
+        pytest's <code>capsys</code> replaces <code>sys.stderr</code> per test and closes the old one, so later log calls
+        would fail with "I/O operation on closed file". The given <code>configure_logging</code> uses a small factory that
+        looks up <code>sys.stderr</code> at each call and turns off <code>cache_logger_on_first_use</code>.</p>
+    </details>
+    <details class="reveal"><summary>Hint: one contract, two adapters</summary>
+<pre><code class="language-python">@pytest.fixture(params=["memory", "sqlite"])
+def repo(request, tmp_path):
+    if request.param == "memory":
+        yield InMemoryRepository()
+    else:
+        with SqliteRepository(tmp_path / "habits.db") as sqlite_repo:
+            yield sqlite_repo</code></pre>
+      <p>If a contract test passes for memory but fails for SQLite, the difference is usually ordering (add
+        <code>ORDER BY</code>), type conversion (dates stored as ISO text, booleans as 0/1), or a missing
+        <code>NotFoundError</code> when <code>UPDATE</code> affects zero rows (check <code>cursor.rowcount</code>).</p>
+    </details>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Points</th><th>What earns full marks</th></tr></thead>
+      <tbody>
+        <tr><td>Domain correctness</td><td>25</td><td>All Milestone 1 tests pass; functions are pure and take "today" as an argument.</td></tr>
+        <tr><td>Adapters</td><td>25</td><td>Both adapters pass the contract; migrations are versioned and atomic; every query is parameterized.</td></tr>
+        <tr><td>Service layer</td><td>20</td><td>Use cases depend only on ports; idempotent check-in; correct defaults and validation.</td></tr>
+        <tr><td>CLI and logging</td><td>15</td><td>Correct exit codes; results on stdout, structlog key=value on stderr; no <code>print()</code> in library code.</td></tr>
+        <tr><td>Code quality</td><td>15</td><td><code>ruff check</code> and <code>mypy --strict</code> clean; Google docstrings; no bare <code>except</code>; clear names.</td></tr>
+      </tbody>
+    </table>
+    <p>Passing <code>pixi run grade p06</code> covers the first four rows. The last row is yours to verify with ruff and
+      mypy, exactly as a CI pipeline (<a href="../modules/m42-tooling.html">M42</a>) would.</p>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>A third migration.</strong> Add a <code>notes</code> column and a <code>rename</code> use case. Prove
+        an old database upgrades by writing a test that builds a version-2 file first.</li>
+      <li><strong>"N times per week".</strong> Add a frequency such as <code>3x/week</code>. What does a streak mean
+        now? Write the tests before the code.</li>
+      <li><strong>A third adapter.</strong> Write <code>JsonFileRepository</code> and add <code>"json"</code> to the
+        contract fixture's params. If the contract tests pass, the service works with it unchanged.</li>
+      <li><strong>A web front end.</strong> Wrap <code>HabitService</code> in a FastAPI app (Module 45) with
+        <code>Depends</code> providing the service. The domain, ports, and adapters should not change at all.</li>
+      <li><strong>SQLAlchemy.</strong> Implement the repository with SQLAlchemy 2.0 Core and compare it to the raw
+        sqlite3 version.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p06-quiz">
+<script type="application/json">
+{"title": "Habit tracker reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why does <code>HabitService</code> receive a <code>Clock</code> instead of calling <code>date.today()</code>?", "options": ["date.today() is slow", "So tests (and the --today option) can control what 'today' is, making date rules deterministic to test", "Because Protocols require it", "To support time zones automatically"], "answer": 1, "explanation": "<p>The current date is a hidden input. Injecting it through a port turns it into an ordinary argument: tests pass a <code>FixedClock</code>, production passes <code>SystemClock</code>.</p>"},
+  {"type": "single", "prompt": "A weekly habit was checked in on Monday. What does <code>check_in</code> return when called again on Thursday of the same week?", "options": ["True, a second completion is stored", "False, the period is already satisfied", "It raises ValidationError", "It replaces Monday's completion"], "answer": 1, "explanation": "<p>Check-in is idempotent per <em>period</em>. Both days have the same period key (that week's Monday), so nothing new is stored.</p>"},
+  {"type": "multi", "prompt": "Which modules are allowed to import <code>habits.sqlite_repo</code>?", "options": ["domain.py", "service.py", "cli.py", "tests"], "answer": [2, 3], "explanation": "<p>Only the composition root (the CLI) and tests pick concrete adapters. The service depends on the <code>HabitRepository</code> Protocol; the domain depends on nothing.</p>"},
+  {"type": "single", "prompt": "Why do the repository contract tests use a fixture parametrized over both adapters?", "options": ["To make the suite run faster", "To prove both adapters honor the same behavioral contract, so they are truly interchangeable", "Because pytest requires it for Protocols", "To test the service layer"], "answer": 1, "explanation": "<p>A Protocol checks shapes (method names and types). Contract tests check behavior: sorting, duplicate handling, NotFoundError. Running the same tests against every adapter catches the subtle differences.</p>"},
+  {"type": "single", "prompt": "Why does <code>migrate()</code> issue an explicit <code>BEGIN</code>?", "options": ["sqlite3 requires BEGIN before every statement", "DDL statements do not implicitly open a transaction in Python's sqlite3, so without BEGIN a failed migration could leave a half-applied schema", "To enable foreign keys", "To make migrations faster"], "answer": 1, "explanation": "<p>The legacy transaction control in sqlite3 starts transactions only before DML. An explicit BEGIN inside <code>with conn:</code> makes the DDL plus the version bump commit or roll back together.</p>"},
+  {"type": "text", "prompt": "Which stream should a CLI write its <em>results</em> to so they can be piped or redirected into a file?", "answer": ["stdout", "standard output", "sys.stdout"], "explanation": "<p>Results go to stdout; logs and errors go to stderr. Then <code>habits export &gt; backup.json</code> captures only the data.</p>"},
+  {"type": "single", "prompt": "Today is Saturday. A mon,wed,fri habit was done Monday and Wednesday but not Friday. What is the current streak?", "options": ["0", "1", "2", "3"], "answer": 0, "explanation": "<p>Saturday is not due, so the last due period is Friday, and it is finished. It was missed, so the streak is 0. The grace rule only applies to a period that is still in progress.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Algorithm Visualizers · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="viz-algo-gallery">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Authoring · Visualizer gallery</p>
+    <h1>Algorithm Visualizers</h1>
+    <p class="lede">Every visualizer in <code>viz-algo.js</code>, mounted with a couple of configurations each. Copy the markup into a module page.</p>
+    <div class="lesson-meta"><span>⏱ 15 min</span><span>Prerequisites: none</span></div>
+    <ul class="objectives">
+      <li>See each algorithm visualizer working</li>
+      <li>Copy the <code>data-viz</code> and <code>data-config</code> markup</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="sorting">
+    <h2>sorting</h2>
+    <p>All eight algorithms with a pseudo-code panel. Pick a second algorithm under "race vs" to run both on the same array.</p>
+    <div class="viz" data-viz="sorting" data-config='{"size": 14}'></div>
+    <p>Restricted to the O(n log n) sorts on a fixed array:</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["merge", "quick", "heap"], "default": "quick", "array": [38, 27, 43, 3, 9, 82, 10, 55, 21, 64]}'></div>
+    <p>Non-comparison sorts:</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["counting", "radix", "insertion"], "default": "radix", "array": [170, 45, 75, 90, 802, 24, 2, 66]}'></div>
+  </section>
+
+  <section class="lesson-section" id="binary-search">
+    <h2>binary-search</h2>
+    <div class="viz" data-viz="binary-search"></div>
+    <div class="viz" data-viz="binary-search" data-config='{"array": [2, 5, 8, 12, 16, 23, 38, 56, 72, 91, 99, 104, 120, 133, 150, 161, 177, 190, 205, 230], "target": 37}'></div>
+  </section>
+
+  <section class="lesson-section" id="array-technique">
+    <h2>array-technique</h2>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "two-sum-sorted", "array": [1, 3, 4, 6, 8, 11, 14, 17, 20], "target": 25}'></div>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "sliding-window", "array": [4, -1, 6, 2, -3, 7, 1, 5, -2, 3], "k": 3}'></div>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "prefix-sum", "array": [3, 1, 4, 1, 5, 9, 2, 6]}'></div>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "longest-substring", "text": "pwwkewxyz"}'></div>
+  </section>
+
+  <section class="lesson-section" id="recursion-tree">
+    <h2>recursion-tree</h2>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 5}'></div>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 6, "memo": true}'></div>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "hanoi", "n": 3}'></div>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "permutations", "n": 3}'></div>
+  </section>
+
+  <section class="lesson-section" id="graph">
+    <h2>graph</h2>
+    <div class="viz" data-viz="graph" data-config='{"preset": "small", "algorithms": ["bfs", "dfs"], "start": "A"}'></div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "weighted", "algorithms": ["dijkstra", "bellman-ford", "prim", "kruskal"]}'></div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "dag", "algorithms": ["topo", "dijkstra", "dfs"]}'></div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "grid", "algorithms": ["kruskal", "prim", "bfs"]}'></div>
+  </section>
+
+  <section class="lesson-section" id="grid-path">
+    <h2>grid-path</h2>
+    <div class="viz" data-viz="grid-path"></div>
+    <div class="viz" data-viz="grid-path" data-config='{"rows": 10, "cols": 16, "algorithms": ["bfs", "dijkstra", "astar"]}'></div>
+  </section>
+
+  <section class="lesson-section" id="dp-table">
+    <h2>dp-table</h2>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "lcs", "a": "ABCBDAB", "b": "BDCABA"}'></div>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "edit-distance", "a": "kitten", "b": "sitting"}'></div>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "knapsack", "items": [[1, 1], [3, 4], [4, 5], [5, 7]], "capacity": 7}'></div>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "coin-change", "coins": [1, 3, 4], "amount": 10}'></div>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "lis", "array": [10, 9, 2, 5, 3, 7, 101, 18]}'></div>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "grid-paths", "rows": 4, "cols": 5}'></div>
+  </section>
+
+  <section class="lesson-section" id="n-queens">
+    <h2>n-queens</h2>
+    <div class="viz" data-viz="n-queens" data-config='{"n": 4}'></div>
+    <div class="viz" data-viz="n-queens" data-config='{"n": 6, "all": true}'></div>
+  </section>
+
+  <section class="lesson-section" id="bits">
+    <h2>bits</h2>
+    <div class="viz" data-viz="bits" data-config='{"value": 42, "width": 8}'></div>
+    <div class="viz" data-viz="bits" data-config='{"value": -6, "width": 16, "op": "~"}'></div>
+    <div class="viz" data-viz="bits" data-config='{"mode": "float", "value": "0.1 + 0.2"}'></div>
+  </section>
+
+  <section class="lesson-section" id="kmp">
+    <h2>kmp</h2>
+    <div class="viz" data-viz="kmp" data-config='{"text": "ABABDABACDABABCABABABC", "pattern": "ABABCABAB"}'></div>
+    <div class="viz" data-viz="kmp" data-config='{"text": "AAAAABAAAAAB", "pattern": "AAAB"}'></div>
+  </section>
+
+  <section class="lesson-section" id="huffman">
+    <h2>huffman</h2>
+    <div class="viz" data-viz="huffman" data-config='{"text": "abracadabra"}'></div>
+    <div class="viz" data-viz="huffman" data-config='{"text": "the quick brown fox jumps over the lazy dog"}'></div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 1 · Budget Ledger CLI · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p01">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Graded project</p>
+    <h1>Project 1: Budget Ledger CLI</h1>
+    <p class="lede">Build a real command-line tool that turns messy bank exports into a monthly spending report, flags
+      double-imported charges, and tells you where you went over budget. Everything in Part 1 comes together here.</p>
+    <div class="lesson-meta"><span>⏱ ~6–8 hours</span><span>Prerequisites: <a href="../modules/m05-functions.html">M05</a>–<a href="../modules/m09-files-io.html">M09</a></span></div>
+    <ul class="objectives">
+      <li>Design a program as a package of small, pure, documented functions</li>
+      <li>Parse untrusted CSV input defensively and report errors with file and line numbers</li>
+      <li>Load configuration from TOML or JSON with <code>tomllib</code> and <code>json</code></li>
+      <li>Group, total, and compare data with dicts, tuples as keys, and sorting</li>
+      <li>Use a custom exception type and exit codes to build a well-behaved CLI with <code>argparse</code></li>
+      <li>Work test-first against a professional-style pytest suite using Pixi</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>Most banks let you download your transactions as a CSV (comma-separated values) file. In theory that makes
+      budgeting easy. In practice every export is a little different: one bank writes <code>Date</code>, another
+      <code>DATE</code>; dates come as <code>2026-01-05</code> or <code>01/05/2026</code>; spending appears as
+      <code>-1,450.00</code> or, in accounting style, <code>(1450.00)</code>; some files begin with an invisible
+      byte-order mark; and occasionally a row is simply broken. When you download overlapping date ranges, the same
+      charge appears twice.</p>
+    <p>You will build <code>ledger</code>, a tool you could actually use on your own money:</p>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run python -m ledger budget sample/checking-2026-01.csv --rules sample/rules.toml
+2026-01 groceries: spent 273.07 of 250.00 (over by 23.07)
+$ echo $?
+3</code></pre>
+    <p>The sample data lives in <code>projects/p01_budget_ledger/sample/</code>: two monthly exports (the second
+      contains a deliberately corrupt row) and a <code>rules.toml</code> that maps keywords to categories and
+      categories to monthly limits.</p>
+    <pre><code class="language-toml"># rules.toml: keyword rules are checked top to bottom; the first match wins.
+[rules]
+rent = ["city rent"]
+groceries = ["whole foods", "trader joe"]
+dining = ["pizza", "trattoria", "cafe"]
+income = ["payroll"]
+
+[budgets]
+groceries = 250
+dining = 80</code></pre>
+    <aside class="callout note" data-title="Dataclasses: a light preview">
+      <p><code>ledger/models.py</code> is provided. It defines <code>Transaction</code>, <code>Rule</code>,
+        <code>Config</code>, and <code>Overrun</code> with <code>@dataclass</code>, which you study properly in
+        <a href="../modules/m13-dataclasses.html">M13</a>. For this project, read a dataclass as "a named bundle of
+        fields": <code>t.date</code>, <code>t.description</code>, <code>t.amount</code>, <code>t.category</code>.
+        They are <em>frozen</em> (read-only), so to change a category you build a modified copy with
+        <code>dataclasses.replace(t, category="groceries")</code>. You write no classes yourself, only functions.</p>
+    </aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Functions (M05)</h4><p>Each module exposes a handful of small functions with type hints
+        and Google-style docstrings. Library functions <em>return</em> values; only the CLI prints.</p></div>
+      <div class="card"><h4>Collections (M06)</h4><p>Dicts of dicts for summaries, tuples as grouping keys,
+        <code>setdefault</code> and <code>defaultdict</code>, sorting for stable output.</p></div>
+      <div class="card"><h4>Exceptions (M07)</h4><p>One custom <code>LedgerError</code>; low-level errors are
+        translated with <code>raise ... from exc</code>; the CLI maps errors to exit codes.</p></div>
+      <div class="card"><h4>Modules (M08)</h4><p>A package split by responsibility, a <code>__main__.py</code>, and
+        Pixi to run and grade it.</p></div>
+      <div class="card"><h4>Files (M09)</h4><p><code>pathlib</code>, <code>csv.DictReader</code> with
+        <code>newline=""</code>, <code>json</code> with a <code>default=</code> encoder, <code>tomllib</code> in
+        binary mode.</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <table class="rubric">
+      <thead><tr><th>Area</th><th>Requirement</th></tr></thead>
+      <tbody>
+        <tr><td>Input CSV</td><td>Header row with <code>Date</code>, <code>Description</code>, <code>Amount</code>
+          in any case and order; extra columns ignored; UTF-8 with or without BOM.</td></tr>
+        <tr><td>Dates</td><td><code>YYYY-MM-DD</code> or <code>MM/DD/YYYY</code>.</td></tr>
+        <tr><td>Amounts</td><td>Exact <code>Decimal</code>. Accept <code>$</code>, thousands commas, a leading
+          minus, or parentheses for negatives. Reject empty, non-numeric, NaN, and infinity.</td></tr>
+        <tr><td>Errors</td><td>Every malformed input raises <code>LedgerError</code>. Row errors start with
+          <code>file.csv:LINE:</code>.</td></tr>
+        <tr><td>Rules</td><td><code>[rules]</code>: category → keyword list. Case-insensitive substring match;
+          first rule in file order wins; otherwise <code>"uncategorized"</code>.</td></tr>
+        <tr><td>Budgets</td><td><code>[budgets]</code>: category → non-negative number. Spending is the negated
+          monthly total; overrun means strictly greater than the limit.</td></tr>
+        <tr><td>Duplicates</td><td>Same date, same amount, same description ignoring case and repeated
+          whitespace. Groups keep input order.</td></tr>
+        <tr><td>Export</td><td><code>.json</code>: full report (money and dates as strings). <code>.csv</code>:
+          <code>month,category,total</code>. Other extensions are a <code>LedgerError</code>.</td></tr>
+        <tr><td>CLI</td><td><code>summary</code> (<code>--month</code>), <code>duplicates</code>,
+          <code>budget</code> (needs <code>--rules</code>), <code>export --out</code>. Exit codes: 0 ok, 1 data
+          error, 2 usage error, 3 over budget.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>Data flows in one direction. Each box is one module with one job, which keeps every function testable on its
+      own: you can test <code>monthly_summary</code> without touching a file, and test parsing without a CLI.</p>
+    <pre class="mermaid">
+flowchart LR
+  CSV[(bank CSV files)] --> P[parsing.py<br/>read_many]
+  CFG[(rules.toml / .json)] --> R[rules.py<br/>load_config]
+  P -->|list of Transaction| C[rules.py<br/>categorize_all]
+  R -->|Config.rules| C
+  C --> A[analysis.py<br/>monthly_summary<br/>find_duplicates<br/>check_budgets]
+  R -->|Config.budgets| A
+  A --> X[report.py<br/>build_report<br/>export_report]
+  X --> OUT[(report.json / summary.csv)]
+  CLI[cli.py main] -.calls.-> P
+  CLI -.calls.-> R
+  CLI -.calls.-> A
+  CLI -.calls.-> X
+    </pre>
+    <p>The CLI is a thin shell: it parses arguments, calls the library, prints results, and converts a
+      <code>LedgerError</code> into a message on stderr and exit code 1. Nothing else in the package prints.</p>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started with Pixi</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects          # list every project
+pixi run start p01         # copy the starter into work/p01_budget_ledger/
+pixi run grade p01         # run all grading tests against your work copy
+pixi run grade p01 -k parsing   # only the tests whose names mention "parsing"</code></pre>
+    <p>Open <code>work/p01_budget_ledger/ledger/</code>. Every function you write starts as
+      <code>raise NotImplementedError</code> with <code>TODO</code> comments. The first grade run fails almost every
+      test; that is the point. Each milestone turns a test file green.</p>
+    <aside class="callout pixi"><p>Run your tool from <code>work/p01_budget_ledger/</code> with
+      <code>pixi run python -m ledger summary ../../projects/p01_budget_ledger/sample/checking-2026-01.csv</code>.
+      The <code>-m</code> flag runs the package's <code>__main__.py</code>, exactly as you saw in
+      <a href="../modules/m08-modules.html">M08</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h3>Milestone 1: Parsing (<code>parsing.py</code>)</h3>
+      <p>Turn raw text into exact values, and refuse bad input loudly. This is where most real-world bugs live.</p>
+      <ul class="checklist" data-id="p01-m1">
+        <li><code>parse_amount</code> handles <code>$</code>, commas, minus, and parentheses, and returns <code>Decimal</code></li>
+        <li><code>parse_amount</code> raises <code>LedgerError</code> for empty, non-numeric, <code>nan</code>, <code>inf</code></li>
+        <li><code>parse_date</code> accepts both formats and raises <code>LedgerError</code> otherwise</li>
+        <li><code>read_transactions</code> normalizes headers, tolerates a BOM, ignores extra columns</li>
+        <li>Malformed rows raise <code>LedgerError("file.csv:LINE: ...")</code>; missing files too</li>
+        <li><code>pixi run grade p01 -k parsing</code> is green</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 2: Rules and categories (<code>rules.py</code>)</h3>
+      <ul class="checklist" data-id="p01-m2">
+        <li><code>load_config</code> reads <code>.toml</code> (binary mode) and <code>.json</code></li>
+        <li>Rules keep file order; keywords are stored lower-cased</li>
+        <li>Budgets become <code>Decimal</code>; booleans, strings that are not numbers, and negatives are rejected</li>
+        <li><code>categorize</code> returns the first matching category or <code>"uncategorized"</code></li>
+        <li><code>categorize_all</code> returns new transactions and leaves the input unchanged</li>
+        <li><code>pixi run grade p01 -k rules</code> is green</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 3: Analysis (<code>analysis.py</code>)</h3>
+      <ul class="checklist" data-id="p01-m3">
+        <li><code>monthly_summary</code> groups by <code>t.month</code> and category, sorted</li>
+        <li><code>find_duplicates</code> groups by a normalized <code>(date, amount, description)</code> key</li>
+        <li><code>check_budgets</code> reports strictly-over months and categories, refunds included</li>
+        <li><code>pixi run grade p01 -k analysis</code> is green</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 4: Reports (<code>report.py</code>)</h3>
+      <ul class="checklist" data-id="p01-m4">
+        <li><code>build_report</code> returns counts, months, overruns, and duplicate groups</li>
+        <li><code>write_json</code> uses a <code>default=</code> function for <code>Decimal</code> and <code>date</code></li>
+        <li><code>write_summary_csv</code> writes <code>month,category,total</code> with <code>newline=""</code></li>
+        <li><code>export_report</code> picks the format by suffix and creates missing folders</li>
+        <li><code>pixi run grade p01 -k report</code> is green</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 5: The CLI (<code>cli.py</code>)</h3>
+      <ul class="checklist" data-id="p01-m5">
+        <li><code>build_parser</code> defines four subcommands that each take one or more CSV paths</li>
+        <li><code>main(argv)</code> returns an exit code instead of calling <code>sys.exit</code></li>
+        <li>Usage errors return 2; <code>LedgerError</code> prints <code>error: ...</code> to stderr and returns 1</li>
+        <li><code>budget</code> returns 3 when anything is over budget</li>
+        <li><code>pixi run grade p01</code> is fully green</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>Why <code>Decimal</code> and not <code>float</code>?</summary>
+      <p><code>0.1 + 0.2</code> is <code>0.30000000000000004</code> in binary floating point. Over hundreds of
+        transactions those errors add up and totals stop matching your bank. <code>Decimal("0.10")</code> is exact.
+        Always build a <code>Decimal</code> from a <em>string</em>; <code>Decimal(0.1)</code> captures the float's
+        error. That is why budgets use <code>Decimal(str(value))</code>.</p>
+    </details>
+    <details class="reveal"><summary>Adding file and line to an error message</summary>
+      <pre><code class="language-python">try:
+    amount = parse_amount(cells["amount"])
+except LedgerError as exc:
+    raise LedgerError(f"{source}:{line}: {exc}") from exc</code></pre>
+      <p><code>from exc</code> keeps the original error attached as <code>__cause__</code>, so a developer still sees
+        the full story in a traceback, while the user sees one clear line.</p>
+    </details>
+    <details class="reveal"><summary>Normalizing the CSV header</summary>
+      <p><code>csv.DictReader</code> reads the header lazily. Touch <code>reader.fieldnames</code> once (it is
+        <code>None</code> for an empty file), then assign a cleaned list back:
+        <code>reader.fieldnames = [n.strip().lower() for n in reader.fieldnames]</code>. Every row dict now uses the
+        clean keys. Open the file with <code>encoding="utf-8-sig"</code> so a BOM does not end up glued to
+        <code>"date"</code>.</p>
+    </details>
+    <details class="reveal"><summary>Grouping with a tuple key</summary>
+      <pre><code class="language-python">groups = {}
+for t in transactions:
+    key = (t.date, t.amount, " ".join(t.description.casefold().split()))
+    groups.setdefault(key, []).append(t)
+duplicates = [g for g in groups.values() if len(g) &gt; 1]</code></pre>
+    </details>
+    <details class="reveal"><summary>Testing a CLI that calls <code>argparse</code></summary>
+      <p><code>parser.parse_args</code> raises <code>SystemExit(2)</code> on bad input (and
+        <code>SystemExit(0)</code> for <code>--help</code>). Catch it in <code>main</code> and return
+        <code>exc.code</code>. Because <code>main</code> takes <code>argv</code> as a list, tests call
+        <code>main(["summary", "file.csv"])</code> directly, no subprocess needed.</p>
+    </details>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Excellent</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td><code>pixi run grade p01</code> passes every test.</td><td>50%</td></tr>
+        <tr><td>Error handling</td><td>Only <code>LedgerError</code> escapes the library; messages name the file,
+          line, and value; no bare <code>except</code>; nothing swallowed silently.</td><td>15%</td></tr>
+        <tr><td>Design</td><td>Small functions with one job; library code returns values and never prints; no
+          global state.</td><td>15%</td></tr>
+        <tr><td>Readability</td><td>Type hints and Google-style docstrings on public functions; clear names;
+          <code>pixi run ruff check work/p01_budget_ledger</code> is clean.</td><td>10%</td></tr>
+        <tr><td>Usability</td><td>Output is aligned and readable; exit codes match the spec; the sample files
+          produce sensible results.</td><td>10%</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><code>--skip-bad-rows</code>: report malformed rows on stderr and continue, counting them in the report.</li>
+      <li>Support exports with separate <code>Debit</code> and <code>Credit</code> columns.</li>
+      <li>Regular-expression rules using <code>re.search</code> alongside keywords.</li>
+      <li>A <code>compare</code> subcommand showing two months side by side with percentage change.</li>
+      <li>A <code>[tasks]</code> entry in a <code>pixi.toml</code> so <code>pixi run ledger ...</code> works.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="reflection">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p01-quiz">
+      <script type="application/json">
+      {"title": "Budget ledger reflection", "passScore": 0.7, "questions": [
+        {"type": "single", "prompt": "Why does the ledger store amounts as <code>Decimal</code>?", "options": ["It is faster than float", "Binary floats cannot represent most decimal fractions exactly, so money totals drift", "JSON requires it", "csv returns Decimal values"], "answer": 1,
+         "explanation": "<p>Floats are binary approximations: <code>0.1 + 0.2 != 0.3</code>. Decimal stores base-10 digits exactly, which is what money needs.</p>"},
+        {"type": "single", "prompt": "Why does <code>read_transactions</code> open files with <code>newline=\"\"</code>?", "options": ["To strip blank lines", "So the csv module can handle line endings and newlines inside quoted fields itself", "To read faster", "It converts CRLF to LF"], "answer": 1,
+         "explanation": "<p>The csv docs require <code>newline=\"\"</code>; otherwise newlines embedded in quoted fields and Windows line endings can be mangled.</p>"},
+        {"type": "multi", "prompt": "Which design choices make the library easy to test?", "options": ["Functions return values instead of printing", "<code>main</code> takes <code>argv</code> and returns an exit code", "All errors are a single <code>LedgerError</code> type", "Transactions are stored in a global list"], "answer": [0, 1, 2],
+         "explanation": "<p>Returned values can be asserted, <code>main(argv)</code> can be called directly, and one error type is easy to expect with <code>pytest.raises</code>. Global state makes tests depend on each other.</p>"},
+        {"type": "single", "prompt": "What does <code>raise LedgerError(...) from exc</code> add compared with a plain raise?", "options": ["Nothing", "It records the original exception as <code>__cause__</code> so tracebacks show both", "It suppresses the original exception", "It retries the operation"], "answer": 1,
+         "explanation": "<p>Explicit chaining keeps the low-level cause visible to developers while the new message speaks to users.</p>"},
+        {"type": "text", "prompt": "Which standard-library module parses TOML (it needs the file opened in binary mode)?", "answer": ["tomllib"],
+         "explanation": "<p><code>tomllib.load</code> requires a binary file object; use <code>open(path, \"rb\")</code>.</p>"},
+        {"type": "output", "prompt": "With rules <code>dining=[\"cafe\"]</code> listed before <code>coffee=[\"cafe\"]</code>, what does <code>categorize(\"Blue CAFE\", rules)</code> return?", "answer": "dining",
+         "explanation": "<p>Matching ignores case and the first rule in file order wins.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

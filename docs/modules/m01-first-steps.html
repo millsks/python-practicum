@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M01 · First Steps · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m01">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 01</p>
+    <h1>First Steps</h1>
+    <p class="lede">What actually happens when you "run Python"? In this module you will find out, from the text you type
+      to the bytecode the interpreter executes. Along the way you will learn the first tools every Python programmer
+      uses daily: <code>print</code>, comments, the REPL, and the art of reading an error message.</p>
+    <div class="lesson-meta"><span>⏱ ~75 minutes</span><span>Prerequisites: <a href="m00-setup.html">M00</a></span></div>
+    <ul class="objectives">
+      <li>Explain what a program, an interpreter, and bytecode are</li>
+      <li>Choose between the REPL and a script, and run both with Pixi</li>
+      <li>Use <code>print</code> with several arguments, <code>sep</code>, and <code>end</code></li>
+      <li>Write helpful comments and tell expressions apart from statements</li>
+      <li>Use indentation correctly and read a traceback to find and fix a bug</li>
+      <li>Explore objects with <code>help()</code>, <code>dir()</code>, and <code>type()</code>, and know PEP 8 and the Zen of Python</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="what-is-a-program">
+    <h2>What is a program?</h2>
+    <p>A <strong>program</strong> is a precise list of instructions for a computer. "Precise" is the key word. A human
+      reading a recipe that says "add a pinch of salt" fills in the gaps. A computer cannot fill gaps: it does exactly
+      what the instructions say, nothing more and nothing less. Programming is the craft of writing instructions so
+      clear that a machine with no common sense can follow them.</p>
+    <p>Instructions are written in a <strong>programming language</strong>, a language with strict rules of grammar
+      (called <strong>syntax</strong>) and meaning (called <strong>semantics</strong>). Python is a programming language
+      designed to be readable: Python code often looks almost like English.</p>
+    <pre><code class="language-python">temperature = 31
+if temperature &gt; 30:
+    print("It's hot. Drink water!")</code></pre>
+    <p>Even before learning any rules you can probably guess what this does. That readability is not an accident; it is
+      Python's central design goal, and it is a big reason Python is used for everything from scientific research to
+      websites to machine learning.</p>
+    <p>The text of a program is called <strong>source code</strong> (or just "code"). Python source code is stored in
+      plain text files ending in <code>.py</code>.</p>
+    <div class="runnable" data-title="Your program, your instructions">
+<textarea>
+temperature = 31
+if temperature > 30:
+    print("It's hot. Drink water!")
+print("Done checking the weather.")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Change <code>31</code> to <code>20</code> and run again. Which line disappears, and
+      why does the last line still print?</p></aside>
+    <p><strong>Remember:</strong> a program is an exact list of instructions; syntax is the grammar, semantics is the
+      meaning; source code is the text you write.</p>
+  </section>
+
+  <section class="lesson-section" id="how-python-runs">
+    <h2>How Python runs your code</h2>
+    <p>Your CPU (the computer's processor) does not understand Python. It understands only <em>machine code</em>, very
+      low-level numeric instructions. Something has to bridge the gap. For Python that something is the
+      <strong>interpreter</strong>: a program that reads your Python code and carries out its instructions. The standard
+      interpreter, the one Pixi installs, is called <strong>CPython</strong> because it is written in the C language.</p>
+    <p>CPython works in two stages:</p>
+    <pre class="mermaid">
+flowchart LR
+  A["Source code<br/>hello.py"] -->|"compile"| B["Bytecode<br/>(instructions for the PVM)"]
+  B -->|"execute"| C["Python Virtual Machine<br/>(the evaluation loop)"]
+  C --> D["Output, files,<br/>network..."]
+    </pre>
+    <ol>
+      <li><strong>Compile to bytecode.</strong> CPython first checks your code's syntax and translates it into
+        <strong>bytecode</strong>: a compact list of simple instructions such as "load this name", "multiply", "store
+        the result". If there is a <code>SyntaxError</code> this stage fails and <em>nothing</em> runs.</li>
+      <li><strong>Execute on the PVM.</strong> The <strong>Python Virtual Machine</strong> (PVM) is a loop inside
+        CPython that executes bytecode instructions one after another. It is "virtual" because it is a machine made of
+        software rather than hardware.</li>
+    </ol>
+    <p>You can peek at the bytecode with the standard-library <code>dis</code> module ("disassembler"). Do not try to
+      memorize it; just notice that one line of Python becomes a few tiny steps.</p>
+    <div class="runnable" data-title="A peek at bytecode">
+<textarea>
+import dis
+
+source = """
+price = 21
+total = price * 2
+"""
+dis.dis(compile(source, "<demo>", "exec"))
+</textarea>
+    </div>
+    <p>Reading the output: <code>LOAD_NAME price</code> fetches the value named <code>price</code>,
+      <code>LOAD_SMALL_INT 2</code> pushes the number 2, <code>BINARY_OP (*)</code> multiplies them, and
+      <code>STORE_NAME total</code> saves the result under the name <code>total</code>. The PVM keeps intermediate values
+      on a <em>stack</em>, a pile where the last thing put on is the first taken off.</p>
+    <aside class="callout note"><p>When you import a module, CPython saves its bytecode in a <code>__pycache__</code>
+      folder as a <code>.pyc</code> file, so the next import can skip compilation. That is why you will see those folders
+      appear in your projects. They are safe to delete.</p></aside>
+    <aside class="callout py314"><p>The exact bytecode instructions change between versions; they are an implementation
+      detail. Python 3.14 also ships a new "tail-call" interpreter loop on some platforms and an experimental JIT
+      (just-in-time compiler) in official builds, both aimed at speed. Your Python code stays exactly the same.</p></aside>
+    <p><strong>Remember:</strong> CPython compiles source to bytecode, then the PVM executes the bytecode. Syntax errors
+      stop the first stage, so they prevent the whole file from running.</p>
+  </section>
+
+  <section class="lesson-section" id="repl-vs-scripts">
+    <h2>The REPL vs scripts</h2>
+    <p>You met both in <a href="m00-setup.html">M00</a>. Here is when to use each.</p>
+    <div class="two-col">
+      <div>
+        <h4>REPL: <code>pixi run python</code></h4>
+        <ul>
+          <li>Interactive: type a line, see the result at once</li>
+          <li>Shows the value of every expression automatically</li>
+          <li>Great for experiments, checking a fact, exploring an object</li>
+          <li>Forgets everything when you exit</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Script: <code>pixi run python app.py</code></h4>
+        <ul>
+          <li>Runs a whole file top to bottom</li>
+          <li>Shows only what you <code>print</code></li>
+          <li>For programs you keep, share, and run again</li>
+          <li>Can be edited in a proper editor and tracked with git</li>
+        </ul>
+      </div>
+    </div>
+    <p>The biggest beginner surprise: in the REPL, typing <code>2 + 2</code> displays <code>4</code>. In a script, the
+      same line computes 4 and then silently throws it away. If you want to see it, you must <code>print</code> it.</p>
+    <pre><code class="language-python">&gt;&gt;&gt; 2 + 2        # REPL: the value is echoed
+4
+&gt;&gt;&gt; "hi".upper()
+'HI'</code></pre>
+    <p>The browser cells in this course behave like scripts. Predict what this cell shows:</p>
+    <div class="runnable" data-title="Predict: script or REPL behavior?" data-predict>
+<textarea>
+2 + 2
+print(3 + 3)
+"hello"
+print("bye")
+</textarea>
+    </div>
+    <aside class="callout py314"><p>The Python 3.14 REPL colors your code as you type, colors tracebacks, autocompletes
+      module names after <code>import</code>, and lets you edit whole multi-line blocks with the arrow keys. Type
+      <code>exit</code> to leave.</p></aside>
+    <p><strong>Remember:</strong> the REPL echoes expression values; scripts only show what you print.</p>
+  </section>
+
+  <section class="lesson-section" id="print">
+    <h2>Talking to the world with <code>print</code></h2>
+    <p><code>print</code> is a <strong>function</strong>: a named, reusable piece of code that you <em>call</em> by
+      writing its name followed by parentheses. Values inside the parentheses are <strong>arguments</strong>, the inputs
+      you hand to the function. <code>print</code> writes its arguments to the screen (more precisely, to
+      <em>standard output</em>, the program's main text output stream).</p>
+    <pre><code class="language-python">print("Hello")            # one argument: a string
+print("Answer:", 42)      # two arguments, separated by a comma
+print()                   # no arguments: prints an empty line</code></pre>
+    <p>A <strong>string</strong> is a piece of text in quotes. Single (<code>'hi'</code>) and double (<code>"hi"</code>)
+      quotes mean the same thing.</p>
+    <h3><code>sep</code> and <code>end</code></h3>
+    <p>When you give <code>print</code> several arguments it puts a <strong>separator</strong> between them (a space by
+      default) and finishes with an <strong>end</strong> string (a newline by default, written <code>"\n"</code>). You can
+      change both with <em>keyword arguments</em>: arguments passed by name, as in <code>sep="-"</code>.</p>
+    <div class="runnable" data-title="Playing with sep and end">
+<textarea>
+print("2026", "10", "14", sep="-")
+print("a", "b", "c", sep="")
+print("Loading", end="")
+print("...", end="")
+print(" done!")
+print("one", "two", sep="\n")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print("x", "y", sep="*", end="!\n")
+print(1, 2, 3, sep=", ")
+</textarea>
+    </div>
+    <aside class="callout danger"><p>A very common mistake is writing <code>print "hello"</code> without parentheses.
+      That was valid in the long-retired Python 2; in Python 3 it is a <code>SyntaxError</code>. Python even suggests
+      the fix: <em>Did you mean print(...)?</em></p></aside>
+    <p><strong>Remember:</strong> <code>print(a, b, sep=" ", end="\n")</code>; arguments are separated by
+      <code>sep</code> and followed by <code>end</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="comments-expressions">
+    <h2>Comments, expressions, and statements</h2>
+    <h3>Comments</h3>
+    <p>A <strong>comment</strong> starts with <code>#</code> and runs to the end of the line. Python ignores it
+      completely; it is a note for humans, including future you.</p>
+    <pre><code class="language-python"># Convert minutes to hours for the timesheet report.
+minutes = 135
+hours = minutes / 60  # 2.25</code></pre>
+    <p>Good comments explain <em>why</em>, not <em>what</em>. <code>x = x + 1  # add one to x</code> wastes the reader's
+      time; <code>retries = retries + 1  # the API sometimes fails on the first call</code> tells them something the code
+      cannot.</p>
+    <h3>Expressions</h3>
+    <p>An <strong>expression</strong> is a piece of code that <em>produces a value</em>. <code>42</code>,
+      <code>"hi"</code>, <code>3 * 7</code>, <code>minutes / 60</code>, and <code>len("Pixi")</code> are all expressions.
+      You can combine expressions into bigger ones, like LEGO bricks.</p>
+    <h3>Statements</h3>
+    <p>A <strong>statement</strong> is a complete instruction that <em>does something</em>. An <strong>assignment
+      statement</strong> such as <code>hours = minutes / 60</code> evaluates the expression on the right and gives the
+      result a <strong>name</strong> (also called a <strong>variable</strong>) on the left. <code>if</code>,
+      <code>for</code>, and <code>import</code> are statements too. A statement does not itself have a value: you cannot
+      write <code>print(x = 5)</code> and expect the assignment to happen.</p>
+    <table>
+      <thead><tr><th>Code</th><th>Kind</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>7 * 6</code></td><td>Expression</td><td>Produces the value 42</td></tr>
+        <tr><td><code>answer = 7 * 6</code></td><td>Statement</td><td>Assignment: names the value</td></tr>
+        <tr><td><code>print(answer)</code></td><td>Both</td><td>A call is an expression (it returns <code>None</code>); used alone on a line it is an <em>expression statement</em></td></tr>
+        <tr><td><code>import math</code></td><td>Statement</td><td>Loads a module; has no value</td></tr>
+      </tbody>
+    </table>
+    <p>Step through this program with the tracer. Watch each statement run in order and each name appear with its value.</p>
+    <div class="tracer" data-title="Statements run top to bottom">
+<textarea>
+minutes = 135
+hours = minutes / 60
+label = "hours worked"
+message = str(hours) + " " + label
+print(message)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> expressions produce values; statements perform actions; assignment binds a name to the
+      value of an expression.</p>
+  </section>
+
+  <section class="lesson-section" id="indentation">
+    <h2>Indentation is part of the grammar</h2>
+    <p>Many languages use braces <code>{ }</code> to group lines into a <strong>block</strong> (a group of statements
+      that belong together). Python uses <strong>indentation</strong>, the spaces at the start of a line. A line ending
+      with a colon <code>:</code> introduces a block, and every line of the block is indented by the same amount. The
+      standard is <strong>four spaces</strong>.</p>
+    <pre><code class="language-python">score = 87
+if score &gt;= 50:
+    print("You passed!")       # inside the if block
+    print("Well done.")        # still inside
+print("Thanks for playing.")   # back outside: always runs</code></pre>
+    <p>Because indentation carries meaning, code that is visually tidy is also code that is correct. The flip side is
+      that inconsistent indentation is an error:</p>
+    <pre><code class="language-python">  File "app.py", line 3
+    print(x)
+    ^^^^^
+IndentationError: expected an indented block after 'if' statement on line 2</code></pre>
+    <div class="runnable" data-title="Fix the indentation">
+<textarea>
+score = 87
+if score >= 50:
+print("You passed!")
+print("Thanks for playing.")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Never mix tabs and spaces. Configure your editor to insert four spaces when you press
+      Tab; VS Code does this for Python files by default.</p></aside>
+    <p><strong>Remember:</strong> a colon opens a block; the block is the indented lines below it; use four spaces.</p>
+  </section>
+
+  <section class="lesson-section" id="tracebacks">
+    <h2>Reading tracebacks like a detective</h2>
+    <p>Errors come in two families. <strong>Syntax errors</strong> are found while compiling, before any code runs.
+      <strong>Runtime errors</strong>, called <strong>exceptions</strong>, happen while the program is running, when an
+      instruction turns out to be impossible. Here is a runtime error:</p>
+    <pre><code class="language-python">Traceback (most recent call last):
+  File "receipt.py", line 2, in &lt;module&gt;
+    print("Total: " + 5)
+          ~~~~~~~~~~^~~
+TypeError: can only concatenate str (not "int") to str</code></pre>
+    <p>Detective method:</p>
+    <ol>
+      <li><strong>Last line: what happened.</strong> A <code>TypeError</code>: the types (kinds) of value do not fit. You
+        cannot glue (<em>concatenate</em>) a string and an integer with <code>+</code>.</li>
+      <li><strong>Above it: where.</strong> File <code>receipt.py</code>, line 2. The tildes and caret point at the
+        <code>+</code>.</li>
+      <li><strong>Form a hypothesis and test it.</strong> "I need to turn 5 into text": <code>"Total: " + str(5)</code>,
+        or just <code>print("Total:", 5)</code>.</li>
+    </ol>
+    <p>Python 3.14 is exceptionally helpful with suggestions. Run each line separately (comment the others out with
+      <code>#</code>) and read the hints:</p>
+    <div class="runnable" data-title="Helpful error messages">
+<textarea>
+name = "Ada"
+print("Hi " + nme)
+# print("Total: " + 5)
+# whille True: pass
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14 suggests the right keyword when you mistype one, for example
+      <code>whille</code> produces <em>SyntaxError: invalid syntax. Did you mean 'while'?</em> and its tracebacks are
+      shown in color in the terminal.</p></aside>
+    <aside class="callout pro"><p>When stuck, shrink the problem. Delete or comment out code until the error disappears;
+      the last thing you removed contains the bug. This is called <em>bisecting</em> and professionals do it constantly.</p></aside>
+    <p><strong>Remember:</strong> syntax errors stop everything; exceptions stop at the failing line; the last line of a
+      traceback says what, the lines above say where.</p>
+  </section>
+
+  <section class="lesson-section" id="exploring">
+    <h2>Exploring with <code>type()</code>, <code>dir()</code>, and <code>help()</code></h2>
+    <p>Everything you work with in Python is an <strong>object</strong>: a value in memory that has a
+      <strong>type</strong> (what kind of thing it is) and operations it supports. Three built-in functions let you
+      explore any object, and you will use them for the rest of your career:</p>
+    <ul>
+      <li><code>type(x)</code> tells you what kind of object <code>x</code> is.</li>
+      <li><code>dir(x)</code> lists the names (attributes and <strong>methods</strong>, functions that belong to an
+        object) available on <code>x</code>.</li>
+      <li><code>help(x)</code> shows its documentation.</li>
+    </ul>
+    <div class="runnable" data-title="What is this thing?">
+<textarea>
+print(type(42))
+print(type(3.5))
+print(type("hello"))
+print(type(print))
+names = [n for n in dir("hello") if not n.startswith("_")]
+print(names[:8])
+print("hello".upper())
+</textarea>
+    </div>
+    <div class="runnable" data-title="Read the manual from inside Python">
+<textarea>
+help(str.upper)
+</textarea>
+    </div>
+    <p>Names beginning with underscores (like <code>__len__</code>) are special internal names; filtering them out keeps
+      the list readable. You will learn what they do in the module on the data model.</p>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print(type(7 / 2))
+print(type(7 // 2))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>type</code> answers "what is it?", <code>dir</code> answers "what can it do?",
+      <code>help</code> answers "how do I use it?".</p>
+  </section>
+
+  <section class="lesson-section" id="style">
+    <h2>Style: PEP 8 and the Zen of Python</h2>
+    <p>Code is read far more often than it is written. Python's community agreed on a style guide called
+      <strong>PEP 8</strong> (a PEP, "Python Enhancement Proposal", is a design document for Python). Its core rules:</p>
+    <ul>
+      <li>Indent with four spaces.</li>
+      <li>Names of variables and functions use <code>lower_case_with_underscores</code> ("snake case").</li>
+      <li>Put spaces around operators and after commas: <code>total = price * 2</code>, <code>print(a, b)</code>.</li>
+      <li>Keep lines reasonably short (PEP 8 says 79 characters; many teams, including this course, use up to 120).</li>
+      <li>Use blank lines to separate logical sections.</li>
+    </ul>
+    <div class="tabs">
+      <div class="tab" data-label="Hard to read"><pre><code class="language-python">X=10;Y=20
+TOTALPRICE=X*Y
+print( TOTALPRICE )</code></pre></div>
+      <div class="tab" data-label="PEP 8"><pre><code class="language-python">quantity = 10
+unit_price = 20
+total_price = quantity * unit_price
+print(total_price)</code></pre></div>
+    </div>
+    <aside class="callout pixi"><p>Professionals do not format by hand. The tool <code>ruff</code> checks and formats
+      code automatically. In a Pixi workspace: <code>pixi add ruff</code>, then <code>pixi run ruff format .</code> and
+      <code>pixi run ruff check .</code>. You will set this up properly in the tooling module.</p></aside>
+    <p>Python also has a philosophy, written as a poem by Tim Peters and hidden as an "Easter egg" in the language:</p>
+    <div class="runnable" data-title="The Zen of Python">
+<textarea>
+import this
+</textarea>
+    </div>
+    <p>Lines like "Readability counts", "Explicit is better than implicit", and "Errors should never pass silently" will
+      come up again and again in this course. They are good guides when you have to choose between two ways of writing
+      something.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m01-e1" data-title="A date with sep">
+      <div class="exercise-prompt"><p>Use <strong>one</strong> <code>print</code> call with three arguments,
+        <code>2026</code>, <code>10</code>, and <code>14</code>, and a <code>sep</code> so that it prints exactly
+        <code>2026-10-14</code>.</p></div>
+<textarea class="starter">
+print(2026, 10, 14)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_output():
+    assert program_output == "2026-10-14\n", f"expected '2026-10-14', got {program_output!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Add <code>sep="-"</code> as a fourth argument.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">print(2026, 10, 14, sep="-")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m01-e2" data-title="One line from two prints">
+      <div class="exercise-prompt"><p>Keep the two <code>print</code> calls, but change the first one with
+        <code>end</code> so the program prints exactly one line: <code>Ready, set, go!</code></p></div>
+<textarea class="starter">
+print("Ready, set,")
+print("go!")
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_one_line():
+    assert program_output == "Ready, set, go!\n", f"expected 'Ready, set, go!' on one line, got {program_output!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>By default <code>end</code> is a newline. Make it a single space.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">print("Ready, set,", end=" ")
+print("go!")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m01-e3" data-title="Debug the receipt">
+      <div class="exercise-prompt"><p>This program has three bugs: an indentation problem, a typo in a name, and a
+        string glued to a number. Fix them so it prints exactly two lines: <code>Item: coffee</code> and
+        <code>Price: 4</code>.</p></div>
+<textarea class="starter">
+item = "coffee"
+price = 4
+  print("Item: " + itme)
+print("Price: " + price)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_lines():
+    lines = program_output.strip().splitlines()
+    assert lines == ["Item: coffee", "Price: 4"], f"expected ['Item: coffee', 'Price: 4'], got {lines}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Fix one error at a time, re-running after each. For the price,
+        either use <code>str(price)</code> or pass two arguments to <code>print</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">item = "coffee"
+price = 4
+print("Item: " + item)
+print("Price:", price)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m01-e4" data-title="Expressions do the math">
+      <div class="exercise-prompt"><p>Assign to <code>seconds_in_week</code> an <em>expression</em> that computes the
+        number of seconds in a week (60 seconds × 60 minutes × 24 hours × 7 days). Don't type the answer directly; let
+        Python compute it. Then print the variable.</p></div>
+<textarea class="starter">
+seconds_in_week = ...
+print(seconds_in_week)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_value():
+    assert seconds_in_week == 604800, f"seconds_in_week should be 604800, got {seconds_in_week!r}"
+
+def test_printed():
+    assert program_output.strip() == "604800", "print the variable"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Multiplication is <code>*</code>: <code>60 * 60 * ...</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">seconds_in_week = 60 * 60 * 24 * 7
+print(seconds_in_week)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m01-e5" data-title="Draw a banner">
+      <div class="exercise-prompt"><p>Print this three-line banner exactly. Try to build the border lines with string
+        repetition (<code>"-" * 8</code>) instead of typing every dash.</p>
+<pre><code>+--------+
+| Python |
++--------+</code></pre></div>
+<textarea class="starter">
+border = "+" + "-" * 8 + "+"
+# print the border, the middle line, and the border again
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_banner():
+    expected = "+--------+\n| Python |\n+--------+"
+    assert program_output.strip() == expected, f"expected:\n{expected}\ngot:\n{program_output.strip()}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The middle line is <code>"| Python |"</code>: 8 characters between the
+        bars, matching 8 dashes.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">border = "+" + "-" * 8 + "+"
+print(border)
+print("| Python |")
+print(border)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a personal greeting card</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Personal greeting card</span></div>
+      <div class="widget-body">
+        <p>Write a script that prints a decorated greeting card for someone you know. You will practise
+          <code>print</code>, <code>sep</code>, <code>end</code>, string repetition, comments, and running a script with
+          Pixi.</p>
+        <h4>Steps</h4>
+        <ol>
+          <li>In your <code>practice</code> workspace from M00, create <code>card.py</code>.</li>
+          <li>At the top, write a comment saying what the script does and who it is for.</li>
+          <li>Store the recipient's name, the occasion, and your name in variables.</li>
+          <li>Print a border, a few lines of message, and a signature. Example output:
+<pre><code>**************************
+*   Happy birthday, Sam!  *
+**************************
+Wishing you a year full of
+good code and few bugs.
+          -- from Ada</code></pre></li>
+          <li>Run it with <code>pixi run python card.py</code>, then add a task: <code>pixi task add card "python card.py"</code>.</li>
+          <li>Format it: <code>pixi add ruff</code> and <code>pixi run ruff format card.py</code>.</li>
+        </ol>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m01-mini">
+          <li>The file starts with a comment explaining its purpose</li>
+          <li>Names, occasion, and sender are stored in variables with snake_case names</li>
+          <li>Borders are built with string repetition, not typed by hand</li>
+          <li>At least one <code>print</code> uses <code>sep</code> and at least one uses <code>end</code></li>
+          <li><code>pixi run card</code> prints the card without errors</li>
+          <li>You introduced a deliberate bug, read the traceback, and fixed it</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Make the border width match the length of the greeting using <code>len()</code>.</li>
+          <li>Use <code>dis.dis</code> on one line of your card and identify the <code>STORE_NAME</code> instructions.</li>
+          <li>Ask for the recipient's name with <code>input("Name? ")</code> (you will study <code>input</code> in M02).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m01-quiz">
+<script type="application/json">
+{"title": "First steps quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does the CPython interpreter do first with your source code?", "options": ["Sends it to the CPU directly", "Compiles it to bytecode", "Converts it to C source code", "Uploads it to conda-forge"], "answer": 1, "explanation": "<p>CPython compiles source to bytecode, then the Python Virtual Machine executes the bytecode one instruction at a time.</p>"},
+  {"type": "single", "prompt": "A file has a <code>SyntaxError</code> on line 10. What happens to lines 1 to 9 when you run it?", "options": ["They run, then the program stops", "None of the file runs", "Only line 10 is skipped", "Python fixes line 10 automatically"], "answer": 1, "explanation": "<p>Syntax is checked while compiling the whole file, before execution starts. A syntax error means no bytecode, so nothing runs.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"a\", \"b\", \"c\", sep=\"-\")", "answer": "a-b-c", "explanation": "<p><code>sep</code> is placed between the arguments instead of the default space.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"Hi\", end=\"! \")\nprint(\"there\")", "answer": "Hi! there", "explanation": "<p>The first call ends with <code>\"! \"</code> instead of a newline, so the second call continues on the same line.</p>"},
+  {"type": "multi", "prompt": "Which of these are expressions (they produce a value)?", "options": ["<code>3 * 4</code>", "<code>x = 5</code>", "<code>len(\"abc\")</code>", "<code>import math</code>"], "answer": [0, 2], "explanation": "<p><code>3 * 4</code> and a function call produce values. Assignment and <code>import</code> are statements: they perform an action and have no value.</p>"},
+  {"type": "single", "prompt": "In a script (not the REPL), what does a line containing only <code>2 + 2</code> show?", "options": ["4", "2 + 2", "Nothing", "An error"], "answer": 2, "explanation": "<p>Scripts only show what you print. The value 4 is computed and discarded. Only the REPL echoes expression values.</p>"},
+  {"type": "single", "prompt": "Which character starts a comment in Python?", "options": ["<code>//</code>", "<code>#</code>", "<code>--</code>", "<code>/*</code>"], "answer": 1, "explanation": "<p>Everything from <code>#</code> to the end of the line is ignored by Python.</p>"},
+  {"type": "single", "prompt": "What does PEP 8 recommend for indentation?", "options": ["One tab", "Two spaces", "Four spaces", "Any amount, as long as it is consistent in a file"], "answer": 2, "explanation": "<p>Four spaces per level. Consistency within a block is required by Python; four spaces is the community standard.</p>"},
+  {"type": "single", "prompt": "In a traceback, what does the last line tell you?", "options": ["Where the program started", "The exception type and message", "The Python version", "How to fix the bug automatically"], "answer": 1, "explanation": "<p>The last line names what went wrong, such as <code>NameError: name 'nme' is not defined</code>. The lines above show where.</p>"},
+  {"type": "text", "prompt": "Which built-in function tells you what kind of object a value is?", "answer": ["type", "type()"], "explanation": "<p><code>type(42)</code> gives <code>&lt;class 'int'&gt;</code>. Use <code>dir()</code> to list what an object can do and <code>help()</code> to read its documentation.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(type(\"42\"))", "answer": "<class 'str'>", "explanation": "<p>The quotes make it a string, even though the characters are digits.</p>"},
+  {"type": "single", "prompt": "Which name follows PEP 8 for a variable?", "options": ["<code>TotalPrice</code>", "<code>totalprice</code>", "<code>total_price</code>", "<code>TOTAL-PRICE</code>"], "answer": 2, "explanation": "<p>Variables use snake_case. <code>TOTAL-PRICE</code> is not even a valid name: Python would read it as a subtraction.</p>"},
+  {"type": "text", "prompt": "What statement prints the Zen of Python? (two words)", "answer": ["import this"], "explanation": "<p><code>import this</code> prints Tim Peters' 19 aphorisms, such as \"Readability counts\".</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A program is a precise list of instructions written in a language with strict syntax.</li>
+      <li>CPython compiles source code to bytecode, which the Python Virtual Machine executes.</li>
+      <li>The REPL echoes values and is for exploring; scripts print explicitly and are for keeping.</li>
+      <li><code>print</code> takes any number of arguments plus <code>sep</code> and <code>end</code>.</li>
+      <li>Comments explain why; expressions produce values; statements perform actions.</li>
+      <li>Indentation defines blocks; use four spaces.</li>
+      <li>Read tracebacks bottom-up; use <code>type</code>, <code>dir</code>, and <code>help</code> to explore.</li>
+      <li>Follow PEP 8 and let tools like ruff format for you.</li>
+    </ul>
+    <div class="flashcards" data-title="First steps">
+<script type="application/json">
+[{"front": "Interpreter", "back": "A program that reads code and carries out its instructions. Python's standard interpreter is CPython."},
+ {"front": "Bytecode", "back": "The compact instruction list CPython compiles your source into. Inspect it with <code>dis.dis</code>."},
+ {"front": "PVM", "back": "Python Virtual Machine: the loop inside CPython that executes bytecode instructions one by one."},
+ {"front": "REPL", "back": "Read–Eval–Print Loop: the interactive prompt that echoes expression values."},
+ {"front": "<code>sep</code> and <code>end</code>", "back": "Keyword arguments of <code>print</code>: what goes between arguments (default space) and after them (default newline)."},
+ {"front": "Expression", "back": "Code that produces a value, such as <code>3 * 4</code> or <code>len(\"abc\")</code>."},
+ {"front": "Statement", "back": "A complete instruction that does something, such as an assignment, <code>if</code>, or <code>import</code>."},
+ {"front": "Block", "back": "Lines grouped by the same indentation after a line ending in <code>:</code>."},
+ {"front": "SyntaxError vs exception", "back": "Syntax errors are found while compiling, so nothing runs. Exceptions happen at runtime, at the failing line."},
+ {"front": "<code>type</code>, <code>dir</code>, <code>help</code>", "back": "What is it? What can it do? How do I use it?"},
+ {"front": "PEP 8", "back": "Python's style guide: four spaces, snake_case names, spaces around operators."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/introduction.html">An informal introduction to Python</a> (official tutorial)</li>
+      <li><a href="https://docs.python.org/3.14/library/functions.html#print"><code>print</code> in the built-in functions reference</a></li>
+      <li><a href="https://docs.python.org/3.14/library/dis.html">The <code>dis</code> module</a></li>
+      <li><a href="https://peps.python.org/pep-0008/">PEP 8, the style guide</a> and <a href="https://peps.python.org/pep-0020/">PEP 20, the Zen of Python</a></li>
+      <li><a href="https://docs.python.org/3.14/tutorial/errors.html">Errors and exceptions</a> (official tutorial)</li>
+      <li>Next: <a href="m02-values-types.html">M02 · Values, Types &amp; Variables</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

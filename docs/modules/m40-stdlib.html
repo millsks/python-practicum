@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M40 · Standard Library Power Tools · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m40">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Module 40</p>
+    <h1>Standard Library Power Tools</h1>
+    <p class="lede">"Batteries included" is Python's superpower, but only if you know which battery to grab.
+      Professionals reach for <code>Counter</code> instead of a counting loop, <code>zoneinfo</code> instead of
+      hand-rolled UTC offsets, a compiled verbose regex instead of a tangle of <code>split</code> calls, and
+      <code>secrets</code> instead of <code>random</code> for tokens. This module is a guided tour of the tools that
+      replace the most hand-written code, with the pitfalls that bite people in production.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m06-collections.html">M06 Collections</a>, <a href="m18-functional.html">M18 Functional Programming</a></span></div>
+    <ul class="objectives">
+      <li>Pick the right container from <code>collections</code> and compose <code>itertools</code> recipes</li>
+      <li>Handle dates and times correctly: aware vs naive datetimes, <code>zoneinfo</code>, and DST gaps and folds</li>
+      <li>Write readable, correct regular expressions with groups, named groups, lookarounds, flags, and <code>re.VERBOSE</code></li>
+      <li>Build CLIs with <code>argparse</code> (including 3.14's color help and <code>suggest_on_error</code>)</li>
+      <li>Use <code>sqlite3</code> safely with parameters, rows, and transactions</li>
+      <li>Choose correctly between <code>uuid4</code> and 3.14's <code>uuid7</code>, <code>secrets</code> and <code>random</code>, and hashing vs HMAC vs password hashing</li>
+      <li>Use the file utilities, <code>enum</code>, <code>textwrap</code>, logging, and t-strings where they fit</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="collections">
+    <h2><code>collections</code>: specialized containers</h2>
+    <p>The <code>collections</code> module provides containers that encode common patterns. Each replaces a few lines
+      of fiddly code with one well-tested, usually C-implemented type.</p>
+    <table>
+      <thead><tr><th>Type</th><th>Replaces</th><th>Key operations</th></tr></thead>
+      <tbody>
+        <tr><td><code>deque</code></td><td>A list used as a queue (<code>pop(0)</code> is O(n))</td><td>O(1) <code>append</code>/<code>appendleft</code>/<code>pop</code>/<code>popleft</code>; <code>maxlen</code> for a ring buffer; <code>rotate</code></td></tr>
+        <tr><td><code>Counter</code></td><td><code>d[k] = d.get(k, 0) + 1</code></td><td><code>most_common(n)</code>, <code>update</code>, arithmetic <code>+ - &amp; |</code>, <code>total()</code></td></tr>
+        <tr><td><code>defaultdict</code></td><td><code>d.setdefault(k, []).append(v)</code></td><td>Calls a factory for missing keys (<code>list</code>, <code>set</code>, <code>int</code>)</td></tr>
+        <tr><td><code>ChainMap</code></td><td>Merging dicts for lookup</td><td>Searches several mappings in order without copying: CLI args → env → defaults</td></tr>
+        <tr><td><code>namedtuple</code></td><td>Bare tuples with magic indexes</td><td>Named fields, immutable, tuple-compatible; <code>_replace</code>, <code>_asdict</code> (prefer <code>typing.NamedTuple</code> or a dataclass for new code)</td></tr>
+        <tr><td><code>OrderedDict</code></td><td>(Mostly obsolete: dicts are ordered)</td><td><code>move_to_end</code>, order-sensitive equality; handy for LRU caches</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Five containers in one log analysis">
+<textarea>
+from collections import ChainMap, Counter, defaultdict, deque, namedtuple
+
+Hit = namedtuple("Hit", "ip path status")
+hits = [Hit("10.0.0.1", "/", 200), Hit("10.0.0.2", "/docs", 404), Hit("10.0.0.1", "/docs", 200),
+        Hit("10.0.0.3", "/", 500), Hit("10.0.0.1", "/api", 200), Hit("10.0.0.2", "/", 200)]
+
+by_status = Counter(h.status for h in hits)
+print("status counts:", by_status, "| total:", by_status.total(), "| top:", by_status.most_common(1))
+
+paths_by_ip = defaultdict(set)
+for h in hits:
+    paths_by_ip[h.ip].add(h.path)
+print("paths per ip:", {ip: sorted(p) for ip, p in paths_by_ip.items()})
+
+recent = deque(maxlen=3)                  # ring buffer: keeps only the last 3
+for h in hits:
+    recent.append(h.path)
+print("last 3 paths:", list(recent))
+
+defaults = {"level": "info", "color": True, "port": 8000}
+env = {"level": "debug"}
+cli = {"port": 9000}
+config = ChainMap(cli, env, defaults)      # first mapping that has the key wins
+print("config:", config["level"], config["color"], config["port"])
+
+print(hits[0]._asdict(), hits[0]._replace(status=301))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: Counter arithmetic" data-predict>
+<textarea>
+from collections import Counter
+
+a = Counter("banana")
+b = Counter("bandana")
+print(sorted((b - a).items()), (a & b)["a"], (a | b)["n"])
+</textarea>
+    </div>
+    <aside class="callout py315"><p>In 3.15, <code>Counter</code> also supports symmetric difference with
+      <code>^</code>, giving the elements whose counts differ between two counters.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="itertools">
+    <h2><code>itertools</code>: lazy building blocks</h2>
+    <p><code>itertools</code> provides fast, memory-efficient iterator building blocks (<a href="m14-iterators.html">M14</a>
+      and <a href="m18-functional.html">M18</a> introduced the idea). Everything is lazy: nothing is computed until
+      you iterate. The docs' "recipes" section shows how to combine them; many recipes are now built-ins or available
+      in the third-party <code>more-itertools</code> package (<code>pixi add more-itertools</code>).</p>
+    <table>
+      <thead><tr><th>Family</th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td>Infinite</td><td><code>count</code>, <code>cycle</code>, <code>repeat</code></td></tr>
+        <tr><td>Slicing and filtering</td><td><code>islice</code>, <code>takewhile</code>, <code>dropwhile</code>, <code>filterfalse</code>, <code>compress</code></td></tr>
+        <tr><td>Combining</td><td><code>chain</code>, <code>chain.from_iterable</code>, <code>zip_longest</code>, <code>pairwise</code> (3.10), <code>batched</code> (3.12; <code>strict=</code> 3.13)</td></tr>
+        <tr><td>Grouping and reducing</td><td><code>groupby</code> (consecutive keys!), <code>accumulate</code>, <code>starmap</code>, <code>tee</code></td></tr>
+        <tr><td>Combinatorics</td><td><code>product</code>, <code>permutations</code>, <code>combinations</code>, <code>combinations_with_replacement</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="itertools recipes you'll actually use">
+<textarea>
+from collections import deque
+from itertools import accumulate, batched, chain, groupby, islice, pairwise, product, takewhile
+
+def sliding_window(iterable, n):
+    """sliding_window('ABCDE', 3) -> ABC BCD CDE (from the itertools docs)."""
+    it = iter(iterable)
+    window = deque(islice(it, n - 1), maxlen=n)
+    for x in it:
+        window.append(x)
+        yield tuple(window)
+
+readings = [3, 5, 4, 8, 9, 7, 12]
+print("deltas:", [b - a for a, b in pairwise(readings)])
+print("running max:", list(accumulate(readings, max)))
+print("3-point moving average:", [round(sum(w) / 3, 2) for w in sliding_window(readings, 3)])
+print("batches of 3:", list(batched(range(8), 3)))
+print("flatten:", list(chain.from_iterable([[1, 2], [3], [4, 5]])))
+print("first rising run:", list(takewhile(lambda p: p[0] < p[1], pairwise(readings))))
+
+log = ["GET /a", "GET /b", "POST /c", "GET /d", "GET /e"]
+print("runs:", [(k, len(list(g))) for k, g in groupby(log, key=lambda s: s.split()[0])])  # consecutive only!
+print("grid:", ["".join(p) for p in product("ab", "12")])
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>groupby</code> groups <em>consecutive</em> equal keys, like Unix
+      <code>uniq</code>. To group all equal keys, sort by the same key first, or use a <code>defaultdict(list)</code>.
+      Also, each group shares the underlying iterator: consume (or <code>list()</code>) a group before advancing to the
+      next.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="datetime">
+    <h2>Dates, times, and time zones</h2>
+    <p>Time handling is where confident programmers write subtle bugs. The foundation is the difference between two
+      kinds of <code>datetime</code>:</p>
+    <div class="two-col">
+      <div><h4>Naive</h4><p><code>tzinfo is None</code>. A wall-clock reading with no zone: "9:00 on 2026-03-08",
+        but where? Comparing or subtracting naive datetimes from different places silently gives wrong answers.
+        <code>datetime.now()</code> and <code>datetime.utcnow()</code> (deprecated) return naive values.</p></div>
+      <div><h4>Aware</h4><p>Has a <code>tzinfo</code>, so it denotes an exact instant. Create with
+        <code>datetime.now(UTC)</code>, <code>datetime(..., tzinfo=ZoneInfo("Europe/Oslo"))</code>, or parse an ISO
+        string with an offset. Use aware datetimes for anything that crosses a process boundary.</p></div>
+    </div>
+    <p><strong>The professional rule: store and compute in UTC, convert to local time only for display</strong> (and
+      keep the user's IANA zone name, like <code>"America/New_York"</code>, not just an offset like
+      <code>-05:00</code>, since offsets change with DST and with legislation).</p>
+    <p><code>zoneinfo.ZoneInfo</code> (3.9+) uses the IANA time-zone database: the operating system's copy, or the
+      <code>tzdata</code> package where the OS has none (Windows, minimal containers, and this browser).</p>
+    <div class="runnable" data-title="Aware vs naive, conversion, and ISO 8601">
+<textarea>
+try:
+    import tzdata          # time-zone database where the OS has none (browser, Windows); harmless otherwise
+except ImportError:
+    pass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+now = datetime(2026, 7, 1, 14, 30, tzinfo=UTC)            # a fixed "now" so the output is reproducible
+for zone in ("America/New_York", "Europe/Oslo", "Asia/Kolkata", "Australia/Sydney"):
+    local = now.astimezone(ZoneInfo(zone))
+    print(f"{zone:<18} {local:%Y-%m-%d %H:%M %Z} (UTC{local:%z})")
+
+stamp = "2026-07-01T09:15:00-04:00"
+parsed = datetime.fromisoformat(stamp)                     # aware: has an offset
+print("parsed:", parsed, "| in UTC:", parsed.astimezone(UTC).isoformat())
+
+naive = datetime(2026, 7, 1, 14, 30)
+try:
+    print(naive < now)
+except TypeError as e:
+    print("TypeError:", e)                                  # Python refuses to guess
+print("attach a zone to naive:", naive.replace(tzinfo=ZoneInfo("Europe/Oslo")))
+</textarea>
+    </div>
+    <h3>DST pitfalls: gaps, folds, and wall-clock arithmetic</h3>
+    <p>Daylight saving time creates two kinds of trouble:</p>
+    <ul>
+      <li><strong>Gaps</strong>: when clocks spring forward, some local times don't exist (in New York on 2026-03-08,
+        02:30 never happens).</li>
+      <li><strong>Folds</strong>: when clocks fall back, some local times happen twice (01:30 on 2026-11-01 in New
+        York). The <code>fold</code> attribute (0 = first occurrence, 1 = second) disambiguates.</li>
+      <li><strong>Arithmetic is wall-clock arithmetic</strong>: adding <code>timedelta(days=1)</code> to an aware
+        datetime in a <code>ZoneInfo</code> zone keeps the same wall time and zone, which may be 23 or 25 real hours
+        later. Subtracting two datetimes in the <em>same</em> zone object also ignores DST. For elapsed real time,
+        convert to UTC first.</li>
+    </ul>
+    <div class="runnable" data-title="Spring forward, fall back">
+<textarea>
+try:
+    import tzdata
+except ImportError:
+    pass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+ny = ZoneInfo("America/New_York")
+before = datetime(2026, 3, 7, 12, 0, tzinfo=ny)            # day before spring-forward
+next_day = before + timedelta(days=1)                       # wall-clock: same 12:00, next day
+print("+1 day:", next_day, "| real hours elapsed:", (next_day.astimezone(UTC) - before.astimezone(UTC)) / timedelta(hours=1))
+print("naive-looking subtraction in one zone:", (next_day - before) / timedelta(hours=1), "hours (DST ignored!)")
+
+gap = datetime(2026, 3, 8, 2, 30, tzinfo=ny)                # doesn't exist
+roundtrip = gap.astimezone(UTC).astimezone(ny)
+print("nonexistent 02:30 ->", roundtrip.strftime("%H:%M %Z"), "after a UTC round trip")
+
+first = datetime(2026, 11, 1, 1, 30, tzinfo=ny)             # happens twice
+second = first.replace(fold=1)
+print("fold=0:", first.strftime("%H:%M %Z"), first.utcoffset() / timedelta(hours=1), "| fold=1:", second.strftime("%H:%M %Z"), second.utcoffset() / timedelta(hours=1))
+
+start_utc = datetime(2026, 11, 1, 4, 0, tzinfo=UTC)
+for h in range(4):                                           # walk real hours through the fall-back
+    t = (start_utc + timedelta(hours=h)).astimezone(ny)
+    print("  UTC+%dh ->" % h, t.strftime("%H:%M %Z"), "fold", t.fold)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Schedule recurring events ("every day at 09:00 New York time") as local wall time
+      plus a zone name, and compute each occurrence's UTC instant when needed; that handles DST and future rule changes.
+      Log and store instants as UTC ISO 8601 strings (<code>dt.isoformat()</code>), which also sort correctly as text.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="regex">
+    <h2>Regular expressions in depth</h2>
+    <p>A <dfn>regular expression</dfn> is a small pattern language for matching text. Python's <code>re</code> module
+      compiles a pattern to a state machine and runs it with backtracking. Always write patterns as raw strings
+      (<code>r"\d+"</code>) so backslashes reach <code>re</code> unchanged.</p>
+    <table>
+      <thead><tr><th>Syntax</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>.</code> <code>\d</code> <code>\w</code> <code>\s</code> (and <code>\D \W \S</code>)</td><td>any char (not newline unless DOTALL), digit, word char, whitespace (and negations)</td></tr>
+        <tr><td><code>[a-z0-9_-]</code>, <code>[^"]</code></td><td>character class, negated class</td></tr>
+        <tr><td><code>*</code> <code>+</code> <code>?</code> <code>{2,4}</code></td><td>greedy quantifiers; add <code>?</code> for lazy: <code>*?</code>, <code>+?</code></td></tr>
+        <tr><td><code>^</code> <code>$</code> <code>\b</code> <code>\A</code> <code>\Z</code></td><td>anchors: line start/end (with MULTILINE), word boundary, string start/end</td></tr>
+        <tr><td><code>(...)</code> <code>(?:...)</code> <code>(?P&lt;name&gt;...)</code></td><td>capturing, non-capturing, named group</td></tr>
+        <tr><td><code>\1</code>, <code>(?P=name)</code></td><td>backreference to an earlier group</td></tr>
+        <tr><td><code>(?=...)</code> <code>(?!...)</code> <code>(?&lt;=...)</code> <code>(?&lt;!...)</code></td><td>lookahead, negative lookahead, lookbehind (fixed width), negative lookbehind</td></tr>
+        <tr><td><code>a|b</code></td><td>alternation (tried left to right)</td></tr>
+      </tbody>
+    </table>
+    <p>Functions: <code>re.match</code> (anchored at the start), <code>re.fullmatch</code> (whole string),
+      <code>re.search</code> (anywhere), <code>re.findall</code> (list of strings or group tuples),
+      <code>re.finditer</code> (match objects, lazily), <code>re.sub</code> (replace; the replacement can be a
+      function), <code>re.split</code>. Flags: <code>re.IGNORECASE</code>, <code>re.MULTILINE</code>,
+      <code>re.DOTALL</code>, <code>re.VERBOSE</code>, <code>re.ASCII</code>. <code>re.compile</code> builds a
+      reusable pattern object; the module also caches recently used patterns, but compiling makes intent and reuse
+      explicit.</p>
+    <div class="runnable" data-title="Interactive regex tester: edit PATTERN, FLAGS, and TEXT">
+<textarea>
+import re
+
+PATTERN = r"(?P<user>[\w.+-]+)@(?P<domain>[\w-]+(?:\.[\w-]+)+)"
+FLAGS = re.IGNORECASE
+TEXT = """Contact ada.lovelace@Example.org or grace+lists@navy.mil.
+Not an address: @nobody, bob@localhost, carol@x.io."""
+
+rx = re.compile(PATTERN, FLAGS)
+print(f"pattern: {rx.pattern!r}  groups: {rx.groups}  names: {list(rx.groupindex)}\n")
+for n, m in enumerate(rx.finditer(TEXT), 1):
+    print(f"match {n}: {m.group(0)!r} at {m.span()}")
+    for name, value in m.groupdict().items():
+        print(f"    {name:<8} = {value!r}")
+if not rx.search(TEXT):
+    print("no matches")
+print("\nhighlighted:", rx.sub(lambda m: f"[{m.group(0)}]", TEXT))
+</textarea>
+    </div>
+    <h3>Readable patterns with <code>re.VERBOSE</code></h3>
+    <p>With <code>re.VERBOSE</code> (<code>re.X</code>), whitespace in the pattern is ignored and <code>#</code> starts a
+      comment, so a complex pattern can be laid out and documented like code. (Escape spaces you mean literally as
+      <code>\ </code> or use <code>[ ]</code>.)</p>
+    <div class="runnable" data-title="A documented log-line pattern">
+<textarea>
+import re
+
+LOG_LINE = re.compile(r"""
+    ^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})        # client IPv4 address
+    \s+-\s+(?P<user>\S+)\s+                 # identity (unused) and user
+    \[(?P<ts>[^\]]+)\]\s+                   # [01/Jul/2026:09:15:00 -0400]
+    "(?P<method>[A-Z]+)\s+(?P<path>\S+)\s+HTTP/[\d.]+"\s+
+    (?P<status>\d{3})\s+
+    (?P<size>\d+|-)$                        # bytes, or '-' when none
+""", re.VERBOSE)
+
+lines = [
+    '203.0.113.9 - alice [01/Jul/2026:09:15:00 -0400] "GET /docs/index.html HTTP/1.1" 200 5123',
+    '198.51.100.7 - - [01/Jul/2026:09:15:02 -0400] "POST /api/login HTTP/2" 401 -',
+    'garbage line',
+]
+for line in lines:
+    m = LOG_LINE.match(line)
+    print(m.groupdict() if m else f"no match: {line!r}")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Lookarounds, backreferences, and lazy quantifiers">
+<textarea>
+import re
+
+price_text = "Total: $1200, tax $96.50, discount -$50, ref 4000"
+print("dollar amounts:", re.findall(r"(?<=\$)\d+(?:\.\d\d)?", price_text))       # lookbehind: preceded by $
+print("numbers not after $:", re.findall(r"(?<![$\d.])\b\d+\b", price_text))
+
+password = "Secur3pass!"
+strong = re.compile(r"^(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8,}$")                 # lookaheads as AND conditions
+print("strong password?", bool(strong.match(password)), bool(strong.match("weakpass")))
+
+print("doubled words:", re.findall(r"\b(\w+)\s+\1\b", "this is is a test test of the the parser", re.I))
+
+html = '<b>bold</b> and <i>italic</i>'
+print("greedy:", re.findall(r"<.+>", html))     # one huge match
+print("lazy:  ", re.findall(r"<.+?>", html))    # each tag
+
+print(re.sub(r"(?P<y>\d{4})-(?P<m>\d\d)-(?P<d>\d\d)", r"\g<d>/\g<m>/\g<y>", "due 2026-07-01, paid 2026-07-15"))
+print(re.split(r"\s*[,;]\s*", "a, b;c ;  d"))
+</textarea>
+    </div>
+    <aside class="callout danger"><p><strong>Catastrophic backtracking</strong>: nested quantifiers like
+      <code>(a+)+$</code> or <code>(\w+\s?)+$</code> can take exponential time on inputs that almost match, freezing a
+      server (a "ReDoS"). Avoid nested repetition of overlapping patterns, anchor patterns, prefer specific classes
+      (<code>[^"]*</code>) over <code>.*</code>, limit input length, and remember that sometimes a parser
+      (<code>json</code>, <code>html.parser</code>, <code>urllib.parse</code>) is the right tool instead of a regex.
+      Since 3.11, <code>re</code> also supports atomic groups <code>(?&gt;...)</code> and possessive quantifiers
+      (<code>*+</code>, <code>++</code>) that forbid backtracking.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="argparse">
+    <h2><code>argparse</code>: command-line interfaces</h2>
+    <p><code>argparse</code> turns <code>sys.argv</code> into a validated namespace and generates <code>--help</code>
+      and error messages for free. The essentials: positional arguments, options with <code>type</code>,
+      <code>default</code>, <code>choices</code>, <code>nargs</code>, and <code>action</code>
+      (<code>"store_true"</code>, <code>"count"</code>, <code>"append"</code>); mutually exclusive groups; and
+      subcommands with <code>add_subparsers</code>, which is how tools like <code>git</code> and <code>pixi</code> are
+      structured.</p>
+    <div class="runnable" data-title="A CLI with subcommands (parse_args takes a list, so it runs here)">
+<textarea>
+import argparse
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="logtool", description="Analyze web server logs.",
+                                     suggest_on_error=True)          # 3.14: "did you mean ...?"
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="repeat for more detail")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    stats = sub.add_parser("stats", help="summarize a log file")
+    stats.add_argument("path", help="log file to read")
+    stats.add_argument("--tz", default="UTC", help="IANA zone for display (default: %(default)s)")
+    stats.add_argument("--top", type=int, default=5, metavar="N")
+    stats.add_argument("--status", type=int, action="append", help="filter by status (repeatable)")
+
+    grep = sub.add_parser("grep", help="print matching lines")
+    grep.add_argument("pattern")
+    group = grep.add_mutually_exclusive_group()
+    group.add_argument("--count", action="store_true")
+    group.add_argument("--format", choices=["text", "json"], default="text")
+    return parser
+
+parser = build_parser()
+print(parser.parse_args(["-vv", "stats", "access.log", "--tz", "Europe/Oslo", "--status", "404", "--status", "500"]))
+print(parser.parse_args(["grep", "GET", "--format", "json"]))
+try:
+    parser.parse_args(["stat", "access.log"])          # typo in the subcommand
+except SystemExit as e:
+    print("exit code:", e.code, "(the error and suggestion were printed to stderr)")
+</textarea>
+    </div>
+    <aside class="callout py314"><p>3.14 brings two argparse improvements: help and error output are <strong>colored</strong>
+      by default when the terminal supports it (<code>ArgumentParser(color=False)</code> turns it off; the usual
+      <code>NO_COLOR</code>/<code>PYTHON_COLORS</code> environment variables are respected), and
+      <code>suggest_on_error=True</code> makes mistyped subcommands and choices produce "maybe you meant" suggestions.</p></aside>
+    <aside class="callout pro"><p>Structure CLIs as <code>def main(argv: list[str] | None = None) -&gt; int</code> that calls
+      <code>parser.parse_args(argv)</code> and returns an exit code. Tests can then call <code>main(["stats", "x.log"])</code>
+      directly. Expose it as a command in <code>pyproject.toml</code> (<code>[project.scripts]</code>) and run it with
+      <code>pixi run logtool ...</code> (<a href="m41-pixi-packaging.html">M41</a>). For larger CLIs, third-party
+      <code>typer</code> or <code>click</code> are popular alternatives.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="sqlite">
+    <h2><code>sqlite3</code>: a real SQL database in the standard library</h2>
+    <p>SQLite is an embedded SQL database: a single file (or <code>":memory:"</code>), no server, transactional, and
+      astonishingly robust. It's ideal for local tools, caches, tests, and prototypes (<a href="m44-data-databases.html">M44</a>
+      goes deeper). Three habits matter most:</p>
+    <ol>
+      <li><strong>Always use placeholders</strong> (<code>?</code> or <code>:name</code>), never f-strings, to pass
+        values. Formatting user input into SQL is how SQL injection happens.</li>
+      <li><strong>Use the connection as a context manager for transactions</strong>: <code>with conn:</code> commits on
+        success and rolls back on an exception. (It does <em>not</em> close the connection; use
+        <code>contextlib.closing</code> or call <code>close()</code>.)</li>
+      <li><strong>Set <code>row_factory = sqlite3.Row</code></strong> to access columns by name.</li>
+    </ol>
+    <div class="runnable" data-title="Schema, parameters, transactions, and Row">
+<textarea>
+import sqlite3
+from contextlib import closing
+
+with closing(sqlite3.connect(":memory:")) as conn:
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL, amount REAL CHECK (amount > 0))")
+    rows = [("ada", 120.0), ("grace", 75.5), ("ada", 30.0), ("linus", 210.0)]
+    with conn:                                                    # one transaction
+        conn.executemany("INSERT INTO orders (customer, amount) VALUES (?, ?)", rows)
+
+    try:
+        with conn:
+            conn.execute("INSERT INTO orders (customer, amount) VALUES (?, ?)", ("eve", 10))
+            conn.execute("INSERT INTO orders (customer, amount) VALUES (?, ?)", ("mallory", -5))   # violates CHECK
+    except sqlite3.IntegrityError as e:
+        print("rolled back:", e)
+
+    name = "ada' OR '1'='1"                                       # hostile input is just a value here
+    print("injection attempt rows:", conn.execute("SELECT COUNT(*) FROM orders WHERE customer = ?", (name,)).fetchone()[0])
+
+    query = "SELECT customer, COUNT(*) AS n, SUM(amount) AS total FROM orders GROUP BY customer ORDER BY total DESC LIMIT :k"
+    for row in conn.execute(query, {"k": 2}):
+        print(dict(row))
+    print("eve present?", conn.execute("SELECT 1 FROM orders WHERE customer = 'eve'").fetchone() is not None)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="ids-and-crypto">
+    <h2>IDs, randomness, and hashing</h2>
+    <h3><code>uuid</code>: <code>uuid4</code> vs 3.14's <code>uuid7</code></h3>
+    <p>A <dfn>UUID</dfn> is a 128-bit identifier you can generate anywhere without coordination. The two you should
+      know:</p>
+    <ul>
+      <li><code>uuid4()</code>: 122 random bits. Unpredictable and collision-safe, but <em>random order</em>: as database
+        primary keys they scatter inserts across the index, which hurts B-tree locality.</li>
+      <li><code>uuid7()</code> <span class="tag v314">3.14</span>: a 48-bit Unix timestamp in milliseconds followed by
+        random bits (RFC 9562). IDs generated later sort later, so they index like auto-increment integers while
+        remaining globally unique. They do reveal creation time, so don't use them where that's sensitive.</li>
+    </ul>
+    <p>Avoid <code>uuid1()</code> (embeds your MAC address). <code>uuid5(namespace, name)</code> gives a deterministic ID
+      for a name. 3.14 also adds <code>uuid6</code>, <code>uuid8</code>, and the <code>uuid.NIL</code>/<code>uuid.MAX</code>
+      constants.</p>
+    <div class="runnable" data-title="uuid4 vs uuid7 ordering">
+<textarea>
+import time
+import uuid
+
+v4 = []
+v7 = []
+for _ in range(5):
+    v4.append(uuid.uuid4())
+    v7.append(uuid.uuid7())          # 3.14+
+    time.sleep(0.002)
+
+print("uuid4 sorted == generation order?", sorted(v4) == v4, "(random order; True only by luck)")
+print("uuid7 sorted == generation order?", sorted(v7) == v7)
+for u in v7[:3]:
+    print(u, "version", u.version)
+print("deterministic:", uuid.uuid5(uuid.NAMESPACE_URL, "https://docs.python.org/"))
+print("NIL:", uuid.NIL)
+</textarea>
+    </div>
+    <h3><code>secrets</code> vs <code>random</code></h3>
+    <p><code>random</code> uses the Mersenne Twister: fast, reproducible with a seed, and <strong>predictable</strong>
+      (observe 624 outputs and you can predict the rest). Perfect for simulations, sampling, shuffling test data, and
+      games. For anything an attacker must not guess (passwords, session tokens, reset links, API keys), use
+      <code>secrets</code>, which draws from the operating system's cryptographically secure generator.</p>
+    <div class="runnable" data-title="The right randomness for the job">
+<textarea>
+import random
+import secrets
+import string
+
+rng = random.Random(42)                         # reproducible: same seed, same sequence
+print("simulation:", [rng.randint(1, 6) for _ in range(5)], "| sample:", rng.sample(range(100), 3))
+
+print("session token:", secrets.token_urlsafe(32))       # ~43 URL-safe chars, 256 bits
+print("hex key:", secrets.token_hex(16))
+alphabet = string.ascii_letters + string.digits
+print("password:", "".join(secrets.choice(alphabet) for _ in range(16)))
+print("constant-time compare:", secrets.compare_digest("abc123", "abc123"))
+</textarea>
+    </div>
+    <h3><code>hashlib</code> and <code>hmac</code></h3>
+    <table>
+      <thead><tr><th>Goal</th><th>Tool</th><th>Not</th></tr></thead>
+      <tbody>
+        <tr><td>Fingerprint a file or detect corruption</td><td><code>hashlib.sha256</code>, <code>hashlib.file_digest(f, "sha256")</code>, <code>blake2b</code></td><td><code>md5</code>/<code>sha1</code> for anything security-related (broken)</td></tr>
+        <tr><td>Verify a message came from someone holding a shared key</td><td><code>hmac.new(key, msg, "sha256")</code> + <code>hmac.compare_digest</code></td><td><code>sha256(key + msg)</code> (length-extension attacks)</td></tr>
+        <tr><td>Store passwords</td><td>A slow, salted KDF: <code>hashlib.scrypt</code>, <code>hashlib.pbkdf2_hmac</code> (or argon2 via a library)</td><td>Any fast hash, even SHA-256</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Hash, HMAC, and password hashing">
+<textarea>
+import hashlib
+import hmac
+import io
+import os
+
+data = b"release-2026.07.tar.gz contents"
+print("sha256:", hashlib.sha256(data).hexdigest()[:32], "...")
+print("file_digest:", hashlib.file_digest(io.BytesIO(data), "sha256").hexdigest()[:32], "...")   # same, streamed
+
+key = b"shared-webhook-secret"
+body = b'{"event": "push"}'
+signature = hmac.new(key, body, "sha256").hexdigest()
+received = signature                                     # what the sender put in a header
+print("webhook valid:", hmac.compare_digest(signature, received))
+
+salt = os.urandom(16)
+stored = hashlib.pbkdf2_hmac("sha256", b"correct horse", salt, 200_000)   # slow on purpose
+attempt = hashlib.pbkdf2_hmac("sha256", b"correct horse", salt, 200_000)
+print("password ok:", hmac.compare_digest(stored, attempt), "| stored bytes:", len(stored))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="files">
+    <h2>Files: <code>shutil</code>, <code>tempfile</code>, and <code>glob</code></h2>
+    <p><code>pathlib</code> (<a href="m09-files-io.html">M09</a>) handles paths; these modules handle the rest:</p>
+    <ul>
+      <li><code>shutil</code>: <code>copy2</code> (with metadata), <code>copytree</code>, <code>move</code>,
+        <code>rmtree</code> (careful!), <code>make_archive</code>/<code>unpack_archive</code> (3.14 adds
+        <code>zstdtar</code>), <code>which</code> (find an executable on PATH), <code>disk_usage</code>.
+        3.14 also adds <code>Path.copy()</code> and <code>Path.move()</code>.</li>
+      <li><code>tempfile</code>: <code>TemporaryDirectory()</code> and <code>NamedTemporaryFile()</code> create secure,
+        uniquely named temporary locations and delete them when the <code>with</code> block exits. Never build temp
+        paths by hand (<code>/tmp/myapp.txt</code>): it races with other processes and is a security hole.</li>
+      <li><code>glob.glob("**/*.py", recursive=True)</code> or <code>Path.rglob("*.py")</code>: find files by
+        pattern.</li>
+    </ul>
+    <div class="runnable" data-title="Build, archive, and clean up a workspace">
+<textarea>
+import glob
+import shutil
+import tempfile
+from pathlib import Path
+
+with tempfile.TemporaryDirectory(prefix="demo-") as tmp:
+    root = Path(tmp)
+    for name in ["src/app.py", "src/util/io.py", "docs/index.md", "README.md"]:
+        p = root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"# {name}\n")
+
+    print("glob **/*.py:", sorted(Path(p).relative_to(root).as_posix() for p in glob.glob(f"{tmp}/**/*.py", recursive=True)))
+    print("rglob *.md:  ", sorted(p.relative_to(root).as_posix() for p in root.rglob("*.md")))
+
+    shutil.copytree(root / "src", root / "backup" / "src")
+    archive = shutil.make_archive(str(root / "release"), "zip", root_dir=root / "src")
+    print("archive:", Path(archive).name, Path(archive).stat().st_size, "bytes")
+    shutil.rmtree(root / "backup")
+    print("left:", sorted(p.name for p in root.iterdir()))
+print("temp dir removed:", not Path(tmp).exists())
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="text-enum">
+    <h2><code>enum</code>, <code>textwrap</code>, and <code>string</code></h2>
+    <p><strong>Enums</strong> (<a href="m13-dataclasses.html">M13</a>) give names to a fixed set of values. Recap of the
+      kinds: <code>Enum</code> (opaque members), <code>IntEnum</code> and <code>StrEnum</code> (members <em>are</em>
+      ints/strs, handy for JSON and CLI choices), <code>Flag</code> (combinable bits with <code>|</code>),
+      <code>auto()</code> for values, and <code>@unique</code> to forbid aliases. Iterating an enum class, and
+      <code>Color["RED"]</code>, work thanks to its metaclass (<a href="m36-metaprogramming.html">M36</a>).</p>
+    <p><strong><code>textwrap</code></strong> formats prose: <code>dedent</code> (strip common indentation from
+      triple-quoted strings), <code>fill</code>/<code>wrap</code>, <code>shorten</code> (truncate at a word boundary
+      with a placeholder), and <code>indent</code>. <strong><code>string</code></strong> offers constants
+      (<code>ascii_letters</code>, <code>digits</code>, <code>punctuation</code>) and <code>string.Template</code>
+      (<code>$name</code> substitution, safe for user-supplied templates because it can't evaluate expressions).</p>
+    <div class="runnable" data-title="Enums and text formatting together">
+<textarea>
+import string
+import textwrap
+from enum import Flag, StrEnum, auto
+
+class Level(StrEnum):
+    DEBUG = auto()        # value "debug"
+    INFO = auto()
+    ERROR = auto()
+
+class Perm(Flag):
+    READ = auto()
+    WRITE = auto()
+    EXEC = auto()
+
+print([lvl for lvl in Level], Level("info") is Level.INFO, Level.ERROR == "error")
+rw = Perm.READ | Perm.WRITE
+print(rw, Perm.WRITE in rw, Perm.EXEC in rw, list(rw))
+
+doc = """
+    The quick brown fox jumps over the lazy dog. Pack my box with five dozen
+    liquor jugs. How vexingly quick daft zebras jump!
+"""
+body = textwrap.dedent(doc).strip()
+print(textwrap.fill(body, width=40))
+print(textwrap.shorten(body, width=50, placeholder=" [...]"))
+print(textwrap.indent("line one\nline two", "> "))
+
+t = string.Template("Hello $name, your order $$${amount} ships $when.")
+print(t.substitute(name="Ada", amount="42.00", when="today"))
+print(t.safe_substitute(name="Ada"))      # leaves unknown placeholders alone
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="logging">
+    <h2><code>logging</code>, and why Part 6 uses structlog</h2>
+    <p>Beginner code uses <code>print()</code>; production code uses <dfn>logging</dfn>, because logs need levels
+      (debug noise off in production), timestamps, the source module, routing (console, file, log aggregator), and
+      configuration without code changes. The standard <code>logging</code> module provides all of that: loggers named
+      by module (<code>logging.getLogger(__name__)</code>), levels, handlers, and formatters.</p>
+    <div class="runnable" data-title="Standard logging in five lines">
+<textarea>
+import logging
+import sys
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True,
+                    format="%(asctime)s %(levelname)-5s %(name)s: %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("logtool.parser")
+
+log.debug("not shown at INFO level")
+log.info("parsed %d lines from %s", 1200, "access.log")      # lazy %-formatting: only if emitted
+try:
+    1 / 0
+except ZeroDivisionError:
+    log.exception("failed to compute rate")                  # includes the traceback
+</textarea>
+    </div>
+    <p>The weakness of classic logging is that messages are <em>text</em>: to answer "how many 500s per path in the last
+      hour?", a log aggregator must parse human sentences. <dfn>Structured logging</dfn> emits events as key-value data
+      (usually JSON lines): <code>{"event": "request", "path": "/api", "status": 500, "ms": 31}</code>.
+      <a href="https://www.structlog.org/">structlog</a> makes that ergonomic and is the course's standard from Part 6
+      on (<a href="m42-tooling.html">M42</a>):</p>
+    <div class="runnable" data-local="structlog isn't available in the browser. In a Pixi workspace: pixi add structlog, then pixi run python log_demo.py" data-title="Preview: the same events with structlog">
+<textarea>
+import structlog
+
+structlog.configure(processors=[
+    structlog.processors.add_log_level,
+    structlog.processors.TimeStamper(fmt="iso", utc=True),
+    structlog.processors.JSONRenderer(),
+])
+log = structlog.get_logger().bind(service="logtool")
+log.info("parsed", lines=1200, path="access.log")
+log.warning("slow_request", path="/api/search", ms=812)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="templatelib">
+    <h2>Recap: t-strings and <code>string.templatelib</code></h2>
+    <aside class="callout py314"><p>3.14's template strings (<a href="https://peps.python.org/pep-0750/">PEP 750</a>)
+      look like f-strings with a <code>t</code> prefix, but instead of producing a <code>str</code> they produce a
+      <code>string.templatelib.Template</code>: the literal parts and the interpolated values, kept <em>separate</em>.
+      A processing function decides how to combine them, which is exactly what you need for escaping HTML, quoting SQL
+      parameters, or building structured log events (<a href="m03-strings.html">M03</a> introduced them).</p></aside>
+    <div class="runnable" data-title="A t-string processor that builds safe SQL">
+<textarea>
+from string.templatelib import Interpolation, Template
+
+def sql(template: Template) -> tuple[str, list]:
+    """Turn a t-string into a parameterized query: values never touch the SQL text."""
+    parts, params = [], []
+    for item in template:                      # iterating yields str and Interpolation, in order
+        if isinstance(item, Interpolation):
+            parts.append("?")
+            params.append(item.value)
+        else:
+            parts.append(item)
+    return "".join(parts), params
+
+customer = "ada' OR '1'='1"
+limit = 5
+query, params = sql(t"SELECT * FROM orders WHERE customer = {customer} LIMIT {limit}")
+print(query)
+print(params)
+
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE orders (customer TEXT)")
+conn.execute("INSERT INTO orders VALUES ('ada')")
+print(conn.execute(query, params).fetchall())      # [] : the injection attempt is just a string
+conn.close()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m40-e1" data-title="Top words with Counter">
+      <div class="exercise-prompt">
+        <p>Write <code>top_words(text, n, stopwords=())</code> returning the <code>n</code> most common words as
+          <code>(word, count)</code> pairs. Words are runs of letters and apostrophes (use <code>re.findall</code> with
+          <code>r"[a-z']+"</code> on the lowercased text), stopwords are excluded, and ties are broken
+          alphabetically.</p>
+      </div>
+<textarea class="starter">
+import re
+from collections import Counter
+
+def top_words(text, n, stopwords=()):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+TEXT = "The cat and the hat. The cat sat! A hat, a mat, a cat's hat."
+
+def test_basic():
+    got = top_words(TEXT, 3)
+    assert got == [("a", 3), ("hat", 3), ("the", 3)], f"a, hat, and the appear 3 times each (ties alphabetical), got {got}"
+
+def test_stopwords():
+    assert top_words(TEXT, 3, stopwords={"the", "a", "and"}) == [("hat", 3), ("cat", 2), ("cat's", 1)], f"got {top_words(TEXT, 3, stopwords={'the', 'a', 'and'})}"
+
+def test_n_larger_than_vocab():
+    assert top_words("x y x", 10) == [("x", 2), ("y", 1)], "return all words when n exceeds the vocabulary"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>Counter.most_common</code> breaks ties by first appearance,
+        not alphabetically. Sort the items yourself with <code>key=lambda kv: (-kv[1], kv[0])</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+from collections import Counter
+
+def top_words(text, n, stopwords=()):
+    stop = set(stopwords)
+    counts = Counter(w for w in re.findall(r"[a-z']+", text.lower()) if w not in stop)
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m40-e2" data-title="Sliding windows and sessions with itertools">
+      <div class="exercise-prompt">
+        <p>Write two lazy helpers. <code>windows(iterable, n)</code> yields overlapping tuples of length
+          <code>n</code> (use a <code>deque(maxlen=n)</code>; it must work on infinite iterators). <code>sessions(times,
+          gap)</code> takes sorted timestamps (numbers) and yields lists of timestamps where consecutive items are at
+          most <code>gap</code> apart (a new session starts after a longer pause).</p>
+      </div>
+<textarea class="starter">
+from collections import deque
+from itertools import count, islice
+
+def windows(iterable, n):
+    ...
+
+def sessions(times, gap):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from itertools import count, islice
+
+def test_windows():
+    assert list(windows("abcde", 3)) == [("a", "b", "c"), ("b", "c", "d"), ("c", "d", "e")], "overlapping windows"
+    assert list(windows([1, 2], 3)) == [], "too short gives nothing"
+
+def test_windows_lazy():
+    assert list(islice(windows(count(), 2), 3)) == [(0, 1), (1, 2), (2, 3)], "must work on infinite iterators"
+
+def test_sessions():
+    assert list(sessions([1, 2, 3, 10, 11, 30], 5)) == [[1, 2, 3], [10, 11], [30]], "split on gaps > 5"
+    assert list(sessions([], 5)) == [], "no timestamps, no sessions"
+    assert list(sessions([0, 5, 10], 5)) == [[0, 5, 10]], "a gap equal to the limit continues the session"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For <code>windows</code>, append each item to the deque and yield
+        <code>tuple(window)</code> once <code>len(window) == n</code>. For <code>sessions</code>, keep a current list
+        and the previous timestamp.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import deque
+from itertools import count, islice
+
+def windows(iterable, n):
+    window = deque(maxlen=n)
+    for item in iterable:
+        window.append(item)
+        if len(window) == n:
+            yield tuple(window)
+
+def sessions(times, gap):
+    current = []
+    for t in times:
+        if current and t - current[-1] &gt; gap:
+            yield current
+            current = []
+        current.append(t)
+    if current:
+        yield current</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m40-e3" data-title="Parse log lines with named groups">
+      <div class="exercise-prompt">
+        <p>Write <code>parse_line(line)</code> for lines like
+          <code>2026-07-01T09:15:00-04:00 WARN [auth] login failed user=bob ip=10.0.0.7</code>. Return a dict with
+          keys <code>ts</code>, <code>level</code>, <code>component</code>, <code>message</code> (the free text before the
+          key=value pairs, stripped), and <code>fields</code> (a dict of the trailing <code>key=value</code> pairs), or
+          <code>None</code> if the line doesn't match. Levels are <code>DEBUG</code>, <code>INFO</code>,
+          <code>WARN</code>, or <code>ERROR</code>. Use a compiled pattern with named groups (<code>re.VERBOSE</code>
+          recommended).</p>
+      </div>
+<textarea class="starter">
+import re
+
+LINE = re.compile(r"""
+    ...
+""", re.VERBOSE)
+
+def parse_line(line):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_full_line():
+    got = parse_line("2026-07-01T09:15:00-04:00 WARN [auth] login failed user=bob ip=10.0.0.7")
+    assert got == {"ts": "2026-07-01T09:15:00-04:00", "level": "WARN", "component": "auth",
+                   "message": "login failed", "fields": {"user": "bob", "ip": "10.0.0.7"}}, f"got {got}"
+
+def test_no_fields():
+    got = parse_line("2026-07-01T13:00:00+00:00 INFO [web] server started")
+    assert got is not None and got["fields"] == {} and got["message"] == "server started", f"got {got}"
+
+def test_utc_z_suffix():
+    got = parse_line("2026-07-01T13:00:00Z ERROR [db] timeout ms=5000")
+    assert got is not None and got["ts"] == "2026-07-01T13:00:00Z" and got["fields"] == {"ms": "5000"}, f"got {got}"
+
+def test_rejects_bad_lines():
+    assert parse_line("hello world") is None, "non-log text"
+    assert parse_line("2026-07-01T13:00:00Z TRACE [x] nope") is None, "unknown level"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Capture the whole tail after <code>[component]</code> as one group,
+        then split it: <code>re.findall(r"(\w+)=(\S+)", tail)</code> for fields, and
+        <code>re.sub(r"\s*\w+=\S+", "", tail).strip()</code> for the message. A timestamp pattern:
+        <code>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:Z|[+-]\d\d:\d\d)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+LINE = re.compile(r"""
+    ^(?P&lt;ts&gt;\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:Z|[+-]\d\d:\d\d))
+    \s+(?P&lt;level&gt;DEBUG|INFO|WARN|ERROR)
+    \s+\[(?P&lt;component&gt;[\w.-]+)\]
+    \s*(?P&lt;tail&gt;.*)$
+""", re.VERBOSE)
+
+FIELD = re.compile(r"(\w+)=(\S+)")
+
+def parse_line(line):
+    m = LINE.match(line)
+    if m is None:
+        return None
+    tail = m["tail"]
+    return {
+        "ts": m["ts"],
+        "level": m["level"],
+        "component": m["component"],
+        "message": FIELD.sub("", tail).strip(),
+        "fields": dict(FIELD.findall(tail)),
+    }</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m40-e4" data-title="Time zones and DST">
+      <div class="exercise-prompt">
+        <p>Write <code>to_zone(iso_string, zone)</code> that parses an ISO 8601 timestamp <em>with an offset</em> and
+          returns an aware <code>datetime</code> in the IANA zone <code>zone</code> (raise <code>ValueError</code> for
+          naive input). Then write <code>real_hours(start, end)</code> that returns the actual elapsed hours between two
+          aware datetimes as a float, correct across DST changes even when both are in the same zone.</p>
+      </div>
+<textarea class="starter">
+try:
+    import tzdata
+except ImportError:
+    pass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+def to_zone(iso_string, zone):
+    ...
+
+def real_hours(start, end):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+def test_to_zone():
+    d = to_zone("2026-07-01T12:00:00+00:00", "Europe/Oslo")
+    assert d.hour == 14 and d.utcoffset() == timedelta(hours=2), f"12:00 UTC is 14:00 in Oslo in summer, got {d}"
+    assert str(d.tzinfo) == "Europe/Oslo", "result must carry the requested zone"
+
+def test_naive_rejected():
+    try:
+        to_zone("2026-07-01T12:00:00", "UTC")
+    except ValueError:
+        return
+    raise AssertionError("naive timestamps should raise ValueError")
+
+def test_dst_day_is_23_hours():
+    ny = ZoneInfo("America/New_York")
+    start = datetime(2026, 3, 8, 0, 0, tzinfo=ny)
+    end = start + timedelta(days=1)
+    assert real_hours(start, end) == 23.0, f"spring-forward day has 23 real hours, got {real_hours(start, end)}"
+
+def test_fall_back_day_is_25_hours():
+    ny = ZoneInfo("America/New_York")
+    start = datetime(2026, 11, 1, 0, 0, tzinfo=ny)
+    assert real_hours(start, start + timedelta(days=1)) == 25.0, "fall-back day has 25 real hours"
+
+def test_mixed_zones():
+    a = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    b = datetime(2026, 1, 1, 12, 0, tzinfo=ZoneInfo("Asia/Tokyo"))
+    assert real_hours(b, a) == 9.0, "noon in Tokyo is 9 hours before noon UTC"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>datetime.fromisoformat</code> parses offsets; check
+        <code>dt.tzinfo is None</code>. For real elapsed time, convert both to UTC before subtracting, then divide by
+        <code>timedelta(hours=1)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">try:
+    import tzdata
+except ImportError:
+    pass
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+def to_zone(iso_string, zone):
+    dt = datetime.fromisoformat(iso_string)
+    if dt.tzinfo is None:
+        raise ValueError("timestamp must include an offset")
+    return dt.astimezone(ZoneInfo(zone))
+
+def real_hours(start, end):
+    return (end.astimezone(UTC) - start.astimezone(UTC)) / timedelta(hours=1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m40-e5" data-title="Query with sqlite3 safely">
+      <div class="exercise-prompt">
+        <p>Write <code>top_customers(orders, k, min_amount=0)</code>. <code>orders</code> is a list of
+          <code>(customer, amount)</code> tuples. Load them into an in-memory SQLite table with
+          <code>executemany</code>, then use <strong>one parameterized query</strong> to return the <code>k</code>
+          customers with the highest total among orders with <code>amount &gt;= min_amount</code>, as a list of
+          <code>(customer, total)</code> sorted by total descending, then name. Close the connection before returning.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+from contextlib import closing
+
+def top_customers(orders, k, min_amount=0):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+ORDERS = [("ada", 50), ("bob", 20), ("ada", 30), ("cy", 80), ("bob", 70), ("dee", 5)]
+
+def test_top_two():
+    assert top_customers(ORDERS, 2) == [("bob", 90), ("ada", 80)], f"got {top_customers(ORDERS, 2)}"
+
+def test_tie_breaks_by_name():
+    assert top_customers(ORDERS, 3) == [("bob", 90), ("ada", 80), ("cy", 80)], "ties sorted by name"
+
+def test_min_amount_filter():
+    got = top_customers(ORDERS, 5, min_amount=30)
+    assert got == [("ada", 80), ("cy", 80), ("bob", 70)], f"filter orders before summing, ties by name; got {got}"
+
+def test_injection_safe():
+    evil = [("x'); DROP TABLE orders; --", 1)]
+    assert top_customers(evil, 1) == [("x'); DROP TABLE orders; --", 1)], "names are data, not SQL"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>SELECT customer, SUM(amount) FROM orders WHERE amount &gt;= ?
+        GROUP BY customer ORDER BY SUM(amount) DESC, customer LIMIT ?</code> with parameters
+        <code>(min_amount, k)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+from contextlib import closing
+
+def top_customers(orders, k, min_amount=0):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE orders (customer TEXT, amount REAL)")
+        with conn:
+            conn.executemany("INSERT INTO orders VALUES (?, ?)", orders)
+        rows = conn.execute(
+            "SELECT customer, SUM(amount) AS total FROM orders WHERE amount &gt;= ? "
+            "GROUP BY customer ORDER BY total DESC, customer LIMIT ?",
+            (min_amount, k),
+        ).fetchall()
+    return [(name, total) for name, total in rows]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a log-parsing CLI</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">logtool: regex, time zones, and a real CLI</span></div>
+      <div class="widget-body">
+        <p>Build <code>logtool</code>, a command-line tool that reads application logs from servers in several time zones
+          (lines like Exercise 3's, with mixed offsets), normalizes every timestamp to UTC, and answers operational
+          questions in the user's own time zone.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init logtool
+cd logtool
+pixi add python=3.14 pytest
+pixi run python -m logtool stats sample.log --tz America/New_York --top 5
+pixi run python -m logtool grep sample.log --level ERROR --since 2026-07-01T08:00 --tz Europe/Oslo --format json
+pixi run python -m logtool hist sample.log --bucket 15m --tz Asia/Kolkata
+pixi run python -m pytest -q</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li>A compiled, <code>re.VERBOSE</code> pattern with named groups parses each line; unparseable lines are
+            counted and reported with their line numbers, never crash the tool.</li>
+          <li>Timestamps with any offset (or <code>Z</code>) become aware UTC datetimes; output is rendered in
+            <code>--tz</code> (an IANA name validated with <code>zoneinfo.available_timezones()</code> or by catching
+            <code>ZoneInfoNotFoundError</code>). <code>--since</code>/<code>--until</code> given as local wall times are
+            interpreted in <code>--tz</code>.</li>
+          <li><code>stats</code>: counts per level and component (<code>Counter</code>), top messages, busiest hour
+            (local), and error rate.</li>
+          <li><code>grep</code>: filters by level, component, time range, and a regex on the message; text or JSON
+            Lines output.</li>
+          <li><code>hist</code>: a text histogram per time bucket (<code>itertools.groupby</code> on sorted buckets).</li>
+          <li><code>main(argv=None) -&gt; int</code> with <code>argparse</code> subcommands,
+            <code>suggest_on_error=True</code>, and exit codes 0 (ok), 1 (no matches), 2 (usage or input errors).</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m40-mini">
+          <li>Lines with <code>-04:00</code>, <code>+05:30</code>, and <code>Z</code> offsets sort correctly in one timeline</li>
+          <li>A <code>--since</code> during a DST transition in <code>--tz</code> is handled (test the fold and the gap)</li>
+          <li>Unparseable lines are reported with line numbers and don't change the exit code unless all lines fail</li>
+          <li><code>stats</code> output in two different zones shows the same counts but different busiest-hour labels</li>
+          <li>At least 15 pytest tests, using <code>tmp_path</code> for sample files, pass with <code>pixi run python -m pytest</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Stream gzip- or zstd-compressed logs transparently (<code>gzip.open</code>, 3.14's <code>compression.zstd</code>).</li>
+          <li>Store parsed events in SQLite and answer <code>stats</code> with SQL.</li>
+          <li>Emit the tool's own diagnostics with <code>logging</code>, then port them to structlog after <a href="m42-tooling.html">M42</a>.</li>
+          <li>Profile it on a million lines (<a href="m39-performance.html">M39</a>) and make it fast.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m40-quiz">
+<script type="application/json">
+{"title": "Standard library quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "You need a FIFO queue with fast removal from the front. Which type?", "options": ["<code>list</code> with <code>pop(0)</code>", "<code>collections.deque</code>", "<code>set</code>", "<code>OrderedDict</code>"], "answer": 1, "explanation": "<p><code>deque.popleft()</code> is O(1); <code>list.pop(0)</code> shifts every element (O(n)).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from collections import Counter\nc = Counter('mississippi')\nprint(c.most_common(2))", "answer": "[('i', 4), ('s', 4)]", "explanation": "<p>i and s both appear 4 times; ties keep first-seen order, and i appears before s.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from itertools import groupby\nprint([k for k, _ in groupby('aabbbacc')])", "answer": "['a', 'b', 'a', 'c']", "explanation": "<p><code>groupby</code> groups consecutive equal items only, so 'a' appears twice.</p>"},
+  {"type": "single", "prompt": "What is a naive datetime?", "options": ["One in UTC", "One whose <code>tzinfo</code> is None", "One without seconds", "One created with <code>date()</code>"], "answer": 1, "explanation": "<p>Naive datetimes have no zone and don't denote a specific instant. Comparing naive and aware raises TypeError.</p>"},
+  {"type": "single", "prompt": "<code>start</code> is midnight before the spring-forward day in a ZoneInfo zone. How many real hours separate <code>start</code> and <code>start + timedelta(days=1)</code>?", "options": ["24", "23", "25", "It raises"], "answer": 1, "explanation": "<p>Aware arithmetic in a ZoneInfo zone is wall-clock arithmetic: same wall time the next day, which is only 23 real hours later. Convert to UTC to measure elapsed time.</p>"},
+  {"type": "text", "prompt": "Which datetime attribute distinguishes the two occurrences of an ambiguous local time during the fall-back hour?", "answer": ["fold"], "explanation": "<p><code>fold=0</code> is the first occurrence (before the change), <code>fold=1</code> the second.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import re\nm = re.search(r'(?P<y>\\d{4})-(?P<m>\\d\\d)', 'due 2026-07')\nprint(m['m'], m.span())", "answer": "07 (4, 11)", "explanation": "<p>Named groups are accessible by name; the match covers indexes 4 to 11 of the string.</p>"},
+  {"type": "single", "prompt": "What does <code>re.VERBOSE</code> do?", "options": ["Prints debugging output", "Ignores whitespace and allows # comments inside the pattern", "Makes . match newlines", "Enables Unicode"], "answer": 1, "explanation": "<p>It lets you lay out and comment complex patterns. Escape literal spaces.</p>"},
+  {"type": "multi", "prompt": "Which are lookaround assertions (match a position without consuming text)?", "options": ["<code>(?=...)</code>", "<code>(?:...)</code>", "<code>(?&lt;!...)</code>", "<code>(?P&lt;n&gt;...)</code>", "<code>(?!...)</code>"], "answer": [0, 2, 4], "explanation": "<p>Lookahead, negative lookbehind, and negative lookahead. <code>(?:...)</code> is a non-capturing group; <code>(?P&lt;n&gt;...)</code> is a named group.</p>"},
+  {"type": "single", "prompt": "Which 3.14 <code>ArgumentParser</code> option makes typos like <code>stat</code> suggest <code>stats</code>?", "options": ["<code>color=True</code>", "<code>suggest_on_error=True</code>", "<code>allow_abbrev=True</code>", "<code>exit_on_error=False</code>"], "answer": 1, "explanation": "<p><code>suggest_on_error</code> (new in 3.14, off by default) adds \"maybe you meant\" hints. 3.14 also colors help output by default.</p>"},
+  {"type": "single", "prompt": "Why use <code>?</code> placeholders in <code>sqlite3</code> queries?", "options": ["They're faster to type", "Values are passed separately from the SQL text, preventing SQL injection", "SQLite requires them", "They enable transactions"], "answer": 1, "explanation": "<p>Placeholders bind values as data. Formatting values into the SQL string lets input change the query.</p>"},
+  {"type": "single", "prompt": "Why might you choose <code>uuid7()</code> over <code>uuid4()</code> for primary keys?", "options": ["It's more random", "IDs are time-ordered, so new rows append to the index", "It hides the creation time", "It's shorter"], "answer": 1, "explanation": "<p>UUIDv7 starts with a millisecond timestamp, so it sorts by creation time and indexes well. It reveals creation time, which uuid4 doesn't.</p>"},
+  {"type": "multi", "prompt": "Which tasks require <code>secrets</code> (or another CSPRNG) rather than <code>random</code>?", "options": ["Password-reset tokens", "Shuffling a deck in a simulation", "API keys", "Sampling test data reproducibly", "Session IDs"], "answer": [0, 2, 4], "explanation": "<p>Anything an attacker must not predict needs a cryptographically secure generator. Simulations want random's speed and seeding.</p>"},
+  {"type": "single", "prompt": "How should passwords be stored?", "options": ["SHA-256 of the password", "Encrypted with AES", "A slow salted KDF such as scrypt or PBKDF2 (or argon2)", "Base64-encoded"], "answer": 2, "explanation": "<p>Fast hashes allow billions of guesses per second. Slow, salted key-derivation functions make offline guessing expensive.</p>"},
+  {"type": "single", "prompt": "What does iterating a <code>string.templatelib.Template</code> (from a t-string) yield?", "options": ["Characters", "The final formatted string", "Literal <code>str</code> parts and <code>Interpolation</code> objects, in order", "Only the interpolated values"], "answer": 2, "explanation": "<p>Keeping literals and values separate lets a processor escape or parameterize values safely.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li><code>deque</code>, <code>Counter</code>, <code>defaultdict</code>, <code>ChainMap</code>, and <code>namedtuple</code> replace common hand-written patterns.</li>
+      <li><code>itertools</code> is lazy: <code>pairwise</code>, <code>batched</code>, <code>accumulate</code>, <code>chain</code>, and <code>groupby</code> (consecutive keys) cover most needs.</li>
+      <li>Use aware datetimes, store UTC, display local; ZoneInfo arithmetic is wall-clock, so convert to UTC for elapsed time; mind gaps and folds.</li>
+      <li>Compile regexes, use named groups and <code>re.VERBOSE</code>, use lookarounds for conditions, and beware catastrophic backtracking.</li>
+      <li><code>argparse</code> subcommands with <code>main(argv) -&gt; int</code>; 3.14 adds color and <code>suggest_on_error</code>.</li>
+      <li><code>sqlite3</code>: placeholders always, <code>with conn:</code> for transactions, <code>sqlite3.Row</code> for names.</li>
+      <li><code>uuid7</code> for sortable IDs, <code>secrets</code> for tokens, HMAC for message authentication, slow KDFs for passwords.</li>
+      <li><code>tempfile</code>, <code>shutil</code>, <code>glob</code>, <code>enum</code>, <code>textwrap</code>, <code>logging</code>, and t-strings round out the toolkit.</li>
+    </ul>
+    <div class="flashcards" data-title="Standard library">
+<script type="application/json">
+[
+  {"front": "<code>deque(maxlen=n)</code>", "back": "A ring buffer: appending beyond n drops items from the other end. O(1) at both ends."},
+  {"front": "<code>ChainMap(a, b, c)</code>", "back": "A view that looks up keys in a, then b, then c, without copying: layered configuration."},
+  {"front": "<code>itertools.groupby</code> gotcha", "back": "Groups consecutive equal keys only; sort first to group globally."},
+  {"front": "Naive vs aware datetime", "back": "Naive: no tzinfo, ambiguous. Aware: has tzinfo, an exact instant."},
+  {"front": "ZoneInfo arithmetic", "back": "Wall-clock: +1 day keeps the local time even across DST. Convert to UTC for elapsed time."},
+  {"front": "<code>fold</code>", "back": "0 or 1: selects the first or second occurrence of an ambiguous local time."},
+  {"front": "Named group syntax", "back": "<code>(?P&lt;name&gt;...)</code>, read with <code>m['name']</code> or <code>m.groupdict()</code>; backreference <code>(?P=name)</code>."},
+  {"front": "Lookarounds", "back": "<code>(?=)</code> <code>(?!)</code> <code>(?&lt;=)</code> <code>(?&lt;!)</code>: assert what follows/precedes without consuming it."},
+  {"front": "sqlite3 transaction idiom", "back": "<code>with conn:</code> commits on success, rolls back on exception (doesn't close)."},
+  {"front": "uuid4 vs uuid7", "back": "uuid4: random. uuid7 (3.14): millisecond timestamp prefix, sortable by creation time."},
+  {"front": "secrets vs random", "back": "secrets: unpredictable, for security. random: fast, seedable, predictable, for simulations."},
+  {"front": "HMAC vs hash", "back": "HMAC uses a secret key to authenticate a message; compare with <code>hmac.compare_digest</code>."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/collections.html"><code>collections</code></a> and <a href="https://docs.python.org/3/library/itertools.html#itertools-recipes">itertools recipes</a></li>
+      <li><a href="https://docs.python.org/3/library/zoneinfo.html"><code>zoneinfo</code></a> and <a href="https://docs.python.org/3/library/datetime.html#aware-and-naive-objects">aware and naive objects</a></li>
+      <li><a href="https://docs.python.org/3/howto/regex.html">Regular Expression HOWTO</a></li>
+      <li><a href="https://docs.python.org/3/library/argparse.html"><code>argparse</code></a>, <a href="https://docs.python.org/3/library/sqlite3.html"><code>sqlite3</code></a>, <a href="https://docs.python.org/3/library/uuid.html"><code>uuid</code></a>, <a href="https://docs.python.org/3/library/secrets.html"><code>secrets</code></a></li>
+      <li><a href="https://docs.python.org/3/library/string.templatelib.html"><code>string.templatelib</code></a></li>
+      <li>Next: <a href="../projects/p05-async-crawler.html">Project 5: Async Web Crawler</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

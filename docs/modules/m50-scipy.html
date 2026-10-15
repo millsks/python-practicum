@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M50 · SciPy for Science &amp; Engineering · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m50">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 50</p>
+    <h1>SciPy for Science &amp; Engineering</h1>
+    <p class="lede">NumPy gives you arrays; SciPy gives you decades of battle-tested numerical algorithms built on them:
+      optimizers, equation solvers, integrators, filters, spatial indexes, and statistics. Knowing which tool to reach for,
+      and how to check its answer, turns a week of hand-rolled numerics into ten lines.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m48-numpy.html">M48</a>, <a href="m49-linear-algebra.html">M49</a></span></div>
+    <ul class="objectives">
+      <li>Navigate the SciPy subpackages and pick the right one for a problem</li>
+      <li>Minimize functions, find roots with <code>brentq</code>, fit models with <code>curve_fit</code>, and solve linear programs with <code>linprog</code></li>
+      <li>Integrate functions with <code>quad</code> and simulate differential equations with <code>solve_ivp</code></li>
+      <li>Interpolate data with splines, filter noisy signals, find peaks, and read a frequency spectrum with <code>scipy.fft</code></li>
+      <li>Answer nearest-neighbor and geometry questions with <code>KDTree</code>, distance matrices, and <code>ConvexHull</code></li>
+      <li>Recognize floating-point error, ill-conditioning, and tolerance settings, and verify numerical results</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="ecosystem">
+    <h2>The SciPy map</h2>
+    <p>SciPy is a collection of subpackages, each wrapping well-studied algorithms (many in Fortran and C libraries such as
+      LAPACK, QUADPACK, and HiGHS). You import the subpackage you need: <code>from scipy import optimize</code>. You
+      already used <code>scipy.linalg</code> and <code>scipy.sparse</code> in <a href="m49-linear-algebra.html">M49</a>.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 470 250" role="img" aria-label="Map of SciPy subpackages arranged around NumPy">
+        <g font-size="12" text-anchor="middle">
+          <rect x="185" y="105" width="100" height="40" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2"/>
+          <text x="235" y="122" fill="var(--fg)" font-weight="bold">NumPy</text><text x="235" y="138" fill="var(--fg-muted)" font-size="10">ndarray</text>
+          <g stroke="var(--border-strong)" stroke-width="1.2">
+            <line x1="235" y1="105" x2="80" y2="40"/><line x1="235" y1="105" x2="235" y2="40"/><line x1="235" y1="105" x2="390" y2="40"/>
+            <line x1="185" y1="125" x2="80" y2="125"/><line x1="285" y1="125" x2="390" y2="125"/>
+            <line x1="235" y1="145" x2="80" y2="210"/><line x1="235" y1="145" x2="235" y2="210"/><line x1="235" y1="145" x2="390" y2="210"/>
+          </g>
+          <g fill="var(--bg-elev)" stroke="var(--viz-1)" stroke-width="1.5">
+            <rect x="20" y="20" width="120" height="40" rx="6"/><rect x="175" y="20" width="120" height="40" rx="6"/><rect x="330" y="20" width="120" height="40" rx="6"/>
+            <rect x="20" y="105" width="120" height="40" rx="6"/><rect x="330" y="105" width="120" height="40" rx="6"/>
+            <rect x="20" y="190" width="120" height="40" rx="6"/><rect x="175" y="190" width="120" height="40" rx="6"/><rect x="330" y="190" width="120" height="40" rx="6"/>
+          </g>
+          <g fill="var(--fg)" font-weight="bold">
+            <text x="80" y="37">optimize</text><text x="235" y="37">integrate</text><text x="390" y="37">interpolate</text>
+            <text x="80" y="122">linalg · sparse</text><text x="390" y="122">signal · fft</text>
+            <text x="80" y="207">spatial</text><text x="235" y="207">stats</text><text x="390" y="207">ndimage · special</text>
+          </g>
+          <g fill="var(--fg-muted)" font-size="10">
+            <text x="80" y="52">minimize, roots, fits, LP</text><text x="235" y="52">areas, ODEs</text><text x="390" y="52">smooth curves</text>
+            <text x="80" y="137">M49</text><text x="390" y="137">filters, spectra</text>
+            <text x="80" y="222">KD-trees, hulls</text><text x="235" y="222">distributions, tests</text><text x="390" y="222">images, gamma, Bessel</text>
+          </g>
+        </g>
+      </svg>
+      <figcaption>SciPy's main subpackages. Each takes and returns NumPy arrays.</figcaption>
+    </figure>
+    <aside class="callout note"><p>In the browser, the first <code>import scipy...</code> downloads SciPy (and NumPy),
+      which takes several seconds; the following cells are fast. Locally: <code>pixi add scipy matplotlib</code>, then
+      <code>pixi run python script.py</code>.</p></aside>
+    <p>A habit for the whole module: <strong>every numerical answer is an approximation, so check it</strong>. Plug the
+      root back into the function, compare a fitted curve with the data, integrate a case you know by hand, and read the
+      solver's status flags.</p>
+  </section>
+
+  <section class="lesson-section" id="optimize">
+    <h2>scipy.optimize: minimize, find roots, fit, and plan</h2>
+    <h3>Minimization</h3>
+    <p>"Find the inputs that make this function as small as possible" covers a huge range of problems: the cheapest
+      design, the best-fitting model (minimum error), the lowest-energy molecule. <code>optimize.minimize(f, x0)</code>
+      starts at a guess <code>x0</code> and walks downhill. Think of standing on a foggy hillside: you can feel the slope
+      under your feet (the <em>gradient</em>) and step downhill until the ground is flat. Methods like BFGS also learn the
+      curvature as they go, so they take smarter steps. Try it with the visualizer: the step size (learning rate) decides
+      whether you crawl, converge, or overshoot.</p>
+    <div class="viz" data-viz="gradient-descent" data-config='{"fn": "rosenbrock", "lr": 0.002}'></div>
+    <aside class="callout warn"><p>Local optimizers find <em>a</em> valley bottom, not necessarily the lowest one. If the
+      function has several valleys (it is <em>non-convex</em>), try several starting points or a global method such as
+      <code>optimize.differential_evolution</code>.</p></aside>
+    <div class="runnable" data-title="minimize a 1-D and a 2-D function">
+<textarea>
+import numpy as np
+from scipy import optimize
+
+# A box with a square base and no lid must hold 32 litres. Minimize the material used.
+def surface(side):
+    height = 32 / side ** 2
+    return side ** 2 + 4 * side * height
+
+res = optimize.minimize_scalar(surface, bounds=(0.5, 10), method="bounded")
+print(f"best side {res.x:.4f}, height {32 / res.x**2:.4f}, area {res.fun:.4f}")
+
+# Rosenbrock's banana valley: the minimum is at (1, 1)
+def rosen(p):
+    x, y = p
+    return (1 - x) ** 2 + 100 * (y - x ** 2) ** 2
+
+def rosen_grad(p):                         # the slope in each direction (calculus; optional)
+    x, y = p
+    return np.array([-2 * (1 - x) - 400 * x * (y - x ** 2), 200 * (y - x ** 2)])
+
+res = optimize.minimize(rosen, x0=[-1.5, 2.0], method="BFGS", jac=rosen_grad)
+print("BFGS:", res.x.round(5), " f =", f"{res.fun:.2e}", " iterations:", res.nit, " success:", res.success)
+res = optimize.minimize(rosen, x0=[-1.5, 2.0], method="BFGS")   # gradient estimated numerically
+print("BFGS, no jac:", res.x.round(5), " success:", res.success, "-", res.message)
+res = optimize.minimize(rosen, x0=[-1.5, 2.0], method="Nelder-Mead")
+print("Nelder-Mead (no gradients):", res.x.round(4), " evaluations:", res.nfev)
+res = optimize.minimize(rosen, x0=[-1.5, 2.0], bounds=[(-2, 0.5), (-1, 3)], method="L-BFGS-B")
+print("with bounds x<=0.5:", res.x.round(4))
+</textarea>
+    </div>
+    <p>Notice the second BFGS run: without an exact gradient it estimates slopes numerically, lands almost on (1, 1),
+      and still reports <code>success: False</code> with "precision loss". The answer is fine here, but the lesson is
+      general: read <code>res.success</code> and <code>res.message</code>, and judge the result yourself.</p>
+
+    <h3>Root finding with brentq</h3>
+    <p>A <strong>root</strong> of <code>f</code> is an <code>x</code> with <code>f(x) = 0</code>: the break-even price,
+      the time a ball hits the ground, the interest rate that makes a loan's payments add up. If <code>f</code> is
+      continuous, <code>f(a) &lt; 0</code>, and <code>f(b) &gt; 0</code>, the graph must cross zero somewhere between
+      (the intermediate value theorem). <strong>Bisection</strong> halves the interval repeatedly, keeping the half where
+      the sign changes, just like binary search in <a href="m30-searching.html">M30</a>. <code>brentq</code> combines
+      bisection's guarantee with faster interpolation steps. You must give it a <em>bracket</em> <code>[a, b]</code> with
+      opposite signs.</p>
+    <div class="runnable" data-title="brentq: a bracketed root">
+<textarea>
+import numpy as np
+from scipy import optimize
+
+# Monthly payment on a 20,000 loan over 60 months is 377.42. What is the monthly interest rate?
+P, n, payment = 20_000, 60, 377.42
+def f(r):
+    return P * r / (1 - (1 + r) ** -n) - payment
+
+print("signs at the ends:", np.sign(f(1e-6)), np.sign(f(0.05)))
+r = optimize.brentq(f, 1e-6, 0.05, xtol=1e-12)
+print(f"monthly rate {r:.6f} = {12 * r:.2%} per year;  f(r) = {f(r):.2e}")
+
+try:
+    optimize.brentq(lambda x: x ** 2 + 1, -1, 1)
+except ValueError as e:
+    print("ValueError:", e)
+</textarea>
+    </div>
+
+    <h3>Fitting models with curve_fit</h3>
+    <p>M49's least squares fits models that are <em>linear in their parameters</em>. Many real models aren't:
+      exponential decay <code>A·e^(−kt)</code>, logistic growth, a damped spring. <code>optimize.curve_fit(model, x, y,
+      p0)</code> adjusts the parameters to minimize the sum of squared errors, starting from your guess <code>p0</code>
+      (a sensible guess matters for non-linear fits). It returns the best parameters and their <strong>covariance
+      matrix</strong>; the square roots of its diagonal are the parameters' standard errors, a measure of how precisely
+      the data pins each one down.</p>
+    <div class="runnable" data-title="curve_fit: radioactive-style decay">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import optimize
+
+rng = np.random.default_rng(3)
+t = np.linspace(0, 10, 40)
+counts = 120 * np.exp(-0.35 * t) + 8 + rng.normal(0, 3, t.size)      # decay plus background
+
+def model(t, A, k, c):
+    return A * np.exp(-k * t) + c
+
+popt, pcov = optimize.curve_fit(model, t, counts, p0=[100, 0.5, 0])
+perr = np.sqrt(np.diag(pcov))
+for name, val, err in zip(["A", "k", "c"], popt, perr):
+    print(f"{name} = {val:7.3f} ± {err:.3f}")
+print(f"half-life = ln 2 / k = {np.log(2) / popt[1]:.2f}")
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.5))
+a1.plot(t, counts, "o", ms=4, label="data")
+tt = np.linspace(0, 10, 200)
+a1.plot(tt, model(tt, *popt), label="fit"); a1.legend(); a1.set_xlabel("t"); a1.grid(alpha=0.3)
+a2.plot(t, counts - model(t, *popt), "o", ms=4); a2.axhline(0, color="k", lw=0.8)
+a2.set_title("residuals: should look like random noise"); a2.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+
+    <h3>Linear programming with linprog</h3>
+    <p>A <strong>linear program</strong> optimizes a linear objective subject to linear inequality constraints. A small
+      workshop makes tables (profit $70, 3 hours of labour, 4 m of wood) and chairs (profit $50, 2 hours, 1.5 m). This week
+      it has 120 hours and 140 m of wood, and can sell at most 30 chairs. How many of each maximizes profit?</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 420 230" role="img" aria-label="Feasible region of the furniture linear program with the optimum at a corner">
+        <g transform="translate(50,200)">
+          <line x1="0" y1="0" x2="340" y2="0" stroke="var(--fg-muted)"/><line x1="0" y1="0" x2="0" y2="-190" stroke="var(--fg-muted)"/>
+          <text x="330" y="16" fill="var(--fg-muted)" font-size="11">tables</text><text x="6" y="-182" fill="var(--fg-muted)" font-size="11">chairs</text>
+          <line x1="0" y1="-180" x2="320" y2="0" stroke="var(--viz-4)" stroke-width="1.5"/>
+          <line x1="100" y1="-180" x2="280" y2="0" stroke="var(--viz-3)" stroke-width="1.5"/>
+          <line x1="0" y1="-90" x2="320" y2="-90" stroke="var(--viz-2)" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <polygon points="0,0 280,0 228.6,-51.4 160,-90 0,-90" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--viz-1)" stroke-width="2"/>
+          <text x="250" y="-95" fill="var(--viz-2)" font-size="11">chairs ≤ 30</text>
+          <text x="262" y="-40" fill="var(--viz-3)" font-size="11">wood: 4t + 1.5c ≤ 140</text>
+          <text x="40" y="-160" fill="var(--viz-4)" font-size="11">labour: 3t + 2c ≤ 120</text>
+          <circle cx="160" cy="-90" r="6" fill="var(--viz-3)"/>
+          <text x="150" y="-108" fill="var(--fg)" font-size="12" text-anchor="middle">optimum (20, 30)</text>
+          <text x="40" y="-40" fill="var(--fg)" font-size="12">feasible plans</text>
+        </g>
+      </svg>
+      <figcaption>Each constraint cuts the plane with a straight line; the allowed plans form a polygon. A linear objective always reaches its best value at a corner, which is why LP solvers can be so fast.</figcaption>
+    </figure>
+    <p><code>linprog</code> <em>minimizes</em> <code>c @ x</code> subject to <code>A_ub @ x ≤ b_ub</code> (and optional
+      equalities and bounds). To maximize profit, minimize its negative.</p>
+    <div class="runnable" data-title="linprog: a production plan">
+<textarea>
+import numpy as np
+from scipy.optimize import linprog
+
+profit = np.array([70, 50])                   # tables, chairs
+A_ub = np.array([[3, 2],                      # labour hours
+                 [4, 1.5]])                   # wood (m)
+b_ub = np.array([120, 140])
+bounds = [(0, None), (0, 30)]                 # at most 30 chairs
+
+res = linprog(c=-profit, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method="highs")
+print(res.status, res.message)
+tables, chairs = res.x
+print(f"make {tables:.2f} tables and {chairs:.2f} chairs for ${-res.fun:.2f}")
+print("resources used:", A_ub @ res.x, "of", b_ub)
+print("shadow prices (value of one more unit):", -res.ineqlin.marginals.round(3))
+
+res_int = linprog(c=-profit, A_ub=A_ub, b_ub=b_ub, bounds=bounds, integrality=[1, 1])
+print("whole items only:", res_int.x, " profit:", -res_int.fun)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>minimize</code> for smooth objectives (watch for local minima),
+      <code>brentq</code> for roots inside a sign-changing bracket, <code>curve_fit</code> for non-linear models (check
+      residuals and standard errors), <code>linprog</code> for linear objectives with linear constraints.</p>
+  </section>
+
+  <section class="lesson-section" id="integrate">
+    <h2>scipy.integrate: areas and differential equations</h2>
+    <h3>quad: the area under a curve</h3>
+    <p>An <strong>integral</strong> <code>∫ₐᵇ f(x) dx</code> is the area under the graph of <code>f</code> between
+      <code>a</code> and <code>b</code>: total distance from a speed curve, total energy from a power curve, a probability
+      from a density. You can approximate it by slicing the area into thin rectangles and adding them up.
+      <code>integrate.quad</code> does this adaptively (more slices where the curve bends) and returns the value
+      <em>and</em> an estimate of its error.</p>
+    <div class="runnable" data-title="quad: areas you can check by hand">
+<textarea>
+import numpy as np
+from scipy import integrate
+
+val, err = integrate.quad(lambda x: x ** 2, 0, 3)
+print(f"∫ x² dx from 0 to 3 = {val:.10f} (exact 9), error estimate {err:.1e}")
+
+val, err = integrate.quad(lambda x: np.exp(-x ** 2), -np.inf, np.inf)
+print(f"∫ e^(-x²) over all x = {val:.10f}  vs  √π = {np.sqrt(np.pi):.10f}")
+
+# Rectangles by hand, to see what quad improves on
+for n in (10, 100, 1000):
+    x = np.linspace(0, 3, n, endpoint=False)
+    print(f"{n:5} rectangles: {np.sum(x ** 2 * (3 / n)):.6f}")
+print("trapezoid on samples:", integrate.trapezoid(np.linspace(0, 3, 101) ** 2, dx=0.03))
+</textarea>
+    </div>
+    <h3>solve_ivp: simulate how things change</h3>
+    <p>Many laws of nature describe <em>rates of change</em>. A <strong>differential equation</strong> says how fast a
+      quantity changes given its current state. A falling object with air drag: its velocity <code>v</code> changes at rate
+      <code>dv/dt = g − (c/m)·v²</code> (gravity pulls, drag pushes back harder the faster it goes). Population growth with
+      a limited food supply: <code>dP/dt = r·P·(1 − P/K)</code>. Given the starting state (the <em>initial value</em>), a
+      solver takes many small time steps, each time using the rate to predict the next state. <code>solve_ivp</code>
+      chooses the step sizes automatically to stay within your tolerances (<code>rtol</code>, <code>atol</code>).</p>
+    <p>The state can be a vector. For the falling object, the state is <code>[height, velocity]</code>, and the rate
+      function returns <code>[dh/dt, dv/dt]</code>. An <strong>event</strong> function lets the solver stop exactly when
+      something happens, like height reaching zero.</p>
+    <div class="runnable" data-title="solve_ivp: a skydiver with drag, and logistic growth">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+
+g, m, c = 9.81, 80.0, 0.27                       # gravity, mass (kg), drag coefficient (kg/m)
+
+def fall(t, state):
+    h, v = state                                 # v is downward speed
+    return [-v, g - (c / m) * v * abs(v)]
+
+def hit_ground(t, state):
+    return state[0]
+hit_ground.terminal = True
+hit_ground.direction = -1
+
+sol = solve_ivp(fall, (0, 120), [1000.0, 0.0], events=hit_ground, max_step=0.5, rtol=1e-8)
+print(f"lands after {sol.t_events[0][0]:.1f} s at {sol.y_events[0][0][1]:.1f} m/s;"
+      f" terminal velocity √(mg/c) = {np.sqrt(m * g / c):.1f} m/s")
+
+r, K = 0.4, 1000
+logistic = solve_ivp(lambda t, P: r * P * (1 - P / K), (0, 30), [10], t_eval=np.linspace(0, 30, 200))
+exact = K / (1 + (K / 10 - 1) * np.exp(-r * logistic.t))
+print("max error vs exact logistic solution:", np.abs(logistic.y[0] - exact).max().round(4))
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 3.4))
+axes[0].plot(sol.t, sol.y[0]); axes[0].set_title("height (m)")
+axes[1].plot(sol.t, sol.y[1]); axes[1].axhline(np.sqrt(m * g / c), ls="--", color="gray"); axes[1].set_title("speed (m/s)")
+axes[2].plot(logistic.t, logistic.y[0]); axes[2].axhline(K, ls="--", color="gray"); axes[2].set_title("logistic population")
+for ax in axes:
+    ax.set_xlabel("t (s)" if ax is not axes[2] else "t (years)"); ax.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: what does quad return?" data-predict>
+<textarea>
+from scipy import integrate
+val, err = integrate.quad(lambda x: 2 * x, 0, 5)
+print(round(val, 6))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>quad</code> returns <code>(value, error_estimate)</code>. <code>solve_ivp(fun,
+      (t0, t1), y0)</code> with <code>fun(t, y)</code> returning rates; use <code>t_eval</code> for output times and
+      <code>events</code> to stop on a condition.</p>
+  </section>
+
+  <section class="lesson-section" id="interpolate">
+    <h2>scipy.interpolate: filling in between measurements</h2>
+    <p>You measured temperature every 3 hours but need it at 10:30. <strong>Interpolation</strong> builds a function that
+      passes exactly through your data points and estimates values between them. The simplest is straight lines between
+      neighbours (<code>np.interp</code>). <strong>Splines</strong> join smooth cubic pieces so the curve and its slope have
+      no kinks, which looks and behaves more like physical data.</p>
+    <ul>
+      <li><code>np.interp(x_new, x, y)</code>: fast piecewise-linear, 1-D.</li>
+      <li><code>make_interp_spline(x, y, k=3)</code>: an interpolating B-spline of degree <code>k</code>, callable,
+        with derivatives available. <code>CubicSpline</code> is similar, with boundary-condition options.</li>
+      <li><code>interp1d</code> still exists but SciPy now documents it as legacy; prefer the two above in new code.</li>
+    </ul>
+    <div class="runnable" data-title="Linear vs spline interpolation">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import make_interp_spline, CubicSpline
+
+hours = np.array([0, 3, 6, 9, 12, 15, 18, 21, 24])
+temp = np.array([11.0, 9.5, 10.2, 15.8, 21.0, 23.4, 19.1, 14.6, 11.0])
+
+spline = make_interp_spline(hours, temp, k=3)
+cs = CubicSpline(hours, temp, bc_type="periodic")     # a day wraps around: 24h == 0h
+print(f"at 10:30  linear {np.interp(10.5, hours, temp):.2f}  spline {spline(10.5):.2f}  periodic {cs(10.5):.2f}")
+print(f"warming rate at 9:00 (spline derivative): {spline.derivative()(9):.2f} °C/hour")
+
+x = np.linspace(0, 24, 300)
+fig, ax = plt.subplots(figsize=(7, 3.5))
+ax.plot(hours, temp, "o", label="measurements")
+ax.plot(x, np.interp(x, hours, temp), label="linear")
+ax.plot(x, spline(x), label="cubic spline")
+ax.set_xlabel("hour"); ax.set_ylabel("°C"); ax.legend(); ax.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Interpolation is for <em>between</em> the data. Outside the measured range
+      (<em>extrapolation</em>) splines can shoot off wildly. Also, if your data is noisy, an interpolant faithfully
+      reproduces the noise; fit a model (<code>curve_fit</code>) or a smoothing spline
+      (<code>make_smoothing_spline</code>) instead.</p></aside>
+    <p><strong>Remember:</strong> interpolants pass through every point. Linear for speed, splines for smoothness; don't
+      extrapolate.</p>
+  </section>
+
+  <section class="lesson-section" id="signal-fft">
+    <h2>scipy.signal and scipy.fft: cleaning and reading signals</h2>
+    <h3>Frequencies and the FFT</h3>
+    <p>Any signal sampled over time (sound, vibration, heartbeat, electricity use) can be described as a sum of sine
+      waves of different <strong>frequencies</strong> (cycles per second, Hz). The <strong>Fourier transform</strong>
+      measures how much of each frequency is present; the <strong>FFT</strong> (fast Fourier transform) computes it in
+      O(n log n). The result, the <em>spectrum</em>, shows peaks at the frequencies that make up the signal. Use
+      <code>scipy.fft.rfft</code> for real-valued signals and <code>rfftfreq(n, d=1/fs)</code> for the matching
+      frequencies, where <code>fs</code> is the sampling rate.</p>
+    <h3>Filtering</h3>
+    <p>A <strong>low-pass filter</strong> keeps slow changes and removes fast jitter (noise); a high-pass filter does the
+      opposite. <code>signal.butter(order, cutoff, fs=fs, output="sos")</code> designs a smooth Butterworth filter, and
+      <code>signal.sosfiltfilt</code> applies it forwards and backwards so the output isn't shifted in time.
+      <code>signal.find_peaks</code> locates local maxima, with options like <code>height</code>, <code>distance</code>
+      (minimum spacing), and <code>prominence</code> (how much a peak stands out) to ignore noise bumps.</p>
+    <div class="runnable" data-title="Spectrum, low-pass filter, and peaks">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+from scipy.fft import rfft, rfftfreq
+
+fs = 200                                         # samples per second
+t = np.arange(0, 5, 1 / fs)
+rng = np.random.default_rng(0)
+clean = np.sin(2 * np.pi * 1.2 * t) + 0.4 * np.sin(2 * np.pi * 3 * t)
+noisy = clean + 0.5 * np.sin(2 * np.pi * 50 * t) + rng.normal(0, 0.3, t.size)   # 50 Hz hum + noise
+
+freqs = rfftfreq(t.size, d=1 / fs)
+spectrum = np.abs(rfft(noisy)) / t.size * 2
+top = freqs[np.argsort(spectrum)[-3:]]
+print("strongest frequencies (Hz):", np.sort(top).round(2))
+
+sos = signal.butter(4, 8, btype="low", fs=fs, output="sos")     # keep < 8 Hz
+smooth = signal.sosfiltfilt(sos, noisy)
+print("RMS error vs clean: noisy", np.sqrt(np.mean((noisy - clean) ** 2)).round(3),
+      " filtered", np.sqrt(np.mean((smooth - clean) ** 2)).round(3))
+
+peaks, props = signal.find_peaks(smooth, height=0.5, distance=fs // 2)
+print(f"{peaks.size} peaks at t =", t[peaks].round(2))
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 3.5))
+axes[0].plot(t, noisy, lw=0.6, alpha=0.6, label="noisy")
+axes[0].plot(t, smooth, lw=2, label="low-pass filtered")
+axes[0].plot(t[peaks], smooth[peaks], "x", ms=10, mew=2, label="peaks")
+axes[0].set_xlim(0, 3); axes[0].legend(); axes[0].set_xlabel("t (s)")
+axes[1].plot(freqs, spectrum); axes[1].set_xlim(0, 60); axes[1].set_xlabel("frequency (Hz)"); axes[1].set_title("spectrum")
+for ax in axes:
+    ax.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <aside class="callout think"><p>Sampling at 200 Hz, what is the highest frequency you can detect? It is half the
+      sampling rate (the <em>Nyquist frequency</em>, 100 Hz here). A 150 Hz tone sampled at 200 Hz would masquerade as a
+      50 Hz tone: <em>aliasing</em>, the same effect that makes wagon wheels look like they spin backwards on film.</p></aside>
+    <p><strong>Remember:</strong> the FFT turns time into frequency; filter with <code>butter</code> +
+      <code>sosfiltfilt</code>; tune <code>find_peaks</code> with <code>distance</code> and <code>prominence</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="spatial">
+    <h2>scipy.spatial: nearest neighbours, distances, hulls</h2>
+    <p>"Which store is closest to each customer?" Checking every store for every customer costs O(n·m). A
+      <strong>KD-tree</strong> splits space into boxes, alternating between x and y (and further dimensions), like a binary
+      search tree for points (<a href="m24-trees.html">M24</a>). A query only visits the few boxes near the target, about
+      O(log n) per query in low dimensions. Build it once with <code>KDTree(points)</code>, then call
+      <code>tree.query(targets, k)</code> for the <code>k</code> nearest, or <code>tree.query_ball_point(x, r)</code> for
+      everything within radius <code>r</code>.</p>
+    <p>For all pairwise distances between two smallish sets, use <code>scipy.spatial.distance.cdist(A, B,
+      metric=...)</code> (many metrics: <code>"euclidean"</code>, <code>"cityblock"</code> (L1), <code>"cosine"</code>,
+      …). The <strong>convex hull</strong> is the smallest convex polygon containing all the points: imagine a rubber band
+      snapped around nails. <code>ConvexHull(points)</code> gives its vertices, area, and perimeter.</p>
+    <div class="runnable" data-title="KDTree, cdist, ConvexHull">
+<textarea>
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.spatial import KDTree, ConvexHull
+from scipy.spatial.distance import cdist
+
+rng = np.random.default_rng(1)
+stores = rng.uniform(0, 100, (500, 2))
+customers = rng.uniform(0, 100, (5000, 2))
+
+tree = KDTree(stores)
+t0 = time.perf_counter(); dist, idx = tree.query(customers, k=1); t_tree = time.perf_counter() - t0
+t0 = time.perf_counter(); brute = cdist(customers, stores).argmin(axis=1); t_brute = time.perf_counter() - t0
+print(f"KDTree {t_tree * 1000:.1f} ms, brute force {t_brute * 1000:.1f} ms, same answer: {np.array_equal(idx, brute)}")
+print("mean distance to nearest store:", dist.mean().round(2))
+print("stores within 5 of the centre:", tree.query_ball_point([50, 50], r=5))
+
+hull = ConvexHull(stores)
+print(f"hull has {len(hull.vertices)} corner stores; area {hull.volume:.0f} (in 2-D, .volume is area and .area is perimeter)")
+
+fig, ax = plt.subplots(figsize=(5.5, 5.5))
+ax.scatter(*customers[:600].T, c=idx[:600], cmap="tab20", s=6, alpha=0.6)
+ax.scatter(*stores.T, c="k", marker="^", s=12, label="stores")
+loop = np.append(hull.vertices, hull.vertices[0])
+ax.plot(*stores[loop].T, "r-", lw=1.5, label="convex hull")
+ax.set_aspect("equal"); ax.legend(loc="upper right"); ax.set_title("customers coloured by nearest store")
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: hull of a square" data-predict>
+<textarea>
+import numpy as np
+from scipy.spatial import ConvexHull
+pts = np.array([[0, 0], [2, 0], [2, 2], [0, 2], [1, 1]])
+hull = ConvexHull(pts)
+print(len(hull.vertices), hull.volume, hull.area)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> build a <code>KDTree</code> once, query many times; <code>cdist</code> for full distance
+      matrices; <code>ConvexHull</code> for outer boundaries (2-D <code>volume</code> = area).</p>
+  </section>
+
+  <section class="lesson-section" id="stats-preview">
+    <h2>scipy.stats: a preview</h2>
+    <p><code>scipy.stats</code> has about a hundred probability distributions, each with the same methods:
+      <code>pdf</code>/<code>pmf</code> (density or probability), <code>cdf</code> (probability of being ≤ x),
+      <code>ppf</code> (the inverse: which x has this cumulative probability), <code>rvs</code> (random samples), and
+      <code>fit</code>. It also has descriptive statistics and hypothesis tests. <a href="m54-statistics.html">M54</a>
+      covers them properly; here is a taste.</p>
+    <div class="runnable" data-title="Distributions in three lines each">
+<textarea>
+import numpy as np
+from scipy import stats
+
+heights = stats.norm(loc=170, scale=8)                 # a normal distribution
+print(f"P(height < 180) = {heights.cdf(180):.3f}")
+print(f"P(160 < height < 180) = {heights.cdf(180) - heights.cdf(160):.3f}")
+print(f"95th percentile = {heights.ppf(0.95):.1f} cm")
+
+coin = stats.binom(n=20, p=0.5)
+print(f"P(exactly 10 heads in 20) = {coin.pmf(10):.3f};  P(15 or more) = {coin.sf(14):.4f}")
+
+sample = heights.rvs(size=500, random_state=np.random.default_rng(0))
+d = stats.describe(sample)
+print(f"n={d.nobs}  mean={d.mean:.2f}  variance={d.variance:.2f}  skewness={d.skewness:.3f}")
+loc, scale = stats.norm.fit(sample)
+print(f"fitted normal: mean {loc:.2f}, sd {scale:.2f}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="pitfalls">
+    <h2>Numerical pitfalls: floating point, conditioning, tolerance</h2>
+    <p>Every result in this module is computed with 64-bit floating-point numbers, which have about 16 significant
+      decimal digits (the IEEE-754 format; see the <code>bits</code> visualizer below). Three ideas explain almost every
+      numerical surprise:</p>
+    <div class="viz" data-viz="bits" data-config='{"mode": "float", "value": 0.1}'></div>
+    <ol>
+      <li><strong>Rounding error</strong>: most decimals, like 0.1, can't be stored exactly. Each operation rounds, and
+        errors accumulate. Worst of all is <em>catastrophic cancellation</em>: subtracting two nearly equal numbers wipes
+        out the leading digits and leaves mostly noise.</li>
+      <li><strong>Conditioning</strong>: some problems amplify small input errors no matter how good the algorithm
+        (M49's condition number). An ill-conditioned problem needs reformulating, not a better solver.</li>
+      <li><strong>Tolerance</strong>: iterative algorithms (roots, optimizers, ODE solvers) stop when a change is below a
+        tolerance. Tolerances too loose give wrong answers; too tight waste time or fail to converge. Compare floats with
+        <code>np.isclose(a, b, rtol=..., atol=...)</code>, never <code>==</code>, and remember that <code>atol</code>
+        matters near zero, where relative tolerance is meaningless.</li>
+    </ol>
+    <div class="runnable" data-title="Seeing the pitfalls">
+<textarea>
+import math
+import numpy as np
+from scipy.integrate import solve_ivp
+
+print("0.1 + 0.2 =", repr(0.1 + 0.2))
+total = 0.0
+for _ in range(10):
+    total += 0.1                       # ten separate roundings
+print("adding 0.1 ten times:", repr(total), " == 1.0?", total == 1.0)
+print("sum() and math.fsum compensate for rounding:", sum([0.1] * 10) == 1.0, math.fsum([0.1] * 10) == 1.0)
+
+# Catastrophic cancellation: (1 - cos x) / x^2 should approach 0.5 as x -> 0
+for x in (1e-2, 1e-5, 1e-8):
+    naive = (1 - math.cos(x)) / x ** 2
+    stable = 2 * math.sin(x / 2) ** 2 / x ** 2         # same formula, rewritten
+    print(f"x={x:.0e}  naive {naive:.10f}  stable {stable:.10f}")
+
+print("expm1/log1p exist for this reason:", math.exp(1e-12) - 1, "vs", math.expm1(1e-12))
+
+# Tolerance changes the answer of an ODE solver
+exact = math.exp(-5)
+for rtol in (1e-2, 1e-5, 1e-9):
+    sol = solve_ivp(lambda t, y: -y, (0, 5), [1.0], rtol=rtol, atol=rtol * 1e-3)
+    print(f"rtol={rtol:.0e}  y(5) error {abs(sol.y[0, -1] - exact):.1e}  steps {sol.t.size}")
+
+print("isclose near zero:", np.isclose(1e-12, 0.0), " with atol=0:", np.isclose(1e-12, 0.0, atol=0.0))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Professionals verify numerics with known cases (an integral with a closed form, a
+      system with a planted solution), check that results don't change when tolerances are tightened, rescale variables to
+      similar magnitudes, and always read solver status (<code>res.success</code>, <code>res.message</code>,
+      <code>sol.status</code>) instead of assuming convergence.</p></aside>
+    <p><strong>Remember:</strong> expect rounding, avoid subtracting near-equal numbers, respect conditioning, and treat
+      tolerances as part of the answer.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Use SciPy. Tests compare with tolerances.</p>
+
+    <div class="exercise" data-id="m50-e1" data-title="Break-even with brentq">
+      <div class="exercise-prompt">
+        <p>A product's profit at price <code>p</code> is <code>profit(p) = (p - unit_cost) * demand(p) - fixed_cost</code>
+          with <code>demand(p) = 1000 * exp(-p / 40)</code>. Write <code>break_even_prices(unit_cost, fixed_cost)</code>
+          returning a sorted tuple of the two prices where profit is exactly 0. First locate the price of maximum profit
+          with <code>optimize.minimize_scalar</code> on <code>-profit</code> over bounds <code>(unit_cost, 500)</code>; then
+          use <code>optimize.brentq</code> on each side (<code>[unit_cost, p_best]</code> and <code>[p_best, 500]</code>).
+          Raise <code>ValueError</code> if even the best price makes a loss.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from scipy import optimize
+
+def break_even_prices(unit_cost, fixed_cost):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def _profit(p, unit_cost, fixed_cost):
+    return (p - unit_cost) * 1000 * np.exp(-p / 40) - fixed_cost
+
+def test_two_roots():
+    lo, hi = break_even_prices(10, 5000)
+    assert lo < hi, "prices should be sorted"
+    assert abs(_profit(lo, 10, 5000)) < 1e-6 and abs(_profit(hi, 10, 5000)) < 1e-6, "profit must be ~0 at both prices"
+    assert 10 < lo < 50 < hi, f"roots should straddle the optimum near 50, got {lo}, {hi}"
+
+def test_values():
+    lo, hi = break_even_prices(10, 5000)
+    assert np.isclose(lo, 17.80, atol=0.05) and np.isclose(hi, 125.64, atol=0.05), f"got {lo:.2f}, {hi:.2f}"
+
+def test_loss():
+    try:
+        break_even_prices(10, 50_000)
+    except ValueError:
+        return
+    raise AssertionError("when no price is profitable, raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>res = optimize.minimize_scalar(lambda p: -profit(p),
+        bounds=(unit_cost, 500), method="bounded")</code>. If <code>profit(res.x) &lt;= 0</code>, raise. Otherwise the signs
+        flip on both sides of <code>res.x</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from scipy import optimize
+
+def break_even_prices(unit_cost, fixed_cost):
+    def profit(p):
+        return (p - unit_cost) * 1000 * np.exp(-p / 40) - fixed_cost
+
+    res = optimize.minimize_scalar(lambda p: -profit(p), bounds=(unit_cost, 500), method="bounded")
+    best = res.x
+    if profit(best) &lt;= 0:
+        raise ValueError("no price is profitable")
+    lo = optimize.brentq(profit, unit_cost, best)
+    hi = optimize.brentq(profit, best, 500)
+    return (lo, hi)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m50-e2" data-title="Fit a logistic growth curve">
+      <div class="exercise-prompt">
+        <p>Write <code>logistic(t, K, r, t0)</code> returning <code>K / (1 + exp(-r * (t - t0)))</code>, and
+          <code>fit_logistic(t, y)</code> returning <code>(K, r, t0)</code> fitted with <code>optimize.curve_fit</code>.
+          Use a data-driven initial guess: <code>K ≈ max(y)</code>, <code>r ≈ 1</code>, <code>t0 ≈</code> the time where
+          <code>y</code> is closest to half its maximum.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from scipy import optimize
+
+def logistic(t, K, r, t0):
+    ...
+
+def fit_logistic(t, y):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_logistic_shape():
+    assert np.isclose(logistic(5.0, 100, 1.0, 5.0), 50.0), "at t = t0 the curve is at K/2"
+    assert logistic(100.0, 100, 1.0, 5.0) > 99.9, "far right approaches K"
+
+def test_recovers_parameters():
+    rng = np.random.default_rng(0)
+    t = np.linspace(0, 20, 60)
+    y = 500 / (1 + np.exp(-0.8 * (t - 9))) + rng.normal(0, 5, t.size)
+    K, r, t0 = fit_logistic(t, y)
+    assert np.isclose(K, 500, rtol=0.03), f"K should be about 500, got {K:.1f}"
+    assert np.isclose(r, 0.8, rtol=0.1), f"r should be about 0.8, got {r:.3f}"
+    assert np.isclose(t0, 9, atol=0.3), f"t0 should be about 9, got {t0:.2f}"
+
+def test_returns_floats():
+    t = np.linspace(0, 10, 30)
+    out = fit_logistic(t, 10 / (1 + np.exp(-(t - 5))))
+    assert len(out) == 3, "return (K, r, t0)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>t0_guess = t[np.argmin(np.abs(y - y.max() / 2))]</code>, then
+        <code>popt, _ = optimize.curve_fit(logistic, t, y, p0=[y.max(), 1.0, t0_guess])</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from scipy import optimize
+
+def logistic(t, K, r, t0):
+    return K / (1 + np.exp(-r * (t - t0)))
+
+def fit_logistic(t, y):
+    t, y = np.asarray(t, dtype=float), np.asarray(y, dtype=float)
+    t0_guess = t[np.argmin(np.abs(y - y.max() / 2))]
+    popt, _ = optimize.curve_fit(logistic, t, y, p0=[y.max(), 1.0, t0_guess])
+    K, r, t0 = popt
+    return float(K), float(r), float(t0)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m50-e3" data-title="Cheapest diet with linprog">
+      <div class="exercise-prompt">
+        <p>Write <code>cheapest_diet(cost, nutrients, minimums)</code>. <code>cost[j]</code> is the price per serving of food
+          <code>j</code>; <code>nutrients[i, j]</code> is the amount of nutrient <code>i</code> per serving of food
+          <code>j</code>; <code>minimums[i]</code> is the daily minimum of nutrient <code>i</code>. Return
+          <code>(servings, total_cost)</code> minimizing cost with all servings ≥ 0. Raise <code>ValueError</code> if the
+          problem is infeasible. (Remember <code>linprog</code> wants <code>≤</code> constraints: multiply
+          <code>≥</code> rows by −1.)</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from scipy.optimize import linprog
+
+def cheapest_diet(cost, nutrients, minimums):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+COST = np.array([0.6, 0.35, 1.2])                     # oats, milk, eggs
+NUTR = np.array([[4.0, 8.0, 13.0],                     # protein (g)
+                 [150.0, 120.0, 140.0]])                # energy (kcal)
+MINS = np.array([50.0, 1500.0])
+
+def test_feasible_and_meets_minimums():
+    x, total = cheapest_diet(COST, NUTR, MINS)
+    assert np.all(x >= -1e-9), "servings must be non-negative"
+    assert np.all(NUTR @ x >= MINS - 1e-6), "every nutrient minimum must be met"
+    assert np.isclose(total, COST @ x), "total_cost must equal cost @ servings"
+
+def test_optimal_cost():
+    x, total = cheapest_diet(COST, NUTR, MINS)
+    assert np.isclose(total, 4.375, atol=1e-4), f"optimal cost is 4.375, got {total}"
+
+def test_single_food():
+    x, total = cheapest_diet(np.array([2.0]), np.array([[10.0]]), np.array([30.0]))
+    assert np.isclose(x[0], 3.0) and np.isclose(total, 6.0), "need 3 servings costing 6"
+
+def test_infeasible():
+    try:
+        cheapest_diet(np.array([1.0]), np.array([[0.0]]), np.array([5.0]))
+    except ValueError:
+        return
+    raise AssertionError("a food with no nutrients cannot meet a positive minimum: raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>linprog(c=cost, A_ub=-nutrients, b_ub=-minimums, bounds=[(0,
+        None)] * len(cost))</code>. Check <code>res.success</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from scipy.optimize import linprog
+
+def cheapest_diet(cost, nutrients, minimums):
+    cost = np.asarray(cost, dtype=float)
+    res = linprog(c=cost, A_ub=-np.asarray(nutrients, dtype=float), b_ub=-np.asarray(minimums, dtype=float),
+                  bounds=[(0, None)] * cost.size, method="highs")
+    if not res.success:
+        raise ValueError(f"no feasible diet: {res.message}")
+    return res.x, float(res.fun)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m50-e4" data-title="Time to hit the ground (solve_ivp events)">
+      <div class="exercise-prompt">
+        <p>Write <code>fall_time(height, mass, drag, g=9.81)</code> that simulates a dropped object with
+          <code>dv/dt = g - (drag / mass) * v * |v|</code> and <code>dh/dt = -v</code>, starting at rest, and returns the
+          time when <code>h</code> reaches 0, using a terminal event. With <code>drag=0</code> the answer must match
+          <code>sqrt(2 h / g)</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from scipy.integrate import solve_ivp
+
+def fall_time(height, mass, drag, g=9.81):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_vacuum():
+    assert np.isclose(fall_time(20.0, 1.0, 0.0), np.sqrt(2 * 20 / 9.81), rtol=1e-6), "no drag: t = sqrt(2h/g)"
+
+def test_drag_slows():
+    assert fall_time(100.0, 5.0, 0.5) > fall_time(100.0, 5.0, 0.0), "drag must increase the fall time"
+
+def test_terminal_velocity_regime():
+    m, c, g = 80.0, 0.27, 9.81
+    vt = np.sqrt(m * g / c)
+    t = fall_time(3000.0, m, c)
+    assert 3000 / vt < t < 3000 / vt + 15, f"a long fall takes a bit more than h / v_terminal, got {t:.1f}s"
+
+def test_moon():
+    assert np.isclose(fall_time(10.0, 1.0, 0.0, g=1.62), np.sqrt(20 / 1.62), rtol=1e-6), "g is a parameter"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Define <code>def ground(t, s): return s[0]</code>, set
+        <code>ground.terminal = True</code> and <code>ground.direction = -1</code>, integrate over a long span such as
+        <code>(0, 10_000)</code> with <code>rtol=1e-9</code>, and return <code>sol.t_events[0][0]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from scipy.integrate import solve_ivp
+
+def fall_time(height, mass, drag, g=9.81):
+    def rates(t, s):
+        h, v = s
+        return [-v, g - (drag / mass) * v * abs(v)]
+
+    def ground(t, s):
+        return s[0]
+    ground.terminal = True
+    ground.direction = -1
+
+    sol = solve_ivp(rates, (0, 10_000), [height, 0.0], events=ground, rtol=1e-9, atol=1e-9)
+    return float(sol.t_events[0][0])</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m50-e5" data-title="Nearest stores with a KDTree">
+      <div class="exercise-prompt">
+        <p>Write <code>assign_customers(stores, customers, max_distance)</code>. Return an integer array with the index of
+          the nearest store for each customer, or <code>-1</code> if the nearest store is farther than
+          <code>max_distance</code>. Use <code>scipy.spatial.KDTree</code>. Then write <code>store_loads(assignment,
+          n_stores)</code> returning how many customers each store serves (ignore <code>-1</code>).</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from scipy.spatial import KDTree
+
+def assign_customers(stores, customers, max_distance):
+    ...
+
+def store_loads(assignment, n_stores):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+from scipy.spatial.distance import cdist
+
+def test_small_case():
+    stores = np.array([[0.0, 0.0], [10.0, 0.0]])
+    customers = np.array([[1.0, 1.0], [9.0, 0.0], [5.0, 50.0]])
+    out = assign_customers(stores, customers, max_distance=5.0)
+    assert list(out) == [0, 1, -1], f"expected [0, 1, -1], got {list(out)}"
+
+def test_matches_brute_force():
+    rng = np.random.default_rng(4)
+    stores, customers = rng.random((25, 2)), rng.random((400, 2))
+    out = assign_customers(stores, customers, max_distance=10.0)
+    assert np.array_equal(out, cdist(customers, stores).argmin(axis=1)), "must match brute force"
+
+def test_loads():
+    assert list(store_loads(np.array([0, 1, 1, -1, 2, 1]), 4)) == [1, 3, 1, 0], "count per store, ignoring -1"
+
+def test_loads_sum():
+    rng = np.random.default_rng(5)
+    stores, customers = rng.random((10, 2)), rng.random((300, 2))
+    a = assign_customers(stores, customers, 0.15)
+    assert store_loads(a, 10).sum() == (a >= 0).sum(), "loads add up to the assigned customers"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>dist, idx = KDTree(stores).query(customers, k=1)</code>, then
+        <code>np.where(dist &lt;= max_distance, idx, -1)</code>. For loads, <code>np.bincount(a[a &gt;= 0],
+        minlength=n_stores)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from scipy.spatial import KDTree
+
+def assign_customers(stores, customers, max_distance):
+    dist, idx = KDTree(stores).query(customers, k=1)
+    return np.where(dist &lt;= max_distance, idx, -1).astype(int)
+
+def store_loads(assignment, n_stores):
+    assignment = np.asarray(assignment)
+    return np.bincount(assignment[assignment &gt;= 0], minlength=n_stores)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: model a cooling cup of coffee</h2>
+    <p>Newton's law of cooling says an object's temperature <code>T</code> approaches the room temperature
+      <code>T_room</code> at a rate proportional to the difference: <code>dT/dt = −k (T − T_room)</code>. Its exact
+      solution is <code>T(t) = T_room + (T₀ − T_room)·e^(−kt)</code>. Here is the whole workflow in miniature: fit
+      <code>k</code> from noisy thermometer readings with <code>curve_fit</code>, then simulate with <code>solve_ivp</code>
+      and answer a practical question ("when is it drinkable at 60 °C?") with an event.</p>
+    <div class="runnable" data-title="Coffee: fit, simulate, predict">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import optimize
+from scipy.integrate import solve_ivp
+
+rng = np.random.default_rng(42)
+minutes = np.arange(0, 61, 4.0)
+true_k, room, start = 0.045, 21.0, 88.0
+readings = room + (start - room) * np.exp(-true_k * minutes) + rng.normal(0, 0.8, minutes.size)
+
+def newton(t, T0, k, T_room):
+    return T_room + (T0 - T_room) * np.exp(-k * t)
+
+popt, pcov = optimize.curve_fit(newton, minutes, readings, p0=[readings[0], 0.05, 20])
+T0, k, T_room = popt
+print(f"fitted T0={T0:.1f}°C  k={k:.4f}/min ± {np.sqrt(pcov[1, 1]):.4f}  room={T_room:.1f}°C")
+
+def drinkable(t, T):
+    return T[0] - 60
+drinkable.terminal = True
+
+sol = solve_ivp(lambda t, T: -k * (T - T_room), (0, 120), [T0], events=drinkable, dense_output=True)
+t60 = sol.t_events[0][0]
+print(f"reaches 60°C after {t60:.1f} min;  closed form: {np.log((T0 - T_room) / (60 - T_room)) / k:.1f} min")
+
+tt = np.linspace(0, 90, 300)
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(minutes, readings, "o", label="thermometer")
+ax.plot(tt, newton(tt, *popt), label="fitted model")
+ax.plot(tt[tt <= t60], sol.sol(tt[tt <= t60])[0], "--", lw=3, alpha=0.6, label="solve_ivp (until 60°C)")
+ax.axhline(60, color="gray", ls=":"); ax.axvline(t60, color="gray", ls=":")
+ax.set_xlabel("minutes"); ax.set_ylabel("°C"); ax.legend(); ax.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">coolfit: fit and simulate a real cooling process</span></div>
+      <div class="widget-body">
+        <p>Measure (or download) a real cooling curve: a mug of tea with a kitchen thermometer every 2 minutes, a laptop's
+          CPU temperature after a benchmark, or a public dataset. Build a small package that fits Newton's law, simulates
+          what-if scenarios, and reports results.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init coolfit &amp;&amp; cd coolfit
+pixi add python=3.14 numpy scipy matplotlib pytest
+pixi run python -m coolfit readings.csv --target 60      # prints a report, writes cooling.png
+pixi run pytest -q</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li><code>load_readings(path)</code> reads a CSV of <code>minutes,celsius</code> into two arrays (use
+            <code>csv</code> or <code>np.loadtxt</code>).</li>
+          <li><code>fit_newton(t, T)</code> returns a frozen dataclass with <code>T0</code>, <code>k</code>,
+            <code>T_room</code> and their standard errors from <code>curve_fit</code>.</li>
+          <li><code>simulate(params, minutes, k_scale=1.0)</code> uses <code>solve_ivp</code>; <code>k_scale</code> models a
+            what-if (an insulated mug might halve <code>k</code>).</li>
+          <li><code>time_to(params, target)</code> uses a terminal event, and a test confirms it matches the closed-form
+            <code>ln((T0 − T_room)/(target − T_room)) / k</code>.</li>
+          <li>The CLI prints the fitted parameters with uncertainties, the time to the target, and the residual RMS, and saves
+            a figure with data, fit, residuals, and the insulated-mug scenario.</li>
+        </ul>
+        <ul class="checklist" data-id="m50-mini">
+          <li><code>fit_newton</code> recovers known parameters from synthetic data within 5% (tested)</li>
+          <li><code>simulate</code> and the closed-form solution agree within 0.01 °C (tested)</li>
+          <li><code>time_to</code> raises <code>ValueError</code> when the target is below room temperature (tested)</li>
+          <li>Residuals are plotted, and you wrote one sentence on whether they look like random noise</li>
+          <li>The report includes a ± uncertainty for <code>k</code></li>
+          <li><code>pixi run pytest</code> passes</li>
+        </ul>
+        <h3>Stretch goals</h3>
+        <ul>
+          <li>Add a second process: the mug itself absorbs heat (a two-variable ODE for coffee and mug temperatures) and
+            compare fits.</li>
+          <li>Pick the best of several models with a residual-based criterion, then read about AIC in
+            <a href="m54-statistics.html">M54</a>.</li>
+          <li>Smooth noisy readings first with a Savitzky–Golay filter (<code>scipy.signal.savgol_filter</code>) and compare
+            the fitted <code>k</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m50-quiz">
+<script type="application/json">
+{"title": "SciPy quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "You need the time at which a ball's height function crosses zero. Which tool fits best?", "options": ["<code>optimize.linprog</code>", "<code>optimize.brentq</code> with a bracket", "<code>integrate.quad</code>", "<code>spatial.KDTree</code>"], "answer": 1,
+   "explanation": "<p>A crossing of zero is a root. brentq is guaranteed to find it when the function changes sign over the bracket.</p>"},
+  {"type": "single", "prompt": "What does <code>optimize.brentq(f, a, b)</code> require?", "options": ["f must be linear", "f(a) and f(b) must have opposite signs", "a must be 0", "A starting guess x0 and the gradient"], "answer": 1,
+   "explanation": "<p>Brent's method keeps a bracket where the sign changes; without one it raises <code>ValueError</code>.</p>"},
+  {"type": "single", "prompt": "<code>minimize</code> returns a minimum that is clearly not the lowest point of the function. The most likely reason is:", "options": ["SciPy has a bug", "The function is non-convex and the optimizer found a local minimum near the start", "The function has no minimum", "minimize only works in 1-D"], "answer": 1,
+   "explanation": "<p>Local methods walk downhill from x0. Try several starting points or a global optimizer like differential_evolution.</p>"},
+  {"type": "multi", "prompt": "What does <code>popt, pcov = curve_fit(model, x, y, p0=...)</code> give you?", "options": ["Best-fit parameters in <code>popt</code>", "Parameter standard errors as <code>np.sqrt(np.diag(pcov))</code>", "A guarantee of the global best fit for any p0", "The parameter covariance matrix in <code>pcov</code>"], "answer": [0, 1, 3],
+   "explanation": "<p>curve_fit is a local least-squares optimizer, so a poor p0 can give a bad fit. The covariance matrix's diagonal holds the parameter variances.</p>"},
+  {"type": "single", "prompt": "To maximize profit <code>p @ x</code> with <code>linprog</code>, you pass:", "options": ["<code>c=p</code>", "<code>c=-p</code>", "<code>c=1/p</code>", "<code>maximize=True</code>"], "answer": 1,
+   "explanation": "<p>linprog always minimizes. Maximizing p·x is the same as minimizing -p·x; report <code>-res.fun</code> as the profit.</p>"},
+  {"type": "single", "prompt": "Where does a linear program attain its optimum (when one exists)?", "options": ["At the centre of the feasible region", "At a corner (vertex) of the feasible region", "Anywhere inside, randomly", "Only at the origin"], "answer": 1,
+   "explanation": "<p>A linear objective increases steadily in one direction, so its best value over a polygon is reached at a vertex.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from scipy import integrate\nval, err = integrate.quad(lambda x: 3 * x ** 2, 0, 2)\nprint(round(val, 6))", "answer": "8.0",
+   "explanation": "<p>The area under 3x² from 0 to 2 is x³ evaluated from 0 to 2 = 8. quad returns (value, error estimate).</p>"},
+  {"type": "single", "prompt": "In <code>solve_ivp(fun, (0, 10), y0)</code>, what must <code>fun(t, y)</code> return?", "options": ["The solution y at time t", "The rates of change dy/dt at (t, y)", "The time step size", "The final value at t = 10"], "answer": 1,
+   "explanation": "<p>The solver repeatedly asks \"how fast is the state changing right now?\" and integrates those rates over time.</p>"},
+  {"type": "multi", "prompt": "Which statements about interpolation are true?", "options": ["An interpolant passes through every data point", "Cubic splines avoid kinks at the data points", "Extrapolating far outside the data with a spline is reliable", "With noisy data, fitting a model is often better than interpolating"], "answer": [0, 1, 3],
+   "explanation": "<p>Interpolation reproduces the data, noise included, and can behave wildly outside the data range.</p>"},
+  {"type": "single", "prompt": "A signal is sampled at 1000 Hz. What is the highest frequency the FFT can represent without aliasing?", "options": ["1000 Hz", "500 Hz", "2000 Hz", "Unlimited"], "answer": 1,
+   "explanation": "<p>The Nyquist frequency is half the sampling rate. Higher frequencies fold back and masquerade as lower ones.</p>"},
+  {"type": "single", "prompt": "Why use <code>sosfiltfilt</code> rather than filtering once forwards?", "options": ["It is the only filter that removes noise", "Running forwards and backwards cancels the filter's time delay (zero phase shift)", "It uses less memory", "It works only on integers"], "answer": 1,
+   "explanation": "<p>A one-pass filter delays features in time. Filtering forwards then backwards cancels that delay, so peaks stay where they were.</p>"},
+  {"type": "single", "prompt": "Why is a KDTree faster than brute force for many nearest-neighbour queries in 2-D?", "options": ["It approximates the answer", "It prunes regions of space that can't contain a closer point, so each query visits few points", "It sorts points by x only", "It uses the GPU"], "answer": 1,
+   "explanation": "<p>Like a BST, the tree lets a query skip whole boxes that are farther than the best point found so far: roughly O(log n) per query in low dimensions.</p>"},
+  {"type": "single", "prompt": "For a 2-D <code>ConvexHull</code>, which attribute is the enclosed area?", "options": ["<code>hull.area</code>", "<code>hull.volume</code>", "<code>hull.vertices</code>", "<code>hull.size</code>"], "answer": 1,
+   "explanation": "<p>The names are dimension-general: <code>volume</code> is the d-dimensional content (area in 2-D) and <code>area</code> is the boundary measure (perimeter in 2-D).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "total = 0.0\nfor _ in range(10):\n    total += 0.1\nprint(total == 1.0)", "answer": "False",
+   "explanation": "<p>0.1 has no exact binary representation, and ten separate roundings accumulate to 0.9999999999999999. Compare with a tolerance (<code>math.isclose</code>), or use <code>math.fsum</code> (and, since Python 3.12, the built-in <code>sum</code>), which compensate for rounding.</p>"},
+  {"type": "text", "prompt": "Which <code>scipy.stats</code> distribution method gives P(X ≤ x)? (method name)", "answer": ["cdf", ".cdf"],
+   "explanation": "<p>The cumulative distribution function. Its inverse is <code>ppf</code>; the survival function <code>sf</code> is 1 - cdf.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>SciPy is a toolbox of subpackages on top of NumPy: optimize, integrate, interpolate, linalg, sparse, signal, fft,
+        spatial, stats, and more.</li>
+      <li><code>minimize</code> walks downhill (local); <code>brentq</code> needs a sign-change bracket;
+        <code>curve_fit</code> fits non-linear models with uncertainties; <code>linprog</code> solves linear programs at
+        corners.</li>
+      <li><code>quad</code> integrates with an error estimate; <code>solve_ivp</code> simulates ODEs, with events to stop on
+        conditions.</li>
+      <li>Splines interpolate smoothly between points; don't extrapolate or interpolate noise.</li>
+      <li>FFT reveals frequencies; Butterworth + <code>sosfiltfilt</code> removes noise; <code>find_peaks</code> finds
+        events.</li>
+      <li><code>KDTree</code> for nearest neighbours, <code>cdist</code> for distance matrices, <code>ConvexHull</code> for
+        boundaries.</li>
+      <li>Floating point rounds, problems can be ill-conditioned, and tolerances are part of every answer: verify.</li>
+    </ul>
+    <div class="flashcards" data-title="SciPy">
+<script type="application/json">
+[{"front": "Find x with f(x) = 0 given f(a) &lt; 0 &lt; f(b)", "back": "<code>optimize.brentq(f, a, b)</code>"},
+ {"front": "Minimize a smooth function of several variables", "back": "<code>optimize.minimize(f, x0, method=\"BFGS\")</code>; check <code>res.success</code>."},
+ {"front": "Fit y = A·e^(−kt) + c to data", "back": "<code>popt, pcov = optimize.curve_fit(model, t, y, p0=...)</code>"},
+ {"front": "Parameter uncertainties from curve_fit", "back": "<code>np.sqrt(np.diag(pcov))</code>"},
+ {"front": "linprog's standard form", "back": "Minimize <code>c @ x</code> s.t. <code>A_ub @ x ≤ b_ub</code>, <code>A_eq @ x = b_eq</code>, bounds."},
+ {"front": "What does <code>quad</code> return?", "back": "<code>(value, absolute_error_estimate)</code>"},
+ {"front": "solve_ivp signature", "back": "<code>solve_ivp(fun, (t0, t1), y0, t_eval=..., events=...)</code> with <code>fun(t, y) → dy/dt</code>."},
+ {"front": "Stop an ODE when a quantity hits zero", "back": "An event function returning that quantity, with <code>.terminal = True</code>."},
+ {"front": "Preferred 1-D interpolators", "back": "<code>np.interp</code> (linear), <code>make_interp_spline</code> / <code>CubicSpline</code> (smooth). <code>interp1d</code> is legacy."},
+ {"front": "Nyquist frequency", "back": "Half the sampling rate: the highest frequency you can represent."},
+ {"front": "Nearest neighbours for many queries", "back": "<code>tree = KDTree(points); dist, idx = tree.query(targets, k)</code>"},
+ {"front": "Catastrophic cancellation", "back": "Subtracting nearly equal numbers loses leading digits; rewrite the formula (e.g. <code>expm1</code>, <code>log1p</code>)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.scipy.org/doc/scipy/tutorial/index.html">SciPy user guide</a> (one chapter per subpackage)</li>
+      <li><a href="https://docs.scipy.org/doc/scipy/tutorial/optimize.html">Optimization tutorial</a> and <a href="https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.solve_ivp.html"><code>solve_ivp</code> reference</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/tutorial/interpolate.html">Interpolation tutorial</a> (including the legacy status of <code>interp1d</code>)</li>
+      <li><a href="https://docs.python.org/3/tutorial/floatingpoint.html">Python tutorial: floating-point arithmetic, issues and limitations</a></li>
+      <li>Next: <a href="m51-pandas.html">M51 · pandas: Series &amp; DataFrames</a>; for statistics, <a href="m54-statistics.html">M54</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

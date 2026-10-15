@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M18 · Functional Python · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m18">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 18</p>
+    <h1>Functional Python</h1>
+    <p class="lede">Functional programming is a style built from small, pure functions combined into bigger ones, with
+      data that does not change underneath you. Python is not a purely functional language, but its functional tools
+      (<code>functools</code>, <code>operator</code>, comprehensions, immutable types) make code easier to test, cache,
+      parallelize, and reason about.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m14-iterators.html">M14 Iterators &amp; Generators</a>, <a href="m15-decorators.html">M15 Decorators</a></span></div>
+    <ul class="objectives">
+      <li>Recognize pure functions and side effects, and structure programs as a functional core with an imperative shell</li>
+      <li>Choose between <code>map</code>/<code>filter</code>/<code>reduce</code> and comprehensions</li>
+      <li>Build behavior from higher-order functions, composition, and <code>functools.partial</code> (including the 3.14 <code>Placeholder</code>)</li>
+      <li>Cache pure functions with <code>cache</code>/<code>lru_cache</code>, read <code>cache_info()</code>, and use <code>cached_property</code></li>
+      <li>Dispatch on type with <code>singledispatch</code> and replace small lambdas with <code>operator</code> helpers</li>
+      <li>Work with immutable data (tuples, frozensets, frozen dataclasses, and the 3.15 <code>frozendict</code>) and weigh recursion against iteration</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="pure-functions">
+    <h2>Pure functions and immutability</h2>
+    <p>A function is <strong>pure</strong> when two things are true:</p>
+    <ol>
+      <li>Its result depends <em>only</em> on its arguments: the same inputs always give the same output. It does not read
+        global variables, the clock, a random generator, files, or the network.</li>
+      <li>It has <strong>no side effects</strong>: it does not modify its arguments or any global state, print, write
+        files, or send messages. Its only effect is the value it returns.</li>
+    </ol>
+    <p>A pure function call can be replaced by its result without changing the program, a property called
+      <strong>referential transparency</strong>. That makes pure functions trivially testable (no setup, no mocks),
+      safely cacheable (the same input always gives the same answer), and safe to run in parallel (nothing is shared).</p>
+    <div class="two-col">
+      <pre><code class="language-python"># impure: mutates its argument, depends on global state
+TAX = 0.2
+def add_tax(prices):
+    for i, p in enumerate(prices):
+        prices[i] = p * (1 + TAX)
+    return prices</code></pre>
+      <pre><code class="language-python"># pure: new list out, nothing touched
+def add_tax(prices, rate):
+    return [p * (1 + rate) for p in prices]</code></pre>
+    </div>
+    <div class="runnable" data-title="Predict: the cost of mutation" data-predict>
+<textarea>
+def add_tax_in_place(prices, rate):
+    for i, p in enumerate(prices):
+        prices[i] = round(p * (1 + rate), 2)
+    return prices
+
+def add_tax(prices, rate):
+    return [round(p * (1 + rate), 2) for p in prices]
+
+menu = [10.0, 20.0]
+print(add_tax(menu, 0.1), menu)
+receipt = add_tax_in_place(menu, 0.1)
+print(receipt, menu, receipt is menu)
+print(add_tax_in_place(menu, 0.1))   # called twice: taxed twice!
+</textarea>
+    </div>
+    <p>Real programs must have side effects; a program that prints nothing and saves nothing is useless. The functional
+      approach is to <em>push effects to the edges</em>. This architecture is often called <strong>functional core,
+      imperative shell</strong>: a thin outer layer reads input, calls pure functions that hold all the logic, and writes
+      the output.</p>
+    <pre class="mermaid">
+flowchart LR
+  A[read CSV file] -->|rows| B(parse)
+  B --> C(validate)
+  C --> D(enrich)
+  D --> E(aggregate)
+  E -->|summary| F[print / save]
+  subgraph core [pure functional core]
+    B
+    C
+    D
+    E
+  end
+    </pre>
+    <p><strong>Remember:</strong> pure = output depends only on input, and no side effects. Keep logic pure; keep I/O at
+      the edges.</p>
+  </section>
+
+  <section class="lesson-section" id="map-filter-reduce">
+    <h2><code>map</code>, <code>filter</code>, <code>reduce</code> vs comprehensions</h2>
+    <p>Three classic higher-order functions process collections:</p>
+    <ul>
+      <li><code>map(fn, iterable)</code> applies <code>fn</code> to every item. With several iterables,
+        <code>map(fn, xs, ys)</code> calls <code>fn(x, y)</code> pairwise.</li>
+      <li><code>filter(pred, iterable)</code> keeps items for which <code>pred(item)</code> is truthy.</li>
+      <li><code>functools.reduce(fn, iterable, initial)</code> folds the items into one value:
+        <code>fn(fn(fn(initial, x1), x2), x3)</code>.</li>
+    </ul>
+    <p><code>map</code> and <code>filter</code> return lazy <strong>iterators</strong> (M14): nothing is computed until
+      you loop over them, and they can be consumed only once.</p>
+    <div class="runnable" data-title="The same pipeline three ways">
+<textarea>
+from functools import reduce
+
+orders = [12.5, 80.0, 3.2, 45.0, 120.0]
+
+# 1. map / filter / reduce
+big = filter(lambda x: x >= 40, orders)
+with_fee = map(lambda x: x + 2.5, big)
+total = reduce(lambda acc, x: acc + x, with_fee, 0.0)
+print("functional:", total)
+
+# 2. comprehension + built-in sum (the Pythonic choice)
+print("comprehension:", sum(x + 2.5 for x in orders if x >= 40))
+
+# 3. laziness: map does no work until consumed, and only once
+squares = map(lambda n: n * n, range(4))
+print(squares)                 # an iterator object, not a list
+print(list(squares), list(squares))
+</textarea>
+    </div>
+    <p>In Python, <strong>comprehensions are usually clearer</strong> than <code>map</code>/<code>filter</code> with a
+      lambda, and dedicated built-ins (<code>sum</code>, <code>min</code>, <code>max</code>, <code>any</code>,
+      <code>all</code>, <code>"".join</code>, <code>math.prod</code>) beat <code>reduce</code> for common folds. Use
+      <code>map</code> when you already have a named function (<code>map(str.strip, lines)</code>,
+      <code>map(int, fields)</code>), and <code>reduce</code> for folds with no built-in, such as merging a list of dicts
+      or composing functions.</p>
+    <aside class="callout py314"><p>Python 3.14 adds <code>map(..., strict=True)</code>, matching
+      <code>zip(strict=True)</code>: with several iterables, it raises <code>ValueError</code> if they have different
+      lengths instead of silently stopping at the shortest.</p></aside>
+    <div class="runnable" data-title="Predict: map with strict=True" data-predict>
+<textarea>
+prices = [1.0, 2.0, 3.0]
+quantities = [4, 5]
+print(list(map(lambda p, q: p * q, prices, quantities)))
+try:
+    print(list(map(lambda p, q: p * q, prices, quantities, strict=True)))
+except ValueError as e:
+    print("ValueError:", e)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> comprehensions for most transforms; <code>map</code> with named functions;
+      <code>reduce</code> only when no built-in fold exists.</p>
+  </section>
+
+  <section class="lesson-section" id="composition">
+    <h2>Higher-order functions and composition</h2>
+    <p>You met higher-order functions in M15: functions that take or return functions. A particularly useful one is
+      <strong>composition</strong>: combining <code>f</code> and <code>g</code> into a new function
+      <code>h(x) = f(g(x))</code>. With composition you build a data pipeline as a list of small, individually tested
+      steps.</p>
+    <ul>
+      <li><code>compose(f, g, h)(x)</code> = <code>f(g(h(x)))</code>: right to left, as in mathematics.</li>
+      <li><code>pipe(h, g, f)(x)</code> = the same thing written left to right, in the order the data flows. Most
+        people find <code>pipe</code> easier to read.</li>
+    </ul>
+    <p>Step through <code>pipe</code>. Notice that <code>pipe</code> itself does no work: it returns a closure, and the
+      steps run only when that closure is called.</p>
+    <div class="tracer" data-title="Building and running a pipeline">
+<textarea>
+def pipe(*steps):
+    def run(value):
+        for step in steps:
+            value = step(value)
+        return value
+    return run
+
+def strip(s):
+    return s.strip()
+
+def shout(s):
+    return s.upper() + "!"
+
+clean = pipe(strip, str.lower, shout)
+result = clean("  Hello World ")
+</textarea>
+    </div>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["strip", "lower", "remove punctuation", "split words", "count"]}'></div>
+    <div class="runnable" data-title="compose with reduce, and a text pipeline">
+<textarea>
+from functools import reduce
+
+def compose(*fns):
+    """compose(f, g)(x) == f(g(x)); with no functions, the identity."""
+    return reduce(lambda f, g: lambda x: f(g(x)), fns, lambda x: x)
+
+def pipe(*fns):
+    return compose(*reversed(fns))
+
+inc = lambda x: x + 1
+double = lambda x: x * 2
+print(compose(inc, double)(5))   # inc(double(5)) = 11
+print(pipe(inc, double)(5))      # double(inc(5)) = 12
+
+import string
+normalize = pipe(
+    str.lower,
+    lambda s: s.translate(str.maketrans("", "", string.punctuation)),
+    str.split,
+    lambda words: sorted(set(words)),
+)
+print(normalize("The cat; the HAT. The bat!"))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Lambdas are fine for one-liners, but a named <code>def</code> gets a real name in
+      tracebacks, a docstring, and its own unit test. Name every step of a pipeline you intend to keep.</p></aside>
+    <p><strong>Remember:</strong> composition turns small functions into bigger ones; <code>pipe</code> lists steps in
+      data-flow order.</p>
+  </section>
+
+  <section class="lesson-section" id="partial">
+    <h2><code>functools.partial</code> and the 3.14 <code>Placeholder</code></h2>
+    <p><strong>Partial application</strong> means fixing some of a function's arguments now and supplying the rest
+      later. <code>functools.partial(fn, *args, **kwargs)</code> returns a new callable that remembers those arguments.
+      It is a cleaner, inspectable alternative to a <code>lambda</code> that only forwards arguments:</p>
+    <pre><code class="language-python">from functools import partial
+
+parse_binary = partial(int, base=2)          # instead of: lambda s: int(s, base=2)
+parse_binary("1011")                         # 11
+print_err = partial(print, file=sys.stderr)  # instead of: lambda *a: print(*a, file=sys.stderr)</code></pre>
+    <p>Until 3.14, <code>partial</code> could only fix arguments <em>from the left</em>. To pre-fill the second positional
+      argument of a function that does not accept it by keyword (many built-ins, such as <code>str.replace</code> or
+      <code>pow</code>), you needed a lambda.</p>
+    <aside class="callout py314"><p><strong><code>functools.Placeholder</code></strong> (new in 3.14) reserves a
+      positional slot in a <code>partial</code>. When the partial is called, its positional arguments fill the
+      placeholders first, left to right; any extra arguments are appended. Placeholders cannot be the last positional
+      argument (that would be pointless), so <code>partial(f, Placeholder)</code> raises <code>TypeError</code>.</p></aside>
+    <div class="runnable" data-title="Filling slots with Placeholder">
+<textarea>
+from functools import Placeholder as _, partial
+
+square = partial(pow, _, 2)              # pow(x, 2)
+remove_dashes = partial(str.replace, _, "-", "")   # s.replace("-", "")
+starts_http = partial(str.startswith, _, "http")
+
+print(square(9), square)
+print(remove_dashes("555-0100-22"))
+print(list(filter(starts_http, ["https://a.io", "ftp://b", "http://c"])))
+
+# two placeholders: the call fills slots 1 and 3, left to right
+def measure(name, sep, value, unit):
+    return f"{name}{sep}{value}{unit}"
+in_cm = partial(measure, _, " = ", _, " cm")
+print(in_cm("width", 12), "|", in_cm("height", 30))
+
+try:
+    partial(pow, _)
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>partial</code> pre-fills arguments; <code>Placeholder</code> lets you skip a
+      positional slot so it is supplied later.</p>
+  </section>
+
+  <section class="lesson-section" id="caching">
+    <h2>Caching: <code>cache</code>, <code>lru_cache</code>, <code>cached_property</code></h2>
+    <p>Because a pure function always returns the same output for the same input, you can store results and skip the
+      work next time. This is <strong>memoization</strong>, and <code>functools</code> provides it as decorators:</p>
+    <ul>
+      <li><code>@functools.cache</code>: an unbounded cache, a dict from arguments to results. Simple and fast; grows
+        forever.</li>
+      <li><code>@functools.lru_cache(maxsize=128)</code>: a bounded cache that evicts the <strong>least recently
+        used</strong> entry when full. Use it when inputs are unbounded (user ids, URLs).</li>
+      <li>Both add <code>.cache_info()</code> (hits, misses, maxsize, currsize) and <code>.cache_clear()</code>.</li>
+    </ul>
+    <p>The classic demonstration is the naive recursive Fibonacci, which recomputes the same subproblems exponentially
+      many times. Toggle memoization in the call tree:</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 6, "memo": false}'></div>
+    <div class="runnable" data-title="Measuring a cache">
+<textarea>
+from functools import cache, lru_cache
+
+calls = 0
+def slow_fib(n):
+    global calls
+    calls += 1
+    return n if n < 2 else slow_fib(n - 1) + slow_fib(n - 2)
+
+slow_fib(20)
+print("without cache:", calls, "calls")
+
+@cache
+def fib(n):
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+print(fib(80), fib.cache_info())
+
+@lru_cache(maxsize=2)
+def square(n):
+    return n * n
+
+for n in [1, 2, 1, 3, 2]:   # 3 evicts 2 (least recently used), so 2 misses again
+    square(n)
+print(square.cache_info())
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Caching rules: the function must be <strong>pure</strong> (caching
+      <code>get_price(sku)</code> that reads a database returns stale prices), and all arguments must be
+      <strong>hashable</strong> (a list argument raises <code>TypeError: unhashable type</code>). Also beware
+      <code>@cache</code> on methods: <code>self</code> becomes part of the key, which keeps every instance alive as long
+      as the cache.</p></aside>
+    <h3><code>cached_property</code></h3>
+    <p><code>@functools.cached_property</code> computes an attribute the first time it is read and stores the result on
+      the instance, so later reads are plain attribute lookups. It suits expensive derived values of objects that do not
+      change. (It needs an instance <code>__dict__</code>, so it does not work with <code>slots=True</code>
+      dataclasses.)</p>
+    <div class="runnable" data-title="Predict: cached_property" data-predict>
+<textarea>
+from functools import cached_property
+
+class Report:
+    def __init__(self, rows):
+        self.rows = rows
+
+    @cached_property
+    def total(self):
+        print("computing...")
+        return sum(self.rows)
+
+r = Report([1, 2, 3])
+print(r.total)
+print(r.total)
+r.rows.append(10)
+print(r.total)          # stale! the cache does not know rows changed
+del r.total             # invalidate
+print(r.total)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> cache only pure functions with hashable arguments; check effectiveness with
+      <code>cache_info()</code>; <code>cached_property</code> for expensive values of effectively immutable objects.</p>
+  </section>
+
+  <section class="lesson-section" id="singledispatch">
+    <h2><code>singledispatch</code> and <code>total_ordering</code></h2>
+    <h3>Dispatching on type</h3>
+    <p>Sometimes one operation needs a different implementation per type: serializing a value, pretty-printing a node,
+      computing the size of a shape. A long <code>if isinstance(...) elif isinstance(...)</code> chain must be edited every
+      time a type is added. <code>functools.singledispatch</code> turns a function into a <strong>generic
+      function</strong>: you register an implementation per type, and the call dispatches on the <em>type of the first
+      argument</em>, following the class hierarchy (a <code>bool</code> uses the <code>int</code> implementation unless
+      <code>bool</code> has its own).</p>
+    <div class="runnable" data-title="One function, many types">
+<textarea>
+from datetime import date
+from decimal import Decimal
+from functools import singledispatch
+
+@singledispatch
+def to_text(value):
+    raise TypeError(f"cannot format {type(value).__name__}")
+
+@to_text.register
+def _(value: int):                 # the annotation selects the type
+    return f"{value:,}"
+
+@to_text.register
+def _(value: float):
+    return f"{value:,.2f}"
+
+@to_text.register(Decimal)         # or pass the type explicitly
+def _(value):
+    return f"${value:,.2f}"
+
+@to_text.register
+def _(value: list):
+    return ", ".join(to_text(v) for v in value)   # recursion through dispatch
+
+@to_text.register
+def _(value: date):
+    return value.strftime("%d %b %Y")
+
+print(to_text(1234567))
+print(to_text([3.14159, Decimal("19.5"), date(2026, 10, 14), True]))   # True dispatches to int
+try:
+    to_text({"a": 1})
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <p>For methods, use <code>functools.singledispatchmethod</code>, which dispatches on the first argument after
+      <code>self</code>.</p>
+    <h3><code>total_ordering</code> recap</h3>
+    <p>From M11: if a class defines <code>__eq__</code> and <em>one</em> of <code>__lt__</code>, <code>__le__</code>,
+      <code>__gt__</code>, <code>__ge__</code>, the class decorator <code>@functools.total_ordering</code> fills in the
+      other three. It is another example of a decorator that adds behavior to a class (M15).</p>
+    <pre><code class="language-python">from functools import total_ordering
+
+@total_ordering
+class Version:
+    def __init__(self, major: int, minor: int) -&gt; None:
+        self.key = (major, minor)
+    def __eq__(self, other: object) -&gt; bool:
+        return isinstance(other, Version) and self.key == other.key
+    def __lt__(self, other: Version) -&gt; bool:   # no quotes needed in 3.14
+        return self.key &lt; other.key
+
+Version(3, 14) &gt;= Version(3, 12)   # True: __ge__ was generated</code></pre>
+  </section>
+
+  <section class="lesson-section" id="operator">
+    <h2>The <code>operator</code> module</h2>
+    <p>Many lambdas just call an operator or fetch something: <code>lambda a, b: a + b</code>,
+      <code>lambda row: row["price"]</code>, <code>lambda p: p.name</code>. The <code>operator</code> module provides
+      these as ready-made, faster, picklable, self-describing functions:</p>
+    <table>
+      <thead><tr><th>Instead of</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>lambda a, b: a + b</code></td><td><code>operator.add</code> (also <code>mul</code>, <code>sub</code>, <code>truediv</code>, <code>neg</code>, <code>not_</code>…)</td></tr>
+        <tr><td><code>lambda r: r["price"]</code></td><td><code>itemgetter("price")</code></td></tr>
+        <tr><td><code>lambda r: (r[2], r[0])</code></td><td><code>itemgetter(2, 0)</code> (returns a tuple)</td></tr>
+        <tr><td><code>lambda p: p.address.city</code></td><td><code>attrgetter("address.city")</code> (dotted paths work)</td></tr>
+        <tr><td><code>lambda s: s.split(",")</code></td><td><code>methodcaller("split", ",")</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Sorting and grouping with operator">
+<textarea>
+from dataclasses import dataclass
+from functools import reduce
+from itertools import groupby
+from operator import add, attrgetter, itemgetter, methodcaller, mul
+
+sales = [
+    {"region": "north", "rep": "ada", "amount": 120},
+    {"region": "south", "rep": "alan", "amount": 80},
+    {"region": "north", "rep": "grace", "amount": 200},
+    {"region": "south", "rep": "linus", "amount": 95},
+]
+by_region_then_amount = sorted(sales, key=itemgetter("region", "amount"), reverse=True)
+print([(s["region"], s["amount"]) for s in by_region_then_amount])
+
+for region, rows in groupby(sorted(sales, key=itemgetter("region")), key=itemgetter("region")):
+    print(region, sum(map(itemgetter("amount"), rows)))
+
+@dataclass
+class Rep:
+    name: str
+    level: int
+
+team = [Rep("ada", 3), Rep("alan", 2), Rep("grace", 3)]
+print([r.name for r in sorted(team, key=attrgetter("level", "name"))])
+
+print(reduce(mul, range(1, 6)), reduce(add, ["a", "b", "c"]))
+print(list(map(methodcaller("split", "="), ["a=1", "b=2"])))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>itemgetter</code>, <code>attrgetter</code>, and <code>methodcaller</code> are the
+      idiomatic <code>key=</code> functions; <code>operator.add</code> and friends replace arithmetic lambdas.</p>
+  </section>
+
+  <section class="lesson-section" id="immutable-data">
+    <h2>Immutable data</h2>
+    <p>Pure functions are much easier to write when the data itself cannot change. An <strong>immutable</strong> object
+      cannot be modified after creation; "changing" it means building a new object. That rules out a whole class of
+      bugs where two parts of the program share an object and one of them mutates it (the aliasing problems from M02 and
+      M06). Immutable objects are also hashable, so they can be dict keys, set members, and cache keys.</p>
+    <table>
+      <thead><tr><th>Mutable</th><th>Immutable counterpart</th><th>"Update" by</th></tr></thead>
+      <tbody>
+        <tr><td><code>list</code></td><td><code>tuple</code></td><td><code>t + (x,)</code>, slicing, unpacking</td></tr>
+        <tr><td><code>set</code></td><td><code>frozenset</code></td><td><code>fs | {x}</code>, <code>fs - {x}</code></td></tr>
+        <tr><td><code>@dataclass</code></td><td><code>@dataclass(frozen=True)</code></td><td><code>dataclasses.replace(obj, field=new)</code></td></tr>
+        <tr><td><code>dict</code></td><td><code>types.MappingProxyType</code> (read-only view); <code>frozendict</code> in 3.15</td><td><code>{**d, "k": v}</code> or <code>d | {"k": v}</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Updating immutable values">
+<textarea>
+from dataclasses import FrozenInstanceError, dataclass, replace
+from types import MappingProxyType
+
+@dataclass(frozen=True, slots=True)
+class Account:
+    owner: str
+    balance: int
+    tags: frozenset[str] = frozenset()
+
+def deposit(account: Account, amount: int) -> Account:
+    if amount <= 0:
+        raise ValueError("deposit must be positive")
+    return replace(account, balance=account.balance + amount)
+
+a1 = Account("ada", 100)
+a2 = deposit(a1, 50)
+a3 = replace(a2, tags=a2.tags | {"vip"})
+print(a1, a2, a3, sep="\n")
+
+try:
+    a1.balance = 0
+except FrozenInstanceError as e:
+    print("FrozenInstanceError:", e)
+
+print("hashable, usable as keys:", {a1: "first", a3: "latest"}[a3])
+
+config = MappingProxyType({"debug": False})
+try:
+    config["debug"] = True
+except TypeError as e:
+    print("read-only view:", e)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Immutability is <strong>shallow</strong>. A frozen dataclass or tuple holding a
+      <code>list</code> cannot rebind the field, but the list inside can still be mutated. Use immutable types all the
+      way down (tuples, frozensets) when you need real guarantees.</p></aside>
+    <aside class="callout py315"><p><strong>PEP 814: <code>frozendict</code></strong> becomes a built-in in Python 3.15:
+      an immutable, hashable dict. It supports every read-only dict operation, and <code>|</code> returns a new
+      <code>frozendict</code>. Because it is hashable it can be a dict key, a set member, or an argument to a cached
+      function, which ordinary dicts cannot.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="frozendict (Python 3.15)">
+<textarea>
+from functools import cache
+
+settings = frozendict({"theme": "dark", "font": 14})
+print(settings["theme"], len(settings))
+
+try:
+    settings["font"] = 16
+except TypeError as e:
+    print("TypeError:", e)
+
+bigger = settings | {"font": 16}       # a new frozendict
+print(bigger, type(bigger).__name__)
+
+@cache
+def render(options: frozendict) -> str:   # hashable, so cacheable
+    return f"rendering with {dict(options)}"
+
+print(render(settings))
+print(render(frozendict(font=14, theme="dark")) is render(settings))   # equal keys hit the cache
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recursion">
+    <h2>Recursion vs iteration</h2>
+    <p>Functional languages express repetition with <strong>recursion</strong>: a function that calls itself on a
+      smaller input until it reaches a <strong>base case</strong>. Recursion is natural for recursive data (trees,
+      nested lists, JSON) and divide-and-conquer algorithms. Python supports it, but with two practical limits:</p>
+    <ul>
+      <li><strong>Depth limit.</strong> Each call uses a stack frame, and CPython stops at a recursion limit (1000 by
+        default, see <code>sys.getrecursionlimit()</code>) with <code>RecursionError</code>. Summing a 10,000-item list
+        recursively fails.</li>
+      <li><strong>No tail-call optimization.</strong> Some languages reuse the frame when the recursive call is the last
+        thing a function does. CPython deliberately does not, to keep full tracebacks. (The 3.14 "tail-call interpreter"
+        is an internal speed-up of the interpreter loop written in C, not tail-call elimination for your Python
+        functions.)</li>
+    </ul>
+    <div class="runnable" data-title="Recursive, iterative, and built-in">
+<textarea>
+import sys
+
+def total_recursive(xs):
+    return 0 if not xs else xs[0] + total_recursive(xs[1:])   # also O(n^2): slicing copies
+
+def total_iterative(xs):
+    acc = 0
+    for x in xs:
+        acc += x
+    return acc
+
+def flatten(nested):
+    """Recursion shines on recursive data: arbitrarily nested lists."""
+    for item in nested:
+        if isinstance(item, list):
+            yield from flatten(item)
+        else:
+            yield item
+
+print(total_recursive([1, 2, 3]), total_iterative(range(10_000)), sum(range(10_000)))
+print(list(flatten([1, [2, [3, [4, [5]]]], 6])))
+print("recursion limit:", sys.getrecursionlimit())
+try:
+    total_recursive(list(range(5000)))
+except RecursionError as e:
+    print("RecursionError:", e)
+</textarea>
+    </div>
+    <p>Rules of thumb: recurse over <em>recursive structures</em> whose depth is small (a file tree, a parsed
+      expression); iterate over <em>long sequences</em>. Any recursion can be converted to iteration with an explicit
+      stack (a list you push and pop yourself), which is how you handle deep trees safely. Part 4's
+      <a href="m28-recursion.html">M28 Recursion &amp; Backtracking</a> goes much deeper.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m18-e1" data-title="compose and pipe">
+      <div class="exercise-prompt">
+        <p>Write <code>compose(*fns)</code> so that <code>compose(f, g, h)(x) == f(g(h(x)))</code>, and
+          <code>pipe(*fns)</code> so that <code>pipe(f, g, h)(x) == h(g(f(x)))</code>. With no functions, both return
+          the identity function. Neither may call any function until the composed function is called.</p>
+      </div>
+<textarea class="starter">
+def compose(*fns):
+    ...
+
+def pipe(*fns):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_compose_order():
+    assert compose(lambda x: x + 1, lambda x: x * 10)(2) == 21, "compose applies right to left: (2*10)+1"
+
+def test_pipe_order():
+    assert pipe(lambda x: x + 1, lambda x: x * 10)(2) == 30, "pipe applies left to right: (2+1)*10"
+
+def test_identity():
+    assert compose()(7) == 7 and pipe()("x") == "x", "no functions means identity"
+
+def test_lazy():
+    log = []
+    f = pipe(lambda x: log.append("a") or x, lambda x: log.append("b") or x)
+    assert log == [], "nothing should run until the pipeline is called"
+    f(1)
+    assert log == ["a", "b"], "steps run in order when called"
+
+def test_strings():
+    assert pipe(str.strip, str.upper, lambda s: s + "!")("  hi ") == "HI!"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A loop inside a closure works: for <code>pipe</code>, apply each
+        function in order; <code>compose</code> is <code>pipe</code> with the functions reversed.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def pipe(*fns):
+    def run(value):
+        for fn in fns:
+            value = fn(value)
+        return value
+    return run
+
+def compose(*fns):
+    return pipe(*reversed(fns))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m18-e2" data-title="Write your own reduce">
+      <div class="exercise-prompt">
+        <p>Implement <code>my_reduce(fn, iterable, *initial)</code> with the same semantics as
+          <code>functools.reduce</code>: fold left to right; if an initial value is given, start from it; if not, start
+          from the first item; an empty iterable with no initial value raises <code>TypeError</code>; an empty iterable
+          with an initial value returns it. Accept any iterable, including generators. Then use it to write
+          <code>merge_dicts(dicts)</code> that merges a list of dicts left to right (later keys win) without modifying
+          the inputs.</p>
+      </div>
+<textarea class="starter">
+def my_reduce(fn, iterable, *initial):
+    ...
+
+def merge_dicts(dicts):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import operator
+
+def test_sum_and_product():
+    assert my_reduce(operator.add, [1, 2, 3, 4]) == 10
+    assert my_reduce(operator.mul, [1, 2, 3, 4], 10) == 240, "start from the initial value"
+
+def test_order_is_left_to_right():
+    assert my_reduce(lambda acc, x: acc + x, ["a", "b", "c"], ">") == ">abc"
+
+def test_empty():
+    assert my_reduce(operator.add, [], 0) == 0, "empty with initial returns the initial"
+    try:
+        my_reduce(operator.add, [])
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("empty without initial should raise TypeError")
+
+def test_generator_input():
+    assert my_reduce(max, (x * x for x in [3, -5, 2])) == 25, "accept any iterable, including generators"
+
+def test_merge_dicts():
+    a, b = {"x": 1, "y": 2}, {"y": 20, "z": 30}
+    assert merge_dicts([a, b, {"z": 0}]) == {"x": 1, "y": 20, "z": 0}, "later dicts win"
+    assert a == {"x": 1, "y": 2}, "inputs must not be modified"
+    assert merge_dicts([]) == {}, "merging nothing gives an empty dict"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Call <code>iter(iterable)</code>. Without an initial value, take the
+        first item with <code>next(it)</code> inside <code>try/except StopIteration</code>. For
+        <code>merge_dicts</code>, fold with <code>lambda acc, d: acc | d</code> starting from <code>{}</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def my_reduce(fn, iterable, *initial):
+    it = iter(iterable)
+    if initial:
+        acc = initial[0]
+    else:
+        try:
+            acc = next(it)
+        except StopIteration:
+            raise TypeError("my_reduce() of empty iterable with no initial value") from None
+    for item in it:
+        acc = fn(acc, item)
+    return acc
+
+def merge_dicts(dicts):
+    return my_reduce(lambda acc, d: acc | d, dicts, {})</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m18-e3" data-title="partial and Placeholder">
+      <div class="exercise-prompt">
+        <p>Using <code>functools.partial</code> (no lambdas, no <code>def</code>), create:</p>
+        <ul>
+          <li><code>from_hex</code>: parses a hexadecimal string, so <code>from_hex("ff") == 255</code>;</li>
+          <li><code>cube</code>: <code>cube(3) == 27</code>, built from <code>pow</code> with a <code>Placeholder</code>;</li>
+          <li><code>strip_stars</code>: <code>strip_stars("**hi**") == "hi"</code>, built from <code>str.strip</code> with a <code>Placeholder</code>;</li>
+          <li><code>csv_line</code>: joins its arguments with commas and no newline when printed, built from
+            <code>print</code>, so <code>csv_line("a", "b")</code> prints <code>a,b</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+from functools import Placeholder, partial
+
+from_hex = ...
+cube = ...
+strip_stars = ...
+csv_line = ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from functools import Placeholder, partial
+
+def test_all_are_partials():
+    for name, obj in [("from_hex", from_hex), ("cube", cube), ("strip_stars", strip_stars), ("csv_line", csv_line)]:
+        assert isinstance(obj, partial), f"{name} should be a functools.partial"
+
+def test_from_hex():
+    assert from_hex("ff") == 255 and from_hex("10") == 16
+
+def test_cube_uses_placeholder():
+    assert cube(3) == 27 and cube(-2) == -8
+    assert cube.func is pow and cube.args[0] is Placeholder, "build cube as partial(pow, Placeholder, 3)"
+
+def test_strip_stars_uses_placeholder():
+    assert strip_stars("**hi**") == "hi" and strip_stars("*a*b*") == "a*b"
+    assert Placeholder in strip_stars.args, "use Placeholder for the string being stripped"
+
+def test_csv_line():
+    _, out = capture_output(csv_line, "a", "b", 3)
+    assert out == "a,b,3", f"expected 'a,b,3' with no newline, got {out!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>int</code> takes <code>base</code> as a keyword;
+        <code>print</code> takes <code>sep</code> and <code>end</code>. <code>str.strip(s, chars)</code> takes the
+        string first, so the string is the placeholder.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import Placeholder, partial
+
+from_hex = partial(int, base=16)
+cube = partial(pow, Placeholder, 3)
+strip_stars = partial(str.strip, Placeholder, "*")
+csv_line = partial(print, sep=",", end="")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m18-e4" data-title="Memoize a grid count">
+      <div class="exercise-prompt">
+        <p>A robot starts at the top-left of a grid of <code>rows × cols</code> cells and may move only right or down.
+          Write <code>count_paths(rows, cols)</code> that returns the number of distinct paths to the bottom-right cell,
+          using recursion (<code>count_paths(r, c) = count_paths(r - 1, c) + count_paths(r, c - 1)</code>, with a grid of
+          one row or one column having exactly 1 path). Decorate it with <code>functools.lru_cache(maxsize=None)</code>
+          (or <code>cache</code>) so that <code>count_paths(16, 16)</code> is instant.</p>
+      </div>
+<textarea class="starter">
+from functools import cache
+
+def count_paths(rows, cols):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_small_grids():
+    assert count_paths(1, 5) == 1 and count_paths(4, 1) == 1, "a single row or column has one path"
+    assert count_paths(2, 2) == 2 and count_paths(3, 3) == 6, "3x3 has 6 paths"
+
+def test_large_grid():
+    count_paths.cache_clear()
+    assert count_paths(16, 16) == 155117520, "16x16 has C(30, 15) = 155117520 paths"
+    info = count_paths.cache_info()
+    assert info.hits > 0, "the cache should be hit when subproblems repeat"
+    assert info.currsize <= 16 * 16, f"one entry per subproblem at most, got {info.currsize}"
+
+def test_is_cached():
+    assert hasattr(count_paths, "cache_info"), "decorate count_paths with functools.cache or lru_cache"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Base case first: <code>if rows == 1 or cols == 1: return 1</code>.
+        Put <code>@cache</code> directly above the <code>def</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import cache
+
+@cache
+def count_paths(rows, cols):
+    if rows == 1 or cols == 1:
+        return 1
+    return count_paths(rows - 1, cols) + count_paths(rows, cols - 1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m18-e5" data-title="singledispatch serializer">
+      <div class="exercise-prompt">
+        <p>Write a <code>singledispatch</code> function <code>to_jsonable(value)</code> that converts values into things
+          <code>json.dumps</code> accepts:</p>
+        <ul>
+          <li><code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code>, and <code>None</code> are returned unchanged;</li>
+          <li><code>list</code> and <code>tuple</code> become lists of converted items;</li>
+          <li><code>dict</code> becomes a dict with <code>str(key)</code> keys and converted values;</li>
+          <li><code>set</code> and <code>frozenset</code> become <em>sorted</em> lists of converted items;</li>
+          <li><code>datetime.date</code> becomes its ISO string;</li>
+          <li>anything else raises <code>TypeError</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+from datetime import date
+from functools import singledispatch
+
+@singledispatch
+def to_jsonable(value):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json
+from datetime import date
+from functools import singledispatch
+
+def test_is_singledispatch():
+    assert hasattr(to_jsonable, "register") and hasattr(to_jsonable, "registry"), "use @functools.singledispatch"
+    assert len(to_jsonable.registry) >= 5, "register separate implementations per type"
+
+def test_scalars():
+    for v in ["s", 1, 2.5, True, None]:
+        assert to_jsonable(v) is v or to_jsonable(v) == v, f"{v!r} should pass through"
+
+def test_containers():
+    data = {"when": date(2026, 1, 2), 3: (1, {"b", "a"}), "nested": [frozenset({2, 1})]}
+    expected = {"when": "2026-01-02", "3": [1, ["a", "b"]], "nested": [[1, 2]]}
+    assert to_jsonable(data) == expected, f"got {to_jsonable(data)!r}"
+    json.dumps(to_jsonable(data))
+
+def test_unknown_type():
+    try:
+        to_jsonable(object())
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("unsupported types should raise TypeError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Make the base function raise <code>TypeError</code>. Register one
+        implementation for several types by stacking <code>@to_jsonable.register(str)</code>,
+        <code>@to_jsonable.register(int)</code>, … on the same function. <code>type(None)</code> is
+        <code>NoneType</code>; <code>bool</code> is covered by <code>int</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from datetime import date
+from functools import singledispatch
+
+@singledispatch
+def to_jsonable(value):
+    raise TypeError(f"cannot convert {type(value).__name__} to JSON")
+
+@to_jsonable.register(str)
+@to_jsonable.register(int)
+@to_jsonable.register(float)
+@to_jsonable.register(type(None))
+def _(value):
+    return value
+
+@to_jsonable.register(list)
+@to_jsonable.register(tuple)
+def _(value):
+    return [to_jsonable(v) for v in value]
+
+@to_jsonable.register
+def _(value: dict):
+    return {str(k): to_jsonable(v) for k, v in value.items()}
+
+@to_jsonable.register(set)
+@to_jsonable.register(frozenset)
+def _(value):
+    return sorted(to_jsonable(v) for v in value)
+
+@to_jsonable.register
+def _(value: date):
+    return value.isoformat()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m18-e6" data-title="Immutable updates with operator keys">
+      <div class="exercise-prompt">
+        <p>Define a frozen dataclass <code>Item(name: str, price: float, qty: int)</code>. Write pure functions:</p>
+        <ul>
+          <li><code>restock(items, name, amount)</code>: returns a new <strong>tuple</strong> in which the item called
+            <code>name</code> has <code>qty</code> increased by <code>amount</code> (use <code>dataclasses.replace</code>);
+            other items are the same objects; raise <code>KeyError</code> if no item has that name.</li>
+          <li><code>most_valuable(items, n)</code>: the names of the <code>n</code> items with the highest
+            <code>price * qty</code>, highest first, ties broken by name ascending.</li>
+          <li><code>by_price</code>: a key function for sorting by price, created with <code>operator.attrgetter</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+from dataclasses import dataclass, replace
+from operator import attrgetter
+
+@dataclass(frozen=True)
+class Item:
+    ...
+
+def restock(items, name, amount):
+    ...
+
+def most_valuable(items, n):
+    ...
+
+by_price = ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import dataclasses
+from operator import attrgetter
+
+def _stock():
+    return (Item("pen", 1.5, 10), Item("book", 12.0, 3), Item("mug", 6.0, 6), Item("cap", 9.0, 4))
+
+def test_frozen():
+    item = Item("pen", 1.5, 10)
+    try:
+        item.qty = 0
+    except dataclasses.FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("Item should be @dataclass(frozen=True)")
+
+def test_restock_is_pure():
+    stock = _stock()
+    new = restock(stock, "mug", 4)
+    assert isinstance(new, tuple), "restock should return a tuple"
+    assert new[2] == Item("mug", 6.0, 10), "mug qty should become 10"
+    assert stock[2].qty == 6, "the original items must not change"
+    assert new[0] is stock[0], "untouched items should be the same objects"
+
+def test_restock_missing():
+    try:
+        restock(_stock(), "lamp", 1)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("unknown names should raise KeyError")
+
+def test_most_valuable():
+    assert most_valuable(_stock(), 2) == ["book", "cap"], "values: book 36, cap 36, mug 36, pen 15 -> ties by name"
+    assert most_valuable(_stock(), 3) == ["book", "cap", "mug"]
+
+def test_by_price():
+    assert isinstance(by_price, attrgetter), "create by_price with operator.attrgetter"
+    assert [i.name for i in sorted(_stock(), key=by_price)] == ["pen", "mug", "cap", "book"]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For ties broken ascending while values sort descending, use the key
+        <code>lambda i: (-i.price * i.qty, i.name)</code>. For <code>restock</code>, build the tuple with a comprehension
+        and track whether the name was found.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass, replace
+from operator import attrgetter
+
+@dataclass(frozen=True)
+class Item:
+    name: str
+    price: float
+    qty: int
+
+def restock(items, name, amount):
+    if not any(item.name == name for item in items):
+        raise KeyError(name)
+    return tuple(replace(item, qty=item.qty + amount) if item.name == name else item for item in items)
+
+def most_valuable(items, n):
+    ranked = sorted(items, key=lambda i: (-i.price * i.qty, i.name))
+    return [item.name for item in ranked[:n]]
+
+by_price = attrgetter("price")</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a composable data pipeline</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Sales report from small pure functions</span></div>
+      <div class="widget-body">
+        <p>Turn a messy CSV of sales lines into a regional summary, using a functional core (pure, composable steps) and
+          an imperative shell (one <code>main()</code> that reads the file and prints the report).</p>
+        <pre data-label="data/sales.csv"><code class="language-bash">date,region,rep,sku,qty,unit_price
+2026-10-01,North ,ada,SKU-1,3,19.99
+2026-10-01,south,alan,SKU-2,,5.00
+2026-10-02,NORTH,grace,SKU-1,1,19.99
+2026-10-02,east,linus,SKU-3,2,abc
+2026-10-03,south,alan,SKU-3,4,7.50</code></pre>
+        <pre data-label="Terminal"><code class="language-bash">pixi init sales-pipeline &amp;&amp; cd sales-pipeline
+pixi add pytest
+pixi run python -m sales_pipeline data/sales.csv</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li>Steps are separate pure functions over iterables of immutable records (a frozen dataclass
+            <code>Sale</code>): <code>parse_rows</code>, <code>normalize</code> (strip and lower-case regions),
+            <code>validate</code> (drop rows with missing or non-numeric fields, collecting the reasons),
+            <code>enrich</code> (add <code>total = qty * unit_price</code> with <code>dataclasses.replace</code>),
+            <code>aggregate</code> (totals per region).</li>
+          <li><code>pipeline = pipe(parse_rows, normalize, validate, enrich, aggregate)</code>, using your
+            <code>pipe</code> from exercise 1.</li>
+          <li>Use <code>operator.attrgetter</code>/<code>itemgetter</code> for every sort and grouping key, and
+            <code>functools.partial</code> to configure steps (for example <code>partial(top_reps, n=3)</code>).</li>
+          <li>Only <code>main()</code> touches the file system or prints.</li>
+        </ul>
+        <ul class="checklist" data-id="m18-mini">
+          <li>Each step has at least two unit tests that need no files and no mocks</li>
+          <li>No step mutates its input (a test proves it by freezing or comparing before/after)</li>
+          <li><code>validate</code> returns the good records and a list of rejection reasons (row number + why)</li>
+          <li>The steps are lazy where possible (generators), so a 1 GB file streams through in constant memory</li>
+          <li><code>main()</code> is the only impure function, and an integration test runs it on a <code>tmp_path</code> CSV with <code>capsys</code></li>
+          <li>Swapping the order of two independent steps, or adding a new one, is a one-line change</li>
+        </ul>
+        <p><strong>Stretch:</strong> add a <code>singledispatch</code> <code>render</code> step that formats the summary as
+          text, JSON, or Markdown depending on the type of a format object; memoize an expensive currency-conversion step
+          with <code>lru_cache</code> and report its <code>cache_info()</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m18-quiz">
+<script type="application/json">
+{"title": "Functional Python", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which functions are pure?", "options": ["<code>def f(x): return x * 2</code>", "<code>def f(xs): xs.sort(); return xs</code>", "<code>def f(): return random.random()</code>", "<code>def f(a, b): return sorted(a + b)</code>"], "answer": [0, 3], "explanation": "<p><code>xs.sort()</code> mutates its argument and <code>random.random()</code> depends on hidden state. The other two depend only on their inputs and change nothing.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "squares = map(lambda n: n * n, [1, 2, 3])\nprint(list(squares), list(squares))", "answer": "[1, 4, 9] []", "explanation": "<p><code>map</code> returns a one-shot iterator. The first <code>list</code> consumes it; the second gets nothing.</p>"},
+  {"type": "single", "prompt": "Which is the most Pythonic way to total the prices over 10?", "options": ["<code>reduce(lambda a, p: a + p, filter(lambda p: p &gt; 10, prices), 0)</code>", "<code>sum(p for p in prices if p &gt; 10)</code>", "A <code>while</code> loop with an index", "<code>sum(map(lambda p: p if p &gt; 10 else 0, prices))</code>"], "answer": 1, "explanation": "<p>A generator expression with the built-in <code>sum</code> says exactly what it means. Reach for <code>reduce</code> only when no built-in fold exists.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def compose(f, g):\n    return lambda x: f(g(x))\n\nprint(compose(lambda x: x + 1, lambda x: x * 3)(4))", "answer": "13", "explanation": "<p>Compose applies right to left: <code>g(4) = 12</code>, then <code>f(12) = 13</code>.</p>"},
+  {"type": "output", "prompt": "What does this print? (Python 3.14)", "code": "from functools import Placeholder, partial\n\nsub = partial(pow, Placeholder, 2)\nprint(sub(5))", "answer": "25", "explanation": "<p>The placeholder reserves the first positional slot; <code>sub(5)</code> calls <code>pow(5, 2)</code>.</p>"},
+  {"type": "single", "prompt": "What happens with <code>partial(pow, Placeholder)</code>?", "options": ["It creates an identity function", "TypeError: trailing Placeholders are not allowed", "It calls pow immediately", "It returns None"], "answer": 1, "explanation": "<p>A trailing placeholder adds nothing (the argument would be appended anyway), so <code>partial</code> rejects it.</p>"},
+  {"type": "single", "prompt": "Why is <code>@cache</code> wrong on <code>def price(sku): return db.lookup(sku)</code>?", "options": ["sku is not hashable", "The function is not pure: cached prices go stale when the database changes", "cache only works on recursive functions", "It is fine"], "answer": 1, "explanation": "<p>Caching assumes the same input always gives the same output. Reading external state breaks that assumption.</p>"},
+  {"type": "output", "prompt": "What does <code>cache_info()</code> report as <code>hits</code>?", "code": "from functools import lru_cache\n\n@lru_cache(maxsize=2)\ndef sq(n):\n    return n * n\n\nfor n in [1, 2, 1, 3, 2]:\n    sq(n)\nprint(sq.cache_info().hits)", "answer": "1", "explanation": "<p>1 miss, 2 miss, 1 hit, 3 miss (evicts 2, the least recently used), 2 miss. One hit, four misses.</p>"},
+  {"type": "single", "prompt": "What does <code>functools.singledispatch</code> dispatch on?", "options": ["The function's name", "The type of the first argument", "The types of all arguments", "The return type annotation"], "answer": 1, "explanation": "<p>Single dispatch picks the implementation registered for the first argument's type, following the class hierarchy.</p>"},
+  {"type": "single", "prompt": "Which replaces <code>lambda row: (row[\"region\"], row[\"amount\"])</code> as a sort key?", "options": ["<code>attrgetter(\"region\", \"amount\")</code>", "<code>itemgetter(\"region\", \"amount\")</code>", "<code>methodcaller(\"region\")</code>", "<code>operator.add</code>"], "answer": 1, "explanation": "<p><code>itemgetter</code> uses <code>[]</code> lookup and returns a tuple when given several keys. <code>attrgetter</code> is for attributes.</p>"},
+  {"type": "single", "prompt": "How do you get a modified copy of a frozen dataclass instance <code>acct</code>?", "options": ["<code>acct.balance = 5</code>", "<code>dataclasses.replace(acct, balance=5)</code>", "<code>copy.copy(acct).balance = 5</code>", "<code>acct.update(balance=5)</code>"], "answer": 1, "explanation": "<p><code>replace</code> builds a new instance with the given fields changed; the original is untouched.</p>"},
+  {"type": "single", "prompt": "A frozen dataclass has a field <code>tags: list[str]</code>. Can <code>obj.tags.append(\"x\")</code> succeed?", "options": ["No, frozen prevents all changes", "Yes: freezing is shallow, it only prevents rebinding the field", "Only with slots=True", "Only in Python 3.15"], "answer": 1, "explanation": "<p>Immutability is shallow. Use a <code>tuple</code> or <code>frozenset</code> field for a real guarantee.</p>"},
+  {"type": "text", "prompt": "Python 3.15 preview: name the new built-in immutable, hashable mapping type (PEP 814).", "answer": ["frozendict"], "explanation": "<p><code>frozendict</code> supports read-only dict operations, is hashable, and <code>|</code> returns a new frozendict.</p>"},
+  {"type": "single", "prompt": "Why should you avoid summing a 100,000-item list with recursion in CPython?", "options": ["Recursion is always slower than loops in every language", "Each call uses a stack frame; the default limit (~1000) raises RecursionError, and CPython has no tail-call elimination", "Lists cannot be sliced", "Recursion is not allowed in pure functions"], "answer": 1, "explanation": "<p>Recursion depth equals the list length here. Iterate over long sequences; recurse over shallow recursive structures.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Pure functions depend only on their inputs and have no side effects: easy to test, cache, and parallelize. Keep I/O in a thin shell.</li>
+      <li>Comprehensions and built-in folds usually beat <code>map</code>/<code>filter</code>/<code>reduce</code>; <code>map</code> and <code>filter</code> are lazy; 3.14 adds <code>map(strict=True)</code>.</li>
+      <li>Composition and <code>pipe</code> build pipelines from small steps; <code>partial</code> pre-fills arguments, and 3.14's <code>Placeholder</code> skips positional slots.</li>
+      <li><code>cache</code>/<code>lru_cache</code> memoize pure functions with hashable arguments; read <code>cache_info()</code>; <code>cached_property</code> for derived attributes.</li>
+      <li><code>singledispatch</code> selects an implementation by the first argument's type; <code>total_ordering</code> fills in comparisons.</li>
+      <li><code>itemgetter</code>, <code>attrgetter</code>, <code>methodcaller</code>, and <code>operator.add</code> replace trivial lambdas.</li>
+      <li>Immutable data (tuple, frozenset, frozen dataclass + <code>replace</code>, 3.15 <code>frozendict</code>) prevents aliasing bugs; immutability is shallow.</li>
+      <li>Recurse over shallow recursive structures; iterate over long sequences (recursion limit, no TCO).</li>
+    </ul>
+    <div class="flashcards" data-title="Functional Python">
+<script type="application/json">
+[{"front": "Pure function", "back": "Same inputs always give the same output, and no side effects."},
+ {"front": "Functional core, imperative shell", "back": "Logic in pure functions; I/O (files, printing, network) in a thin outer layer."},
+ {"front": "<code>reduce(fn, xs, init)</code>", "back": "Folds left to right: <code>fn(fn(fn(init, x1), x2), x3)</code>."},
+ {"front": "<code>map(f, a, b, strict=True)</code> (3.14)", "back": "Raises ValueError if the iterables have different lengths."},
+ {"front": "compose vs pipe", "back": "<code>compose(f, g)(x) = f(g(x))</code>; <code>pipe(f, g)(x) = g(f(x))</code>."},
+ {"front": "<code>functools.Placeholder</code> (3.14)", "back": "Reserves a positional slot in <code>partial</code>: <code>partial(pow, Placeholder, 2)(5) == 25</code>."},
+ {"front": "<code>cache</code> vs <code>lru_cache</code>", "back": "Unbounded vs bounded with least-recently-used eviction. Both have <code>cache_info()</code> and <code>cache_clear()</code>."},
+ {"front": "When is caching safe?", "back": "Pure function, hashable arguments, and acceptable memory growth."},
+ {"front": "<code>cached_property</code>", "back": "Computes once on first access, stores on the instance; <code>del obj.attr</code> invalidates."},
+ {"front": "<code>singledispatch</code>", "back": "Generic function that picks an implementation by the type of its first argument."},
+ {"front": "<code>itemgetter</code> / <code>attrgetter</code> / <code>methodcaller</code>", "back": "<code>x[k]</code> / <code>x.attr</code> (dotted ok) / <code>x.method(*args)</code> as functions."},
+ {"front": "<code>dataclasses.replace</code>", "back": "Returns a copy of a (frozen) dataclass with some fields changed."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/howto/functional.html">Functional Programming HOWTO</a> (docs.python.org)</li>
+      <li><a href="https://docs.python.org/3/library/functools.html"><code>functools</code></a> and
+        <a href="https://docs.python.org/3/library/operator.html"><code>operator</code></a> reference</li>
+      <li><a href="https://peps.python.org/pep-0814/">PEP 814: frozendict</a> (Python 3.15)</li>
+      <li>Gary Bernhardt, "Boundaries" (the functional core, imperative shell talk)</li>
+      <li>Next: <a href="../projects/p02-library-system.html">Project 2: Library Management System</a>, then
+        <a href="m19-complexity.html">M19 Complexity &amp; Big-O</a> to start Part 3.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,7 @@
+"""Allow ``pixi run python -m habits``."""
+
+import sys
+
+from habits.cli import main
+
+sys.exit(main())

@@ -1,0 +1,1164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M42 · Code Quality &amp; Tooling · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m42">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 42</p>
+    <h1>Code Quality &amp; Tooling</h1>
+    <p class="lede">Professional teams don't rely on remembering the rules. They automate them, so every commit is
+      formatted, linted, type-checked, tested, and logged the same way, whoever wrote it and however tired they were.
+      This module builds that harness piece by piece, using the configuration of this very repository.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m16-typing.html">M16 Typing</a>, <a href="m17-testing.html">M17 Testing</a>, <a href="m41-pixi-packaging.html">M41 Pixi</a></span></div>
+    <ul class="objectives">
+      <li>Configure ruff for linting and formatting, and read and fix its diagnostics</li>
+      <li>Run mypy in strict mode and understand what it guarantees</li>
+      <li>Install pre-commit hooks and avoid the auto-fix restage trap</li>
+      <li>Replace <code>print()</code> and stdlib <code>logging</code> with structured logging via structlog, configured for dev and prod</li>
+      <li>Write Conventional Commits, generate changelogs with git-cliff, and follow a branch and PR workflow</li>
+      <li>Build a GitHub Actions CI pipeline with setup-pixi and a matrix, run it locally with act, and enforce a coverage gate</li>
+      <li>Review code with a consistent checklist</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="why-automate">
+    <h2>Why automate quality?</h2>
+    <p>Humans are bad at consistency and good at judgement. Code review time is expensive, so it shouldn't be spent
+      on "missing blank line" or "unused import". A <strong>quality harness</strong> is a set of tools that run
+      automatically and refuse to let a change through until it meets the bar. This leaves reviewers free to ask
+      the questions that need a person: is this the right design, is it correct, is it secure?</p>
+    <p>The harness runs at three points, from fastest to slowest:</p>
+    <pre class="mermaid">
+flowchart LR
+  E[Editor<br/>ruff + mypy on save] --> P[pre-commit<br/>on git commit]
+  P --> L[pixi run ci<br/>full local gate]
+  L --> G[GitHub Actions<br/>matrix CI on every PR]
+  G --> M[Merge to main]
+    </pre>
+    <p>This repository's gate is one Pixi task, ordered so the quickest failures surface first:</p>
+    <pre data-label="pixi.toml (this repository)"><code class="language-toml">fmt = "ruff format ."
+lint = "ruff check ."
+check = "mypy src/"
+cov = "pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=90"
+build = "python -m build --no-isolation"
+pre-commit-all = "pre-commit run --all-files"
+ci = { depends-on = ["pre-commit-all", "build", "check", "lint", "cov"] }</code></pre>
+    <aside class="callout think"><p>Why put static checks before the test suite? Static checks take seconds,
+      while a full test suite can take minutes. If a typo would fail both, you want to hear about it from the fast
+      one.</p></aside>
+    <p><strong>Remember:</strong> automate everything a machine can check, run the fast checks first, and save
+      human review for design and correctness.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="ruff">
+    <h2>ruff: linting and formatting</h2>
+    <p>A <strong>linter</strong> reads your code without running it and reports likely bugs and style problems. A
+      <strong>formatter</strong> rewrites layout (spacing, line breaks, quotes) into one canonical style, which
+      ends formatting debates for good. <strong>ruff</strong> does both. It's written in Rust and is fast
+      enough to run on every keystroke, and it reimplements hundreds of rules from older tools (flake8, isort,
+      pyupgrade, pydocstyle, Black).</p>
+    <p>Rules are grouped by a letter prefix. This repo selects seven groups:</p>
+    <table>
+      <thead><tr><th>Code</th><th>Origin</th><th>Catches</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>E</code></td><td>pycodestyle</td><td>PEP 8 errors</td><td><code>E722</code> bare <code>except:</code></td></tr>
+        <tr><td><code>F</code></td><td>Pyflakes</td><td>Real bugs: undefined names, unused imports</td><td><code>F401</code> unused import, <code>F821</code> undefined name</td></tr>
+        <tr><td><code>I</code></td><td>isort</td><td>Import ordering</td><td><code>I001</code> unsorted imports</td></tr>
+        <tr><td><code>UP</code></td><td>pyupgrade</td><td>Outdated syntax for your target Python</td><td><code>UP006</code> <code>List[str]</code> → <code>list[str]</code></td></tr>
+        <tr><td><code>B</code></td><td>flake8-bugbear</td><td>Likely bugs and design problems</td><td><code>B006</code> mutable default argument</td></tr>
+        <tr><td><code>RUF</code></td><td>ruff itself</td><td>Ruff-specific checks</td><td><code>RUF012</code> mutable class attribute</td></tr>
+        <tr><td><code>D</code></td><td>pydocstyle</td><td>Docstrings (Google convention here)</td><td><code>D103</code> missing docstring</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="pyproject.toml (this repository)"><code class="language-toml">[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+extend-exclude = ["work"]          # learners' scratch copies are not linted
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF", "D"]
+ignore = ["E501"]                  # the formatter owns line length
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D100", "D103", "D104"]   # tests don't need module/function docstrings
+"projects/**/tests/**" = ["D100", "D103", "D104"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["practicum"]</code></pre>
+    <p>Here's real ruff output on a small file with several common mistakes:</p>
+    <pre data-label="inventory.py"><code class="language-python">"""Inventory helpers."""
+import os, sys
+from typing import List, Optional
+
+
+def add_item(item, bucket=[]):
+    bucket.append(item)
+    return bucket
+
+
+def find(items: List[str], name: str) -&gt; Optional[str]:
+    """Find an item."""
+    for i in range(len(items)):
+        if items[i] == name:
+            return items[i]
+    try:
+        return None
+    except:
+        pass</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run ruff check inventory.py --output-format concise
+inventory.py:2:1: E401 [*] Multiple imports on one line
+inventory.py:2:1: I001 [*] Import block is un-sorted or un-formatted
+inventory.py:2:8: F401 [*] `os` imported but unused
+inventory.py:2:12: F401 [*] `sys` imported but unused
+inventory.py:3:1: UP035 `typing.List` is deprecated, use `list` instead
+inventory.py:6:5: D103 Missing docstring in public function
+inventory.py:6:27: B006 Do not use mutable data structures for argument defaults
+inventory.py:11:17: UP006 [*] Use `list` instead of `List` for type annotation
+inventory.py:11:42: UP045 [*] Use `X | None` for type annotations
+inventory.py:18:5: E722 Do not use bare `except`
+Found 10 errors.
+[*] 6 fixable with `--fix` (1 unsafe fix available with `--fix --unsafe-fixes`).
+
+$ pixi run ruff check --fix .     # apply the safe fixes ([*])
+$ pixi run ruff format .          # reformat everything
+$ pixi run ruff rule B006         # read the full explanation of a rule</code></pre>
+    <p><code>B006</code> isn't about style. It's a real bug, and you can see it happen:</p>
+    <div class="runnable" data-title="Predict: why B006 exists" data-predict>
+<textarea>
+def add_item(item, bucket=[]):
+    bucket.append(item)
+    return bucket
+
+print(add_item("apple"))
+print(add_item("pear"))
+</textarea>
+    </div>
+    <p>A linter is "just" a program that walks the <strong>abstract syntax tree</strong> (AST). This toy one,
+      written with the standard <code>ast</code> module, detects B006 and F401. Try adding more violations:</p>
+    <div class="runnable" data-title="Write a tiny linter with ast">
+<textarea>
+import ast
+
+source = '''
+import os
+import json
+
+def add_item(item, bucket=[]):
+    bucket.append(item)
+    return json.dumps(bucket)
+
+def ok(item, bucket=None):
+    return item
+'''
+
+tree = ast.parse(source)
+problems = []
+
+# B006: mutable default arguments
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef):
+        for default in node.args.defaults:
+            if isinstance(default, (ast.List, ast.Dict, ast.Set)):
+                problems.append((default.lineno, "B006", f"mutable default in {node.name}()"))
+
+# F401: imported names never used
+imported = {}
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            imported[alias.asname or alias.name] = node.lineno
+used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+for name, line in imported.items():
+    if name not in used:
+        problems.append((line, "F401", f"`{name}` imported but unused"))
+
+for line, code, msg in sorted(problems):
+    print(f"line {line}: {code} {msg}")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Silence a single line with <code># noqa: B006</code>, and always name the code.
+      A bare <code># noqa</code> hides every future problem on that line too. If you need many ignores, prefer
+      <code>per-file-ignores</code> with a comment explaining why.</p></aside>
+    <aside class="callout warn"><p>Ruff's <code>--unsafe-fixes</code> can change behaviour, for example by
+      rewriting a mutable default. Review those diffs by hand. The safe <code>[*]</code> fixes are designed to
+      keep behaviour exactly the same.</p></aside>
+    <p><strong>Remember:</strong> <code>ruff check</code> finds problems, <code>--fix</code> repairs the safe ones,
+      and <code>ruff format</code> ends style debates. Choose rule groups with <code>select</code> and scope any
+      exceptions with <code>per-file-ignores</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="mypy">
+    <h2>mypy in strict mode</h2>
+    <p>Python ignores type hints at runtime (<a href="m16-typing.html">M16</a>). <strong>mypy</strong> is a
+      <em>static type checker</em>: it reads the hints and proves, before anything runs, that values flow
+      consistently. Plain mypy is lenient, and it skips functions without annotations entirely. <strong>Strict
+      mode</strong> turns on the flags that make the guarantee mean something:</p>
+    <ul>
+      <li><code>disallow_untyped_defs</code>: every function must be annotated.</li>
+      <li><code>disallow_any_generics</code>: no bare <code>list</code>; say <code>list[str]</code>.</li>
+      <li><code>warn_return_any</code>: don't silently return <code>Any</code> from a typed function.</li>
+      <li><code>no_implicit_reexport</code>, <code>strict_equality</code>, <code>warn_unused_ignores</code>, and
+        more.</li>
+    </ul>
+    <pre data-label="pyproject.toml (this repository)"><code class="language-toml">[tool.mypy]
+python_version = "3.12"   # the oldest supported Python, so newer-only APIs are flagged
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+files = ["src"]</code></pre>
+    <pre data-label="Terminal (real output)"><code class="language-bash">$ pixi run mypy --strict inventory.py
+inventory.py:6: error: Function is missing a type annotation  [no-untyped-def]
+inventory.py:11: error: Missing return statement  [return]
+inventory.py:24: error: Incompatible return value type (got "float", expected "int")  [return-value]
+Found 3 errors in 1 file (checked 1 source file)</code></pre>
+    <p>The third error is a bug that no test may have caught yet. <code>total()</code> claims to return
+      <code>int</code> but returns a float. The interpreter doesn't care at all, which is exactly why you want a
+      checker:</p>
+    <div class="runnable" data-title="Python does not enforce hints at runtime">
+<textarea>
+def total(prices: dict[str, float]) -> int:
+    return round(sum(prices.values()), 2)
+
+result = total({"tea": 3.5, "cake": 4.25})
+print(result, type(result).__name__)   # a float, despite "-> int"
+print(total.__annotations__)
+</textarea>
+    </div>
+    <aside class="callout pro"><p><strong>Why mypy runs twice in this harness.</strong> The pre-commit hook runs mypy
+      in pre-commit's <em>own</em> isolated environment, on changed files only. That's why the hook config lists
+      <code>additional_dependencies: [structlog]</code>: without it, mypy there couldn't see structlog's types.
+      <code>pixi run check</code> runs mypy over all of <code>src/</code> in the full Pixi environment. The
+      first is fast and the second is complete, and each catches failures the other misses.</p></aside>
+    <aside class="callout tip"><p>Adopting strict mode on an old codebase? Turn it on per module with
+      <code>[[tool.mypy.overrides]]</code> and expand a little each week. A <code># type: ignore[code]</code> must
+      name its error code, and <code>warn_unused_ignores</code> tells you when one is no longer needed.</p></aside>
+    <p><strong>Remember:</strong> hints are only as trustworthy as the checker that enforces them. Strict mypy
+      in CI turns type hints into guarantees.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="pre-commit">
+    <h2>pre-commit hooks and the restage trap</h2>
+    <p>Git can run scripts at certain moments. A <strong>pre-commit hook</strong> runs before a commit is recorded,
+      and if it fails, the commit is refused. The <strong>pre-commit</strong> framework manages these hooks: it
+      installs each tool at a pinned version in its own environment and runs it on the files you're
+      committing.</p>
+    <pre data-label=".pre-commit-config.yaml (this repository)"><code class="language-yaml">repos:
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]          # checks the message, not the code
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        additional_dependencies: [structlog]</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">pixi run bootstrap                 # pre-commit install (+ the commit-msg hook type)
+pixi run pre-commit-all            # pre-commit run --all-files
+pixi run pre-commit autoupdate     # bump every rev to the latest release (review the diff!)</code></pre>
+    <p><strong>The auto-fix restage trap.</strong> Git commits what's in the <em>staging area</em> (the index), not
+      what's in your working files. When a hook <em>fixes</em> a file (ruff <code>--fix</code> removing an import,
+      ruff-format re-wrapping a line), it writes the fix to your working copy and then <strong>fails</strong> with
+      "files were modified by this hook". The staged version is still the unfixed one. If you just run
+      <code>git commit</code> again without restaging, you're committing the same broken content and you'll get
+      the same failure.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 170" role="img" aria-label="Restage trap">
+        <rect x="10" y="20" width="150" height="50" rx="8" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="85" y="42" text-anchor="middle" fill="var(--fg)" font-size="13">Working tree</text>
+        <text x="85" y="60" text-anchor="middle" fill="var(--fg-muted)" font-size="11">fixed by hook</text>
+        <rect x="205" y="20" width="150" height="50" rx="8" fill="var(--viz-3)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="280" y="42" text-anchor="middle" fill="var(--fg)" font-size="13">Staging area</text>
+        <text x="280" y="60" text-anchor="middle" fill="var(--fg-muted)" font-size="11">still unfixed</text>
+        <rect x="400" y="20" width="150" height="50" rx="8" fill="var(--viz-2)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="475" y="42" text-anchor="middle" fill="var(--fg)" font-size="13">Commit</text>
+        <text x="475" y="60" text-anchor="middle" fill="var(--fg-muted)" font-size="11">refused</text>
+        <line x1="160" y1="45" x2="205" y2="45" stroke="var(--fg-muted)" stroke-dasharray="4 3"/>
+        <line x1="355" y1="45" x2="400" y2="45" stroke="var(--fg-muted)"/>
+        <text x="182" y="100" text-anchor="middle" fill="var(--fg)" font-size="12">git add</text>
+        <text x="182" y="116" text-anchor="middle" fill="var(--fg-muted)" font-size="11">(the missing step)</text>
+        <path d="M85 70 C 85 110, 280 110, 280 70" fill="none" stroke="var(--viz-1)"/>
+        <text x="280" y="150" text-anchor="middle" fill="var(--fg-muted)" font-size="12">Fix → git add the changed files → commit again</text>
+      </svg>
+      <figcaption>Hooks fix your working files, but the commit takes its content from the staging area.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Simulate the trap">
+<textarea>
+working = {"app.py": "import os\nprint('hi')\n"}
+staged = dict(working)                       # git add app.py
+
+def ruff_fix_hook(files):
+    """Pretend hook: removes the unused import from the WORKING copy, fails if it changed anything."""
+    changed = False
+    for name, text in files.items():
+        fixed = text.replace("import os\n", "")
+        if fixed != text:
+            working[name] = fixed
+            changed = True
+    return not changed
+
+def git_commit():
+    ok = ruff_fix_hook(staged)               # hooks inspect the staged content
+    print("commit", "succeeded" if ok else "refused: files were modified by this hook")
+
+git_commit()
+git_commit()                                 # same staged content, same failure
+staged = dict(working)                       # git add app.py  (restage the fix)
+git_commit()
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Never use <code>git commit --no-verify</code> to "get past" a failing hook. The
+      hook found a problem, and CI will find it too, just later and more publicly. Fix the problem, restage, and
+      commit.</p></aside>
+    <p><strong>Remember:</strong> pre-commit runs pinned tools on staged files. When a hook auto-fixes something,
+      <code>git add</code> the fixed files and commit again.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="structlog">
+    <h2>Structured logging with structlog</h2>
+    <p>In beginner code, <code>print()</code> is how you see what's happening. In production code, <strong>never
+      print</strong>. Here's why:</p>
+    <ul>
+      <li><code>print</code> writes to stdout, which may <em>be</em> your program's output (a CLI that emits JSON, a
+        pipe). Diagnostics mixed into it corrupt that output.</li>
+      <li>It has no levels, so you can't turn debug chatter off in production or turn it on while investigating.</li>
+      <li>It produces prose like <code>"User 42 bought 3 items"</code>, which a log aggregator (Datadog, Loki,
+        CloudWatch, ELK) can only search with fragile regexes.</li>
+      <li>It carries no context: no timestamp, request id, or module.</li>
+    </ul>
+    <p>The stdlib <code>logging</code> module solves levels and destinations, but its records are still format
+      strings, its configuration is global and fiddly, and attaching context needs adapters and filters. This
+      course uses <strong>structlog</strong>. Every log call is an <strong>event</strong> plus
+      <strong>key-value pairs</strong>, and it flows through a chain of <strong>processors</strong> (plain
+      functions) that enrich it and finally <em>render</em> it as JSON or <code>key=value</code> text.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["log.info(event, **kw)", "merge_contextvars", "add_log_level", "TimeStamper", "JSONRenderer"]}'></div>
+    <p>A processor has the signature <code>processor(logger, method_name, event_dict) -&gt; event_dict</code>. The
+      last one returns a string. Because the whole design is just functions passing dicts along, you can rebuild
+      it in a few lines and watch it work. structlog itself isn't available in the browser, so this cell is a
+      faithful miniature:</p>
+    <div class="runnable" data-title="Build a structlog-style processor chain">
+<textarea>
+import json
+from datetime import datetime, UTC
+
+def add_log_level(logger, method_name, event_dict):
+    event_dict["level"] = method_name
+    return event_dict
+
+def add_timestamp(logger, method_name, event_dict):
+    event_dict["timestamp"] = datetime(2026, 10, 14, 9, 30, tzinfo=UTC).isoformat()  # fixed for a stable demo
+    return event_dict
+
+def json_renderer(logger, method_name, event_dict):
+    return json.dumps(event_dict)
+
+def kv_renderer(logger, method_name, event_dict):
+    event = event_dict.pop("event")
+    rest = " ".join(f"{k}={v!r}" for k, v in sorted(event_dict.items()))
+    return f"event={event!r} {rest}"
+
+class BoundLogger:
+    def __init__(self, processors, context=None):
+        self.processors = processors
+        self.context = dict(context or {})
+
+    def bind(self, **new):
+        return BoundLogger(self.processors, {**self.context, **new})   # a NEW logger; the original is unchanged
+
+    def _log(self, method_name, event, **kw):
+        result = {**self.context, "event": event, **kw}
+        for proc in self.processors:
+            result = proc(self, method_name, result)
+        print(result)
+
+    def info(self, event, **kw):
+        self._log("info", event, **kw)
+
+    def warning(self, event, **kw):
+        self._log("warning", event, **kw)
+
+prod = BoundLogger([add_log_level, add_timestamp, json_renderer])
+dev = BoundLogger([add_log_level, kv_renderer])
+
+req = prod.bind(request_id="r-81", user_id=42)
+req.info("order_placed", order_id=1001, total=59.9)
+req.warning("payment_retry", attempt=2)
+dev.bind(user_id=42).info("order_placed", order_id=1001)
+</textarea>
+    </div>
+    <p>The real thing, as configured in this repository's <code>src/practicum/log.py</code>, renders key=value
+      for humans and JSON for machines:</p>
+    <pre data-label="src/practicum/log.py (this repository)"><code class="language-python">def configure_logging(*, json: bool = False) -&gt; None:
+    """Configure structlog for key=value console output or JSON output."""
+    renderer: structlog.typing.Processor = (
+        structlog.processors.JSONRenderer() if json else structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
+    )
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            renderer,
+        ],
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),   # logs go to stderr, never stdout
+        cache_logger_on_first_use=False,
+    )</code></pre>
+    <p>A fuller production setup adds context variables (so a request id set once appears on every line in that
+      request), level filtering, and exceptions rendered as structured data:</p>
+    <div class="runnable" data-local="structlog is not available in the browser; run it with pixi run python logdemo.py (structlog is in this repo's default environment)." data-title="Production structlog configuration">
+<textarea>
+import structlog
+
+def configure(*, production: bool) -> None:
+    shared = [
+        structlog.contextvars.merge_contextvars,      # pull in bind_contextvars(...) values
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+    ]
+    if production:
+        processors = [*shared, structlog.processors.dict_tracebacks, structlog.processors.JSONRenderer()]
+        level = "info"
+    else:
+        processors = [*shared, structlog.dev.ConsoleRenderer()]
+        level = "debug"
+    structlog.configure(
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(level),   # drops debug() calls cheaply in prod
+        cache_logger_on_first_use=True,
+    )
+
+configure(production=True)
+log = structlog.get_logger()
+log.debug("not shown in production")
+structlog.contextvars.bind_contextvars(request_id="r-81")
+req = log.bind(user_id=42)
+req.info("order_placed", order_id=1001, total=59.90)
+try:
+    1 / 0
+except ZeroDivisionError:
+    req.exception("payment_failed")
+</textarea>
+    </div>
+    <pre data-label="Output (abridged)"><code class="language-json">{"user_id": 42, "order_id": 1001, "total": 59.9, "event": "order_placed", "request_id": "r-81", "level": "info", "timestamp": "2026-10-15T01:06:53.648248Z"}
+{"user_id": 42, "event": "payment_failed", "request_id": "r-81", "level": "error", "timestamp": "...", "exception": [{"exc_type": "ZeroDivisionError", "exc_value": "division by zero", "frames": [...]}]}</code></pre>
+    <ul>
+      <li><strong>Event names are identifiers</strong>, not sentences: <code>order_placed</code>, not
+        <code>"Order was placed!"</code>. You'll search and count by them.</li>
+      <li><strong>Data goes in keys</strong>, not in the event string: <code>log.info("order_placed", order_id=1001)</code>.</li>
+      <li><strong><code>bind()</code> returns a new logger</strong> with extra context. <code>bind_contextvars</code>
+        sets context for the current thread or async task, which suits request ids in web servers.</li>
+      <li><strong>Configure once</strong>, at the program's entry point (<code>main()</code>). Libraries only call
+        <code>structlog.get_logger()</code> and never configure.</li>
+      <li><strong>Dev vs prod</strong>: colourful <code>ConsoleRenderer</code> locally, <code>JSONRenderer</code>
+        in production, chosen by a flag or an environment variable.</li>
+    </ul>
+    <aside class="callout warn"><p>Never log secrets: passwords, tokens, full card numbers, or session cookies.
+      Structured logs make this <em>easier</em> to get right, because you can add a processor that redacts any key
+      named <code>password</code> or <code>token</code>. Some traceback renderers also capture local variables, so
+      check what yours includes (more in <a href="m43-debugging-security.html">M43</a>).</p></aside>
+    <p><strong>Remember:</strong> production code logs events with key-value data through a processor chain,
+      configured once in <code>main()</code>. Render JSON in production and readable text in development, and
+      never use <code>print()</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="commits-changelog">
+    <h2>Conventional Commits and git-cliff changelogs</h2>
+    <p><strong>Conventional Commits</strong> is a small grammar for commit messages that both humans and tools can
+      read:</p>
+    <pre data-label="Format"><code class="language-bash">type(scope)!: short description in the imperative
+
+optional body explaining what and why
+
+BREAKING CHANGE: optional footer describing the incompatibility
+Refs: #123</code></pre>
+    <table>
+      <thead><tr><th>Type</th><th>Meaning</th><th>Version bump</th></tr></thead>
+      <tbody>
+        <tr><td><code>feat</code></td><td>A new user-visible feature</td><td>minor</td></tr>
+        <tr><td><code>fix</code></td><td>A bug fix</td><td>patch</td></tr>
+        <tr><td><code>docs</code>, <code>test</code>, <code>refactor</code>, <code>perf</code>, <code>chore</code>, <code>ci</code>, <code>build</code></td><td>Everything else</td><td>none (by default)</td></tr>
+        <tr><td>any type with <code>!</code> or a <code>BREAKING CHANGE:</code> footer</td><td>An incompatible change</td><td>major</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Good examples"><code class="language-bash">feat(cli): add --json output to textstats
+fix(grade): report a missing project id instead of crashing
+docs: explain the restage trap in CONTRIBUTING
+refactor(log)!: rename configure() to configure_logging()</code></pre>
+    <p>This repo enforces the format with the <code>conventional-pre-commit</code> hook at the
+      <code>commit-msg</code> stage, and generates <code>CHANGELOG.md</code> with <strong>git-cliff</strong>
+      (<code>pixi run changelog</code>). Its configuration lives in <code>pyproject.toml</code>:</p>
+    <pre data-label="pyproject.toml (this repository)"><code class="language-toml">[tool.git-cliff.git]
+conventional_commits = true
+filter_unconventional = true
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Refactoring" },
+    { message = "^chore", skip = true },
+]</code></pre>
+    <p>The parsers are regular expressions tried in order: the first match decides the group. Here's the same
+      logic in Python:</p>
+    <div class="runnable" data-title="git-cliff grouping in miniature">
+<textarea>
+import re
+from collections import defaultdict
+
+parsers = [
+    (r"^feat", "Features"),
+    (r"^fix", "Bug Fixes"),
+    (r"^doc", "Documentation"),
+    (r"^perf", "Performance"),
+    (r"^refactor", "Refactoring"),
+    (r"^chore", None),          # skip
+]
+commits = [
+    "feat(cli): add --json output",
+    "fix(grade): handle missing project id",
+    "chore: bump pre-commit revs",
+    "docs: explain the restage trap",
+    "WIP stuff",                # unconventional: filtered out
+    "feat: support py315 preview cells",
+]
+conventional = re.compile(r"^[a-z]+(\([^)]+\))?!?: .+")
+groups = defaultdict(list)
+for msg in commits:
+    if not conventional.match(msg):
+        continue
+    for pattern, group in parsers:
+        if re.match(pattern, msg):
+            if group:
+                groups[group].append(msg.split(": ", 1)[1])
+            break
+
+for group, items in groups.items():
+    print(f"### {group}")
+    for item in items:
+        print(f"- {item[0].upper()}{item[1:]}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> use the form <code>type(scope): imperative description</code>. With that
+      grammar, tools can write the changelog for you and work out the next version number from the history.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="branching">
+    <h2>Branches and pull-request hygiene</h2>
+    <p><code>main</code> should always be releasable. Work happens on short-lived branches whose name says what
+      kind of change it is, and each change reaches <code>main</code> through a <strong>pull request</strong> (PR)
+      that CI and a reviewer approve:</p>
+    <table>
+      <thead><tr><th>Branch</th><th>Use</th><th>Commit type</th></tr></thead>
+      <tbody>
+        <tr><td><code>feature/add-json-output</code></td><td>New behaviour</td><td><code>feat:</code></td></tr>
+        <tr><td><code>bugfix/csv-export-crash</code></td><td>A bug found in normal development</td><td><code>fix:</code></td></tr>
+        <tr><td><code>hotfix/payment-null-pointer</code></td><td>An urgent production fix, released immediately</td><td><code>fix:</code></td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Terminal: one change, start to finish"><code class="language-bash">git switch main &amp;&amp; git pull --ff-only
+git switch -c feature/add-json-output
+# ... edit, pixi run test, pixi run fmt, pixi run lint &amp;&amp; pixi run check ...
+pixi run ci                                  # must exit 0
+git add -p                                   # stage deliberately, hunk by hunk
+git commit -m "feat(cli): add --json output to textstats"
+git push -u origin feature/add-json-output
+gh pr create --fill
+gh pr checks --watch                         # wait for every check to go green
+gh pr merge --squash --delete-branch
+git switch main &amp;&amp; git pull --ff-only &amp;&amp; git fetch --prune</code></pre>
+    <div class="card-grid">
+      <div class="card"><h4>Small and focused</h4><p>One concern per PR. A 200-line PR gets a real review, while a
+        2,000-line PR gets a rubber stamp.</p></div>
+      <div class="card"><h4>Describe the why</h4><p>Say what changed, why, and how you verified it. Link the
+        issue.</p></div>
+      <div class="card"><h4>Green before review</h4><p>Don't ask people to review code the machines have already
+        rejected.</p></div>
+      <div class="card"><h4>Never rewrite shared history</h4><p>Don't amend or force-push commits others may have
+        pulled. Add a new commit instead.</p></div>
+    </div>
+    <p><strong>Remember:</strong> keep <code>main</code> releasable, use one branch and one PR per concern, and
+      merge only on green CI.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="ci">
+    <h2>GitHub Actions CI, act, and coverage gates</h2>
+    <p><strong>Continuous integration</strong> (CI) runs the harness on a clean machine for every push and PR, so
+      "it passed on my laptop" is no longer the evidence. <strong>GitHub Actions</strong> reads YAML workflows from
+      <code>.github/workflows/</code>. The official <code>prefix-dev/setup-pixi</code> action installs Pixi, can
+      cache environments, and installs from your lockfile.</p>
+    <pre data-label=".github/workflows/ci.yml"><code class="language-yaml">name: CI
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  unit:
+    name: Unit tests (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false                 # let every version report, even if one fails
+      matrix:
+        environment: [py312, py313, py314]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: ${{ matrix.environment }}
+          locked: true                 # fail if pixi.lock is stale
+          cache: true
+      - run: pixi run -e ${{ matrix.environment }} test
+
+  full:
+    name: Full CI gate
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          locked: true
+          cache: true
+      - run: pixi run ci</code></pre>
+    <aside class="callout warn"><p>A matrix only tests what you <em>use</em>. A matrix of
+      <code>python-version: ["3.12", "3.13", "3.14"]</code> whose steps never reference
+      <code>${{ matrix.python-version }}</code> runs the same 3.14 environment three times. With Pixi, make each
+      matrix value a Pixi environment and pass it to <code>-e</code>, as above.</p></aside>
+    <p><strong>Running CI locally with act.</strong> <code>act</code> (installed here through the
+      <code>dev</code> feature) reads the same workflow files and runs the jobs in Docker containers, so you can
+      debug a workflow without push-and-pray:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run act                        # act --container-architecture linux/amd64 (needed on Apple Silicon)
+pixi run act -- -j unit             # one job
+pixi run act -- pull_request -l     # list the jobs a pull_request event would run</code></pre>
+    <p><strong>Coverage gates.</strong> <code>pytest-cov</code> measures which lines your tests executed.
+      <code>--cov-fail-under=90</code> makes the run fail below 90%, so coverage can't slowly erode. Coverage
+      tells you what's <em>untested</em>. It can't tell you what's <em>well</em> tested, because a test that
+      runs a line without asserting anything still counts.</p>
+    <pre data-label="Terminal (illustrative)"><code class="language-bash">$ pixi run cov
+Name                      Stmts   Miss  Cover   Missing
+-------------------------------------------------------
+src/practicum/cli.py         70      4    94%   88-91
+src/practicum/site.py       150      9    94%   140-148
+-------------------------------------------------------
+TOTAL                       610     38    94%
+Required test coverage of 90% reached. Total coverage: 93.77%</code></pre>
+    <div class="runnable" data-title="Compute a coverage gate">
+<textarea>
+report = {
+    "src/app/cli.py": (66, 70),      # (covered statements, total statements)
+    "src/app/core.py": (140, 150),
+    "src/app/io.py": (20, 40),
+}
+threshold = 90.0
+
+covered = sum(c for c, _ in report.values())
+total = sum(t for _, t in report.values())
+percent = 100 * covered / total
+print(f"TOTAL {percent:.2f}%  ->  {'PASS' if percent >= threshold else 'FAIL'}")
+for name, (c, t) in sorted(report.items(), key=lambda kv: kv[1][0] / kv[1][1]):
+    print(f"  {100 * c / t:5.1f}%  {name}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> CI is the harness run on a clean machine, installed from the locked
+      environment. Make each matrix entry a Pixi environment, debug workflows locally with act, and let the
+      coverage gate stop gradual decline.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="code-review">
+    <h2>Code review checklists</h2>
+    <p>Once the machines have checked formatting, lint, types, and coverage, a reviewer's attention goes to what
+      only a person can judge. A checklist keeps reviews consistent:</p>
+    <ul class="checklist" data-id="m42-review">
+      <li><strong>Correctness:</strong> does it do what the PR says? What about edge cases (empty input, None, huge
+        input, unicode, time zones)?</li>
+      <li><strong>Tests:</strong> do they assert behaviour, not implementation details? Would they fail if the code
+        were wrong?</li>
+      <li><strong>Errors:</strong> are exceptions specific, never bare <code>except</code>, never swallowed
+        silently?</li>
+      <li><strong>Security:</strong> is user input validated? Any SQL or shell built from strings? Any secrets in
+        code or logs?</li>
+      <li><strong>Design:</strong> is it the simplest thing that works? Is there duplication of an existing
+        helper?</li>
+      <li><strong>Naming and docs:</strong> would a newcomer understand it? Are docstrings present on public
+        APIs?</li>
+      <li><strong>Logging:</strong> structured events with useful keys, no <code>print()</code>?</li>
+      <li><strong>Dependencies:</strong> is a new package justified, on conda-forge, and added via Pixi?</li>
+    </ul>
+    <aside class="callout pro"><p>Phrase review comments as questions or suggestions ("What happens if
+      <code>items</code> is empty?"), mark nitpicks as optional, and approve once the remaining comments are
+      optional. Review the code, not the person.</p></aside>
+    <p><strong>Remember:</strong> machines check style, so people review correctness, tests, security, and
+      design.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m42-e1" data-title="Parse a Conventional Commit">
+      <div class="exercise-prompt">
+        <p>Write <code>parse_commit(message)</code>. Look at the message's <em>first line</em>. If it matches
+          <code>type(scope)!: description</code> (scope and <code>!</code> optional, type is lowercase letters),
+          return a dict with keys <code>type</code>, <code>scope</code> (or <code>None</code>),
+          <code>breaking</code> (bool), and <code>description</code>. <code>breaking</code> is also
+          <code>True</code> when any later line starts with <code>BREAKING CHANGE:</code>. Return <code>None</code>
+          for unconventional messages.</p>
+      </div>
+<textarea class="starter">
+import re
+
+def parse_commit(message: str) -> dict | None:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_simple():
+    assert parse_commit("fix: handle empty input") == {"type": "fix", "scope": None, "breaking": False, "description": "handle empty input"}, "plain fix"
+
+def test_scope():
+    r = parse_commit("feat(cli): add --json")
+    assert r["scope"] == "cli" and r["type"] == "feat", "scope is captured"
+
+def test_bang():
+    assert parse_commit("refactor(log)!: rename configure")["breaking"] is True, "! marks a breaking change"
+
+def test_footer():
+    msg = "feat: new config format\n\nBREAKING CHANGE: old files are rejected"
+    assert parse_commit(msg)["breaking"] is True, "a BREAKING CHANGE: footer marks a breaking change"
+
+def test_unconventional():
+    assert parse_commit("WIP stuff") is None, "unconventional messages return None"
+    assert parse_commit("Fix: capitalised type") is None, "types are lowercase"
+    assert parse_commit("feat:missing space") is None, "a space must follow the colon"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A regex like
+        <code>^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$</code> captures all four parts. Use
+        <code>message.splitlines()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+PATTERN = re.compile(r"^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$")
+
+def parse_commit(message: str) -&gt; dict | None:
+    lines = message.splitlines()
+    if not lines:
+        return None
+    match = PATTERN.match(lines[0])
+    if match is None:
+        return None
+    kind, scope, bang, description = match.groups()
+    footer_break = any(line.startswith("BREAKING CHANGE:") for line in lines[1:])
+    return {"type": kind, "scope": scope, "breaking": bool(bang) or footer_break, "description": description}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m42-e2" data-title="Compute the next release version">
+      <div class="exercise-prompt">
+        <p>Write <code>next_version(current, messages)</code>. <code>current</code> is
+          <code>"MAJOR.MINOR.PATCH"</code> and <code>messages</code> is a list of commit messages since that
+          release. Any breaking change bumps major. Otherwise any <code>feat</code> bumps minor. Otherwise any
+          <code>fix</code> or <code>perf</code> bumps patch. Otherwise return <code>current</code> unchanged.
+          Ignore unconventional messages. (Reuse your <code>parse_commit</code>; a copy is in the starter.)</p>
+      </div>
+<textarea class="starter">
+import re
+
+PATTERN = re.compile(r"^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$")
+
+def parse_commit(message):
+    lines = message.splitlines()
+    match = PATTERN.match(lines[0]) if lines else None
+    if match is None:
+        return None
+    kind, scope, bang, desc = match.groups()
+    brk = bool(bang) or any(l.startswith("BREAKING CHANGE:") for l in lines[1:])
+    return {"type": kind, "scope": scope, "breaking": brk, "description": desc}
+
+def next_version(current: str, messages: list[str]) -> str:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_patch():
+    assert next_version("1.4.2", ["fix: a", "docs: b"]) == "1.4.3", "a fix bumps patch"
+
+def test_minor_wins_over_patch():
+    assert next_version("1.4.2", ["fix: a", "feat(cli): b"]) == "1.5.0", "a feat bumps minor and resets patch"
+
+def test_major():
+    assert next_version("1.4.2", ["feat!: new api", "fix: x"]) == "2.0.0", "breaking bumps major"
+
+def test_footer_major():
+    assert next_version("0.9.0", ["fix: x\n\nBREAKING CHANGE: y"]) == "1.0.0", "footer breaking bumps major"
+
+def test_nothing():
+    assert next_version("3.0.1", ["chore: deps", "docs: typo", "random"]) == "3.0.1", "no release-worthy change"
+
+def test_perf():
+    assert next_version("2.0.0", ["perf: faster"]) == "2.0.1", "perf counts as a patch"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Parse every message, drop the <code>None</code>s, then check
+        for the most significant bump first.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+PATTERN = re.compile(r"^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$")
+
+def parse_commit(message):
+    lines = message.splitlines()
+    match = PATTERN.match(lines[0]) if lines else None
+    if match is None:
+        return None
+    kind, scope, bang, desc = match.groups()
+    brk = bool(bang) or any(l.startswith("BREAKING CHANGE:") for l in lines[1:])
+    return {"type": kind, "scope": scope, "breaking": brk, "description": desc}
+
+def next_version(current: str, messages: list[str]) -&gt; str:
+    major, minor, patch = (int(p) for p in current.split("."))
+    commits = [c for c in map(parse_commit, messages) if c is not None]
+    if any(c["breaking"] for c in commits):
+        return f"{major + 1}.0.0"
+    if any(c["type"] == "feat" for c in commits):
+        return f"{major}.{minor + 1}.0"
+    if any(c["type"] in {"fix", "perf"} for c in commits):
+        return f"{major}.{minor}.{patch + 1}"
+    return current</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m42-e3" data-title="Render a changelog section">
+      <div class="exercise-prompt">
+        <p>Write <code>render_changelog(version, messages)</code> that returns Markdown like git-cliff with this
+          repo's parsers. The first line is <code>## {version}</code>. Then, for each group <em>that has
+          commits</em>, in the order Features, Bug Fixes, Documentation, Performance, Refactoring: a blank line,
+          <code>### {group}</code>, then one <code>- {Description}</code> line per commit in input order, with the
+          description's first letter upper-cased. Use the first-line description only. <code>feat</code> →
+          Features, <code>fix</code> → Bug Fixes, <code>docs</code> → Documentation, <code>perf</code> →
+          Performance, <code>refactor</code> → Refactoring. Skip every other type and every unconventional
+          message. Lines are joined with <code>"\n"</code>, with no trailing newline.</p>
+      </div>
+<textarea class="starter">
+import re
+
+PATTERN = re.compile(r"^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$")
+GROUPS = {"feat": "Features", "fix": "Bug Fixes", "docs": "Documentation",
+          "perf": "Performance", "refactor": "Refactoring"}
+
+def render_changelog(version: str, messages: list[str]) -> str:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_full():
+    out = render_changelog("1.5.0", [
+        "fix(grade): handle missing id",
+        "feat(cli): add --json output",
+        "chore: bump revs",
+        "WIP",
+        "feat: py315 cells",
+        "docs: restage trap",
+    ])
+    expected = "\n".join([
+        "## 1.5.0",
+        "",
+        "### Features",
+        "- Add --json output",
+        "- Py315 cells",
+        "",
+        "### Bug Fixes",
+        "- Handle missing id",
+        "",
+        "### Documentation",
+        "- Restage trap",
+    ])
+    assert out == expected, "groups in fixed order, chore and unconventional skipped\n" + out
+
+def test_empty():
+    assert render_changelog("0.1.1", ["chore: x"]) == "## 0.1.1", "no groups means just the heading"
+
+def test_body_ignored():
+    out = render_changelog("2.0.0", ["perf: faster solve\n\nlong body here"])
+    assert out == "## 2.0.0\n\n### Performance\n- Faster solve", "only the first line is used"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Collect into a dict of lists keyed by group name, then iterate
+        over <code>GROUPS.values()</code> to get the fixed order.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+PATTERN = re.compile(r"^([a-z]+)(?:\(([^)]+)\))?(!)?: (.+)$")
+GROUPS = {"feat": "Features", "fix": "Bug Fixes", "docs": "Documentation",
+          "perf": "Performance", "refactor": "Refactoring"}
+
+def render_changelog(version: str, messages: list[str]) -&gt; str:
+    collected: dict[str, list[str]] = {group: [] for group in GROUPS.values()}
+    for message in messages:
+        first = message.splitlines()[0] if message else ""
+        match = PATTERN.match(first)
+        if match is None or match.group(1) not in GROUPS:
+            continue
+        desc = match.group(4)
+        collected[GROUPS[match.group(1)]].append(desc[0].upper() + desc[1:])
+    lines = [f"## {version}"]
+    for group, items in collected.items():
+        if items:
+            lines += ["", f"### {group}"] + [f"- {item}" for item in items]
+    return "\n".join(lines)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m42-e4" data-title="A key=value renderer">
+      <div class="exercise-prompt">
+        <p>Write the processor <code>render_kv(logger, method_name, event_dict)</code>, matching structlog's
+          <code>KeyValueRenderer(key_order=["event"], sort_keys=True)</code>. Output <code>event</code> first (if
+          present), then every other key in sorted order. Each pair is <code>key=repr(value)</code>, separated by
+          single spaces. Don't modify the input dict.</p>
+        <p>Example: <code>{"user_id": 42, "event": "user login", "level": "info"}</code> renders as
+          <code>event='user login' level='info' user_id=42</code>.</p>
+      </div>
+<textarea class="starter">
+def render_kv(logger, method_name, event_dict):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_example():
+    d = {"user_id": 42, "event": "user login", "level": "info"}
+    assert render_kv(None, "info", d) == "event='user login' level='info' user_id=42", "event first, then sorted keys, values repr'd"
+
+def test_no_event():
+    assert render_kv(None, "info", {"b": 2, "a": [1]}) == "a=[1] b=2", "sorted keys when there is no event"
+
+def test_not_mutated():
+    d = {"event": "x", "z": 1}
+    render_kv(None, "info", d)
+    assert d == {"event": "x", "z": 1}, "the input dict must not be modified"
+
+def test_none_and_bool():
+    assert render_kv(None, "info", {"event": "e", "ok": True, "err": None}) == "event='e' err=None ok=True", "repr of None and bools"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build a list of keys: <code>["event"]</code> if present, then
+        <code>sorted(k for k in event_dict if k != "event")</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def render_kv(logger, method_name, event_dict):
+    keys = ["event"] if "event" in event_dict else []
+    keys += sorted(k for k in event_dict if k != "event")
+    return " ".join(f"{k}={event_dict[k]!r}" for k in keys)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m42-e5" data-title="From print() to structured events">
+      <div class="exercise-prompt">
+        <p>This function reports progress with <code>print</code>:</p>
+<pre><code class="language-python">def import_rows(rows):
+    ok = 0
+    for i, row in enumerate(rows):
+        if "id" not in row:
+            print(f"Skipping row {i}: no id")
+            continue
+        ok += 1
+    print(f"Imported {ok} of {len(rows)} rows")
+    return ok</code></pre>
+        <p>Rewrite it as <code>import_rows(rows, log)</code>, where <code>log</code> is a structlog-style logger. For
+          each bad row call <code>log.warning("row_skipped", index=i, reason="missing_id")</code>, and at the end call
+          <code>log.info("import_finished", imported=ok, total=len(rows))</code>. Return <code>ok</code>. It must print
+          nothing.</p>
+      </div>
+<textarea class="starter">
+def import_rows(rows, log):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+class FakeLog:
+    def __init__(self):
+        self.events = []
+    def info(self, event, **kw):
+        self.events.append(("info", event, kw))
+    def warning(self, event, **kw):
+        self.events.append(("warning", event, kw))
+
+def test_events():
+    log = FakeLog()
+    result = import_rows([{"id": 1}, {"name": "x"}, {"id": 3}], log)
+    assert result == 2, "two rows have ids"
+    assert log.events == [
+        ("warning", "row_skipped", {"index": 1, "reason": "missing_id"}),
+        ("info", "import_finished", {"imported": 2, "total": 3}),
+    ], f"unexpected events: {log.events}"
+
+def test_no_print():
+    _, printed = capture_output(import_rows, [{"x": 1}], FakeLog())
+    assert printed == "", "production code must not print"
+
+def test_empty():
+    log = FakeLog()
+    assert import_rows([], log) == 0, "no rows imports nothing"
+    assert log.events == [("info", "import_finished", {"imported": 0, "total": 0})], "still logs completion"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Replace each <code>print</code> with a log call. The
+        variables you were formatting into the string become keyword arguments.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def import_rows(rows, log):
+    ok = 0
+    for i, row in enumerate(rows):
+        if "id" not in row:
+            log.warning("row_skipped", index=i, reason="missing_id")
+            continue
+        ok += 1
+    log.info("import_finished", imported=ok, total=len(rows))
+    return ok</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: add a full quality harness</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Harden an earlier project</span></div>
+      <div class="widget-body">
+        <p>Pick a project you built earlier. The <code>textstats</code> CLI from <a href="m41-pixi-packaging.html#mini-project">M41</a>
+          works well, as does your <a href="../projects/p01-budget-ledger.html">P01 budget ledger</a>. Give it
+          the same harness this repository uses. The goal is that a stranger can clone it, run
+          <code>pixi run bootstrap</code> and <code>pixi run ci</code>, and get a green result or a clear error.</p>
+        <h4>Steps</h4>
+        <ol>
+          <li>Create a branch: <code>git switch -c feature/quality-harness</code>.</li>
+          <li><code>pixi add --feature dev ruff mypy pytest pytest-cov pre-commit git-cliff structlog</code>
+            (structlog as a runtime dependency: <code>pixi add structlog</code>).</li>
+          <li>Add <code>[tool.ruff]</code> (line length 120, select E, F, I, UP, B, RUF, D, Google docstrings,
+            per-file-ignores for tests) and <code>[tool.mypy] strict = true</code> to
+            <code>pyproject.toml</code>. Fix every finding by hand. Don't silence them.</li>
+          <li>Replace every <code>print</code> in library code with structlog events. Add a
+            <code>configure_logging(json: bool)</code> called from <code>main()</code>, and a <code>--json</code>
+            flag.</li>
+          <li>Write <code>.pre-commit-config.yaml</code> with conventional-pre-commit, ruff, ruff-format, and mypy, and
+            add a <code>bootstrap</code> task.</li>
+          <li>Add tasks <code>fmt</code>, <code>lint</code>, <code>check</code>, <code>test</code>, <code>cov</code>
+            (<code>--cov-fail-under=90</code>), <code>changelog</code>, and <code>ci</code>, which uses
+            <code>depends-on</code>, fast checks first.</li>
+          <li>Add <code>.github/workflows/ci.yml</code> with setup-pixi and a py312/py313/py314 environment matrix.
+            Run it locally with <code>pixi run act</code>.</li>
+          <li>Commit with Conventional Commits, open a PR, and generate <code>CHANGELOG.md</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m42-mini">
+          <li><code>pixi run lint</code> and <code>pixi run check</code> pass with zero ignores added just to pass</li>
+          <li><code>grep -rn "print(" src/</code> finds nothing outside <code>main()</code>'s user-facing output</li>
+          <li>Logs go to stderr. <code>--json</code> emits one JSON object per line with <code>level</code> and <code>timestamp</code></li>
+          <li>A commit message like <code>"updated stuff"</code> is rejected by the commit-msg hook</li>
+          <li>You triggered the restage trap once on purpose and recovered by restaging</li>
+          <li><code>pixi run cov</code> enforces 90% and passes</li>
+          <li>The CI matrix really tests three Python versions (check the job logs for each version)</li>
+          <li><code>CHANGELOG.md</code> is generated by <code>pixi run changelog</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a structlog processor that redacts keys named <code>password</code>, <code>token</code>, or
+            <code>secret</code>, with a test.</li>
+          <li>Add <code>branch = true</code> to <code>[tool.coverage.run]</code> and see how the number changes.</li>
+          <li>Enable another ruff group (<code>SIM</code>, <code>PTH</code>, or <code>S</code> for security) and justify
+            each ignore.</li>
+          <li>Add a release job that computes the next version with <code>git cliff --bumped-version</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m42-quiz">
+<script type="application/json">
+{"title": "Code quality and tooling quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which ruff rule group catches unused imports and undefined names?", "options": ["<code>E</code>", "<code>F</code> (Pyflakes)", "<code>D</code>", "<code>UP</code>"], "answer": 1, "explanation": "<p>Pyflakes (<code>F</code>) finds real bugs such as <code>F401</code> unused import and <code>F821</code> undefined name.</p>"},
+  {"type": "output", "prompt": "What does the second call print?", "code": "def add(x, acc=[]):\n    acc.append(x)\n    return acc\nadd(1)\nprint(add(2))", "answer": "[1, 2]", "explanation": "<p>The default list is created once, at definition time, and shared between calls. That's ruff's <code>B006</code>. Use <code>None</code> and create the list inside the function.</p>"},
+  {"type": "single", "prompt": "Why does this repo ignore <code>E501</code> (line too long)?", "options": ["Long lines are fine", "<code>ruff format</code> already manages line length, so the lint rule would only add noise", "E501 is deprecated", "mypy handles it"], "answer": 1, "explanation": "<p>The formatter wraps code to 120 columns. Remaining long lines (URLs, strings) are usually intentional.</p>"},
+  {"type": "multi", "prompt": "What does mypy <code>strict = true</code> enforce?", "options": ["Every function must have annotations", "Generic types need parameters (<code>list[str]</code>)", "Code runs faster", "Returning <code>Any</code> from a typed function is reported"], "answer": [0, 1, 3], "explanation": "<p>Strict turns on <code>disallow_untyped_defs</code>, <code>disallow_any_generics</code>, <code>warn_return_any</code>, and more. It has no effect at runtime.</p>"},
+  {"type": "single", "prompt": "A ruff <code>--fix</code> hook modified your file and the commit was refused. What do you do?", "options": ["<code>git commit --no-verify</code>", "Run <code>git commit</code> again immediately", "<code>git add</code> the fixed files, then commit again", "Delete the hook"], "answer": 2, "explanation": "<p>The fix exists only in your working tree. The commit uses the staging area, so restage first.</p>"},
+  {"type": "single", "prompt": "Why does the pre-commit mypy hook list <code>additional_dependencies: [structlog]</code>?", "options": ["To install structlog in your Pixi env", "pre-commit runs mypy in its own isolated environment, which otherwise can't see structlog's types", "To log mypy output", "It is required for every hook"], "answer": 1, "explanation": "<p>Hook environments are separate from your project's environment. That's also why <code>pixi run check</code> runs mypy a second time with the full environment.</p>"},
+  {"type": "multi", "prompt": "Why is <code>print()</code> unsuitable for production diagnostics?", "options": ["It has no levels to filter", "It can corrupt stdout that is the program's real output", "Its prose is hard for log aggregators to query", "It is slower than any logger"], "answer": [0, 1, 2], "explanation": "<p>Speed isn't the issue. Structure, levels, destination, and context are.</p>"},
+  {"type": "single", "prompt": "Which is the best structlog call?", "options": ["<code>log.info(f\"User {uid} bought {n} items\")</code>", "<code>log.info(\"purchase\", user_id=uid, items=n)</code>", "<code>print(\"purchase\", uid, n)</code>", "<code>log.info(\"purchase: \" + str(uid))</code>"], "answer": 1, "explanation": "<p>A stable event name plus key-value data can be searched, counted, and graphed.</p>"},
+  {"type": "single", "prompt": "What does <code>log.bind(request_id=\"r-1\")</code> return?", "options": ["None; it mutates <code>log</code>", "A new logger whose events all include <code>request_id</code>", "A JSON string", "The event dict"], "answer": 1, "explanation": "<p>Bound loggers are immutable. <code>bind</code> returns a new one with more context.</p>"},
+  {"type": "text", "prompt": "Under Conventional Commits, which type bumps the minor version?", "answer": ["feat"], "explanation": "<p><code>feat</code> means minor, <code>fix</code> means patch, and <code>!</code> or <code>BREAKING CHANGE:</code> means major.</p>"},
+  {"type": "single", "prompt": "Which commit message is valid Conventional Commits?", "options": ["<code>Fixed the bug</code>", "<code>fix(parser): reject empty input</code>", "<code>fix - parser</code>", "<code>FIX: parser</code>"], "answer": 1, "explanation": "<p>The form is <code>type(scope): description</code>, with a lowercase type and a colon followed by a space.</p>"},
+  {"type": "single", "prompt": "A matrix lists <code>python-version: [\"3.12\",\"3.13\",\"3.14\"]</code> but every step runs <code>pixi run test</code>. What is tested?", "options": ["Three Python versions", "The default Pixi environment three times", "Nothing", "Only 3.12"], "answer": 1, "explanation": "<p>The matrix value is never used. Map each entry to a Pixi environment and run <code>pixi run -e py312 test</code>, and so on.</p>"},
+  {"type": "single", "prompt": "What does <code>--cov-fail-under=90</code> guarantee?", "options": ["90% of behaviour is correct", "The run fails if less than 90% of measured lines executed during tests", "90% of tests pass", "The code is 90% typed"], "answer": 1, "explanation": "<p>It measures executed lines, not assertion quality, but it stops coverage from quietly declining.</p>"},
+  {"type": "text", "prompt": "Which tool runs GitHub Actions workflows locally in Docker?", "answer": ["act", "nektos/act"], "explanation": "<p><code>act</code> (here <code>pixi run act</code>) reads <code>.github/workflows</code> and runs the jobs locally.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Automate every mechanical check, order it fast-fail first, and leave human review for judgement.</li>
+      <li>ruff lints (<code>E F I UP B RUF D</code>) and formats. <code>--fix</code> applies safe fixes and
+        <code>per-file-ignores</code> scopes exceptions.</li>
+      <li>Strict mypy turns hints into guarantees. In this harness it runs both in pre-commit and over the full
+        tree.</li>
+      <li>pre-commit runs pinned hooks on staged files. After an auto-fix, restage and commit again, and never use
+        <code>--no-verify</code>.</li>
+      <li>structlog: events plus key-value pairs through processors, rendered as JSON in production and console
+        text in development. Configure it once in <code>main()</code> and log to stderr, never with print.</li>
+      <li>Conventional Commits drive changelogs (git-cliff) and version bumps. Use feature/bugfix/hotfix branches
+        and small PRs.</li>
+      <li>CI with setup-pixi installs from the lockfile with each matrix entry as a Pixi environment. Use act to
+        debug locally, and let the coverage gate stop decline.</li>
+    </ul>
+    <div class="flashcards" data-title="Tooling">
+<script type="application/json">
+[{"front": "ruff <code>select = [\"E\",\"F\",\"I\",\"UP\",\"B\",\"RUF\",\"D\"]</code>", "back": "pycodestyle, Pyflakes, isort, pyupgrade, bugbear, ruff-specific, pydocstyle."},
+ {"front": "B006", "back": "Mutable default argument: the default is shared across calls. Use <code>None</code>."},
+ {"front": "<code># noqa</code> best practice", "back": "Always name the code: <code># noqa: B006</code>. Prefer per-file-ignores with a reason."},
+ {"front": "mypy strict", "back": "All defs typed, generics parameterised, warn on returning Any, and more. Enforced in CI."},
+ {"front": "Restage trap", "back": "A hook fixed the working copy but the staged copy is unchanged. <code>git add</code>, then commit again."},
+ {"front": "structlog processor signature", "back": "<code>(logger, method_name, event_dict) -&gt; event_dict</code>; the last processor renders."},
+ {"front": "<code>bind()</code> vs <code>bind_contextvars()</code>", "back": "bind: new logger with context. bind_contextvars: context for the current thread or async task."},
+ {"front": "Dev vs prod logging", "back": "ConsoleRenderer for humans locally; JSONRenderer and level filtering in production."},
+ {"front": "Conventional Commit form", "back": "<code>type(scope)!: description</code> + optional body + <code>BREAKING CHANGE:</code> footer."},
+ {"front": "git-cliff", "back": "Generates CHANGELOG.md from Conventional Commits using regex commit_parsers."},
+ {"front": "setup-pixi in CI", "back": "Installs Pixi, caches environments, <code>locked: true</code> fails on a stale lockfile."},
+ {"front": "act", "back": "Runs GitHub Actions workflows locally in Docker: <code>pixi run act</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.astral.sh/ruff/rules/">Ruff rules reference</a></li>
+      <li><a href="https://mypy.readthedocs.io/en/stable/command_line.html">mypy command line and strict flags</a></li>
+      <li><a href="https://pre-commit.com/">pre-commit documentation</a></li>
+      <li><a href="https://www.structlog.org/en/stable/">structlog documentation</a></li>
+      <li><a href="https://www.conventionalcommits.org/en/v1.0.0/">Conventional Commits 1.0.0</a> and <a href="https://git-cliff.org/docs/">git-cliff</a></li>
+      <li><a href="https://github.com/prefix-dev/setup-pixi">prefix-dev/setup-pixi</a> and <a href="https://nektosact.com/">act user guide</a></li>
+      <li><a href="https://docs.python.org/3/library/ast.html">The ast module</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,1149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M17 · Testing with pytest · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m17">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 17</p>
+    <h1>Testing with pytest</h1>
+    <p class="lede">Automated tests are how professionals change code without fear. This module teaches pytest, the
+      standard Python test framework, from your first <code>assert</code> to fixtures, parametrization, mocking,
+      coverage gates, and test-driven development.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m07-exceptions.html">M07 Errors &amp; Exceptions</a>, <a href="m15-decorators.html">M15 Decorators &amp; Context Managers</a></span></div>
+    <ul class="objectives">
+      <li>Explain why we test, and place unit, integration, and end-to-end tests on the testing pyramid</li>
+      <li>Write pytest tests, understand discovery and assertion rewriting, and run them with Pixi</li>
+      <li>Use fixtures (scopes, <code>yield</code> teardown, <code>tmp_path</code>, <code>monkeypatch</code>, <code>capsys</code>) and <code>@pytest.mark.parametrize</code></li>
+      <li>Test exceptions with <code>pytest.raises(..., match=...)</code> and isolate dependencies with <code>unittest.mock</code>, knowing when not to mock</li>
+      <li>Measure coverage with pytest-cov and enforce a 90% gate</li>
+      <li>Practice test-driven development (red, green, refactor) and preview property-based testing with Hypothesis</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-test">
+    <h2>Why test?</h2>
+    <p>A <strong>test</strong> is code that runs other code and checks the result automatically. You have been testing
+      all along: every time you ran a script and eyeballed the output, that was a manual test. Automated tests make that
+      check repeatable, fast, and exact.</p>
+    <ul>
+      <li><strong>Catch regressions.</strong> A <em>regression</em> is something that used to work and broke. A test
+        suite re-checks everything on every change, in seconds.</li>
+      <li><strong>Enable refactoring.</strong> Refactoring means improving the structure of code without changing its
+        behavior. Without tests you cannot know you did not change behavior.</li>
+      <li><strong>Document behavior.</strong> A test named <code>test_withdraw_more_than_balance_raises</code> is an
+        executable specification.</li>
+      <li><strong>Improve design.</strong> Code that is hard to test (hidden global state, functions that both compute and
+        print, hard-coded clocks) is usually hard to reuse too. Tests push you towards small, explicit functions.</li>
+    </ul>
+    <h3>The testing pyramid</h3>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 250" role="img" aria-label="Testing pyramid: many unit tests at the bottom, fewer integration tests, few end-to-end tests at the top">
+        <polygon points="280,15 360,85 200,85" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--viz-3)"/>
+        <text x="280" y="70" text-anchor="middle" fill="var(--fg)" font-size="13">E2E</text>
+        <polygon points="200,90 360,90 430,160 130,160" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--viz-2)"/>
+        <text x="280" y="132" text-anchor="middle" fill="var(--fg)" font-size="14">Integration</text>
+        <polygon points="130,165 430,165 510,235 50,235" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--viz-1)"/>
+        <text x="280" y="206" text-anchor="middle" fill="var(--fg)" font-size="15">Unit tests</text>
+        <text x="520" y="40" fill="var(--fg-muted)" font-size="11" text-anchor="end">slow, brittle, realistic</text>
+        <text x="520" y="245" fill="var(--fg-muted)" font-size="11" text-anchor="end">fast, focused, many</text>
+      </svg>
+      <figcaption>Most tests should be fast unit tests; fewer integration tests; a handful of end-to-end tests.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>Unit tests</strong> check one function or class in isolation, with no network, database, or real
+        files. They run in milliseconds, so you can have thousands.</li>
+      <li><strong>Integration tests</strong> check that components work together against real resources: a real
+        temporary directory, a real SQLite database, an HTTP layer intercepted at the boundary.</li>
+      <li><strong>End-to-end (E2E) tests</strong> drive the whole system the way a user would. They are the most
+        realistic and the slowest and flakiest, so keep them few.</li>
+    </ul>
+    <aside class="callout think"><p>Why not just write E2E tests, since they test "everything"? Think about what happens
+      when one fails: which of the 40 components broke? Unit tests point at the culprit; E2E tests only say "something
+      is wrong".</p></aside>
+  </section>
+
+  <section class="lesson-section" id="first-tests">
+    <h2>Tests are just functions with asserts</h2>
+    <p>In pytest, a test is a function whose name starts with <code>test_</code> and that uses plain
+      <code>assert</code> statements. If the function returns normally, the test <em>passes</em>. If an
+      <code>assert</code> fails (raising <code>AssertionError</code>) or any other exception escapes, it
+      <em>fails</em>.</p>
+    <p>A good test has three parts, often called <strong>Arrange, Act, Assert</strong> (AAA): set up the inputs, call
+      the code under test, check the outcome. Keep each test focused on one behavior and name it after that behavior.</p>
+    <p>Step through one test and watch the three phases happen. When the <code>assert</code> holds, the function simply
+      returns: that is a pass.</p>
+    <div class="tracer" data-title="Arrange, act, assert">
+<textarea>
+def apply_discount(price, percent):
+    return round(price * (1 - percent / 100), 2)
+
+def test_quarter_off():
+    price = 80.0                           # arrange
+    result = apply_discount(price, 25)     # act
+    assert result == 60.0, f"got {result}" # assert
+
+test_quarter_off()
+outcome = "passed"
+</textarea>
+    </div>
+    <p>To demystify pytest, here is a 20-line test runner that does the core of what it does: <em>discover</em>
+      functions named <code>test_*</code>, run each one, and report passes and failures with the assertion message.
+      Run it, then break <code>average</code> and run it again.</p>
+    <div class="runnable" data-title="A tiny pytest, built from scratch">
+<textarea>
+def average(xs):
+    if not xs:
+        raise ValueError("average of empty list")
+    return sum(xs) / len(xs)
+
+# ---- tests: Arrange, Act, Assert -------------------------------------------
+def test_average_of_three():
+    data = [1, 2, 3]                 # arrange
+    result = average(data)           # act
+    assert result == 2, f"expected 2, got {result}"   # assert
+
+def test_average_handles_floats():
+    assert average([0.5, 1.5]) == 1.0
+
+def test_average_rounds_down():      # a deliberately wrong expectation
+    assert average([70, 81]) == 75, f"average([70, 81]) was {average([70, 81])}"
+
+def test_empty_list_raises():
+    try:
+        average([])
+    except ValueError:
+        return
+    raise AssertionError("average([]) should raise ValueError")
+
+# ---- the runner: discovery + execution + report ------------------------------
+def run_tests(namespace):
+    tests = {n: f for n, f in namespace.items() if n.startswith("test_") and callable(f)}
+    passed = 0
+    for name, fn in tests.items():
+        try:
+            fn()
+        except AssertionError as e:
+            print(f"FAILED {name}: {e}")
+        except Exception as e:
+            print(f"ERROR  {name}: {type(e).__name__}: {e}")
+        else:
+            passed += 1
+            print(f"PASSED {name}")
+    print(f"{passed} passed, {len(tests) - passed} failed")
+
+run_tests(dict(globals()))
+</textarea>
+    </div>
+    <aside class="callout note" data-title="How this course's exercise checker mirrors pytest"><p>Every exercise on this
+      site uses the same idea. When you press <em>Check</em>, your code runs first, then the hidden test file runs in
+      the same namespace, and every function named <code>test_*</code> is collected and called, just like pytest
+      discovery. Each <code>assert</code> message becomes the feedback you see. Two helpers stand in for pytest
+      fixtures: <code>program_output</code> holds everything your code printed (like reading <code>capsys</code>), and
+      <code>capture_output(func, *args)</code> returns <code>(result, printed_text)</code>. When you move to real
+      projects, the same tests run unchanged under <code>pixi run pytest</code>.</p></aside>
+    <p><strong>Remember:</strong> a test is a <code>test_</code> function that arranges, acts, and asserts. Failing means
+      an exception escaped.</p>
+  </section>
+
+  <section class="lesson-section" id="pytest-basics">
+    <h2>pytest: setup, discovery, and assertion rewriting</h2>
+    <h3>Installing and running with Pixi</h3>
+    <p>pytest is a development dependency. Add it (and the coverage plugin you will use later) to your workspace. Put
+      them in a feature if you keep separate production and development environments.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi add pytest pytest-cov                  # or: pixi add --feature test pytest pytest-cov
+pixi run pytest                             # run every test
+pixi run pytest -v                          # verbose: one line per test
+pixi run pytest tests/unit/test_stats.py    # one file
+pixi run pytest -k "average and not empty"  # tests whose names match an expression
+pixi run pytest -x --lf                     # stop at the first failure; rerun only last failures</code></pre>
+    <pre data-label="pixi.toml"><code class="language-toml">[tasks]
+test = "pytest tests/unit"
+test-integration = "pytest tests/integration"
+cov = "pytest tests --cov=src --cov-report=term-missing --cov-fail-under=90"</code></pre>
+    <h3>Discovery rules</h3>
+    <p>pytest <strong>collects</strong> tests automatically. By default it searches the directories you give it (or
+      <code>testpaths</code> from configuration) for:</p>
+    <ul>
+      <li>files named <code>test_*.py</code> or <code>*_test.py</code>;</li>
+      <li>inside them, functions named <code>test_*</code>;</li>
+      <li>and classes named <code>Test*</code> (without an <code>__init__</code>) containing <code>test_*</code> methods.</li>
+    </ul>
+    <pre data-label="pyproject.toml"><code class="language-toml">[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = ["integration: tests that touch real files, databases, or networks"]</code></pre>
+    <h3>Assertion rewriting</h3>
+    <p>With plain Python, a failing <code>assert a == b</code> just says <code>AssertionError</code>. pytest
+      <strong>rewrites</strong> the assert statements in test modules when it imports them, so a failure shows the values
+      of every sub-expression. You get this for free, which is why pytest tests use bare <code>assert</code> instead of
+      <code>self.assertEqual</code>-style methods:</p>
+    <pre data-label="tests/test_demo.py"><code class="language-python">def average(xs):
+    return sum(xs) / len(xs)
+
+
+def test_average_of_three():
+    assert average([1, 2, 3]) == 2
+
+
+def test_average_rounding():
+    scores = {"ada": [90, 85], "alan": [70, 81]}
+    assert average(scores["alan"]) == 75</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run pytest tests/test_demo.py
+collected 2 items
+
+tests/test_demo.py .F                                                    [100%]
+
+=================================== FAILURES ===================================
+____________________________ test_average_rounding _____________________________
+
+    def test_average_rounding():
+        scores = {"ada": [90, 85], "alan": [70, 81]}
+&gt;       assert average(scores["alan"]) == 75
+E       assert 75.5 == 75
+E        +  where 75.5 = average([70, 81])
+
+tests/test_demo.py:11: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_demo.py::test_average_rounding - assert 75.5 == 75
+========================= 1 failed, 1 passed in 0.08s ==========================</code></pre>
+    <p>Read failure output from the bottom up: the summary names the test, the <code>E</code> lines show the actual
+      values, and the <code>&gt;</code> marks the failing line.</p>
+    <aside class="callout warn"><p>Comparing floats with <code>==</code> is fragile (<code>0.1 + 0.2 != 0.3</code>). Use
+      <code>pytest.approx</code>: <code>assert total == pytest.approx(0.3)</code>, or <code>math.isclose</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="fixtures">
+    <h2>Fixtures: reusable setup and teardown</h2>
+    <p>Tests often need the same setup: a sample object, a temporary directory, a database connection. A
+      <strong>fixture</strong> is a function decorated with <code>@pytest.fixture</code> that provides such a value. A
+      test asks for a fixture simply by having a <strong>parameter with the fixture's name</strong>; pytest calls the
+      fixture and passes in the result. This is <em>dependency injection</em> by name.</p>
+    <pre data-label="tests/unit/test_cart.py"><code class="language-python">import pytest
+from shop.cart import Cart
+
+
+@pytest.fixture
+def cart() -&gt; Cart:
+    c = Cart()
+    c.add("apple", price=0.5, qty=4)
+    return c
+
+
+def test_total(cart: Cart) -&gt; None:       # pytest sees "cart" and injects the fixture
+    assert cart.total() == 2.0
+
+
+def test_remove(cart: Cart) -&gt; None:      # a fresh Cart: fixtures run again per test by default
+    cart.remove("apple")
+    assert cart.total() == 0</code></pre>
+    <h3>Teardown with <code>yield</code> and scopes</h3>
+    <p>If a fixture <code>yield</code>s instead of returning, the code after <code>yield</code> runs after the test
+      finishes, pass or fail. It is a context manager in disguise (compare <code>@contextmanager</code> in M15). The
+      <code>scope</code> argument controls how often the fixture is created: <code>"function"</code> (default, once per
+      test), <code>"class"</code>, <code>"module"</code>, <code>"package"</code>, or <code>"session"</code> (once per run).
+      Use wide scopes only for expensive, read-only resources, since shared mutable state makes tests depend on each
+      other.</p>
+    <pre><code class="language-python">@pytest.fixture(scope="module")
+def db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("create table users (name text)")
+    yield conn                      # tests run here
+    conn.close()                    # teardown, once after the last test in the module</code></pre>
+    <p>Fixtures can use other fixtures, and fixtures defined in a <code>conftest.py</code> file are available to every
+      test in that directory and below, without importing.</p>
+    <h3>Built-in fixtures you will use constantly</h3>
+    <div class="tabs">
+      <div class="tab" data-label="tmp_path">
+        <p>A fresh <code>pathlib.Path</code> to an empty temporary directory, unique to each test. Never write test
+          files into your project directory.</p>
+        <pre><code class="language-python">def test_save_and_load(tmp_path):
+    path = tmp_path / "notes.json"
+    save({"a": 1}, path)
+    assert load(path) == {"a": 1}</code></pre>
+      </div>
+      <div class="tab" data-label="monkeypatch">
+        <p>Temporarily replace attributes, dict items, or environment variables; everything is undone after the test.</p>
+        <pre><code class="language-python">def test_reads_api_key(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setattr("shop.pricing.TAX_RATE", 0.0)
+    assert load_settings().api_key == "test-key"</code></pre>
+      </div>
+      <div class="tab" data-label="capsys">
+        <p>Captures what the code under test printed to stdout and stderr.</p>
+        <pre><code class="language-python">def test_greeting(capsys):
+    main(["--name", "Ada"])
+    out, err = capsys.readouterr()
+    assert out == "Hello, Ada!\n"
+    assert err == ""</code></pre>
+      </div>
+    </div>
+    <div class="runnable" data-local="pytest runs from the command line on files in your workspace." data-title="Fixtures in a real test file">
+<textarea>
+# tests/unit/test_fixtures_demo.py  ->  pixi run pytest tests/unit/test_fixtures_demo.py -v
+import json
+import pytest
+
+@pytest.fixture
+def settings_file(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    yield path
+    # teardown would go here; tmp_path is cleaned up by pytest itself
+
+def load_theme(path):
+    return json.loads(path.read_text(encoding="utf-8"))["theme"]
+
+def test_load_theme(settings_file):
+    assert load_theme(settings_file) == "dark"
+
+def test_prints(capsys):
+    print("hello")
+    assert capsys.readouterr().out == "hello\n"
+
+def test_env(monkeypatch):
+    import os
+    monkeypatch.setenv("MODE", "test")
+    assert os.environ["MODE"] == "test"
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> ask for a fixture by naming it as a parameter; <code>yield</code> for teardown; default
+      to function scope; reach for <code>tmp_path</code>, <code>monkeypatch</code>, and <code>capsys</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="parametrize">
+    <h2>Parametrize and marks</h2>
+    <p>Copy-pasting a test to try five inputs is a smell. <code>@pytest.mark.parametrize</code> runs one test function
+      once per row of arguments, and reports each row as a separate test:</p>
+    <pre><code class="language-python">import pytest
+
+@pytest.mark.parametrize(
+    ("year", "expected"),
+    [
+        (2024, True),     # divisible by 4
+        (2023, False),
+        (1900, False),    # century, not divisible by 400
+        (2000, True),     # divisible by 400
+    ],
+    ids=["div4", "plain", "century", "div400"],
+)
+def test_is_leap(year: int, expected: bool) -&gt; None:
+    assert is_leap(year) is expected</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run pytest -v -k is_leap
+test_dates.py::test_is_leap[div4] PASSED
+test_dates.py::test_is_leap[plain] PASSED
+test_dates.py::test_is_leap[century] PASSED
+test_dates.py::test_is_leap[div400] PASSED</code></pre>
+    <p>A <strong>mark</strong> is a label attached to a test with a decorator. pytest has built-in marks and lets you
+      define your own:</p>
+    <ul>
+      <li><code>@pytest.mark.skip(reason="...")</code> and <code>@pytest.mark.skipif(sys.platform == "win32", reason="...")</code>.</li>
+      <li><code>@pytest.mark.xfail(reason="...")</code>: expected to fail (a known bug). Link to an issue in the reason so
+        it does not become permanent.</li>
+      <li>Custom marks such as <code>@pytest.mark.integration</code>, registered in <code>markers</code> in configuration,
+        let you select groups: <code>pixi run pytest -m "not integration"</code>.</li>
+    </ul>
+    <p>The browser has no pytest, but the idea of parametrization is just a loop over cases with a helpful message per
+      case. Predict which rows fail:</p>
+    <div class="runnable" data-title="Predict: a hand-rolled parametrize" data-predict>
+<textarea>
+def is_leap(year):
+    return year % 4 == 0 and year % 100 != 0      # bug: forgot the 400 rule
+
+cases = [(2024, True), (2023, False), (1900, False), (2000, True)]
+for year, expected in cases:
+    actual = is_leap(year)
+    status = "PASS" if actual is expected else "FAIL"
+    print(f"{status} is_leap({year}) -> {actual}, expected {expected}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="exceptions">
+    <h2>Testing exceptions</h2>
+    <p>Error handling is behavior too, and it is where bugs hide because it rarely runs. Test that the right exception
+      is raised with <code>pytest.raises</code>, a context manager. The optional <code>match</code> argument is a regular
+      expression searched in the exception's message; <code>as excinfo</code> gives you the exception for further
+      checks.</p>
+    <pre><code class="language-python">import pytest
+
+def test_withdraw_too_much():
+    account = Account(balance=10)
+    with pytest.raises(InsufficientFunds, match=r"balance is 10") as excinfo:
+        account.withdraw(25)
+    assert excinfo.value.shortfall == 15
+    assert account.balance == 10          # and the failed call changed nothing</code></pre>
+    <aside class="callout danger"><p>Keep the <code>with pytest.raises</code> block as small as possible: just the one
+      call that should raise. If you put the setup inside it too, an unexpected exception of the same type in the setup
+      makes the test pass for the wrong reason.</p></aside>
+    <p>How does <code>pytest.raises</code> work? It is a context manager whose <code>__exit__</code> checks the
+      exception type and suppresses it if it matches, exactly the pattern from M15. Here is a simplified version:</p>
+    <div class="runnable" data-title="A simplified pytest.raises">
+<textarea>
+import re
+
+class raises:
+    def __init__(self, expected, match=None):
+        self.expected, self.match, self.value = expected, match, None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            raise AssertionError(f"DID NOT RAISE {self.expected.__name__}")
+        if not issubclass(exc_type, self.expected):
+            return False                                  # let unexpected errors propagate
+        if self.match and not re.search(self.match, str(exc)):
+            raise AssertionError(f"pattern {self.match!r} not found in {str(exc)!r}")
+        self.value = exc
+        return True                                       # swallow the expected error
+
+with raises(ZeroDivisionError, match="division") as info:
+    1 / 0
+print("caught:", repr(info.value))
+
+try:
+    with raises(KeyError):
+        {"a": 1}["a"]
+except AssertionError as e:
+    print("test would fail:", e)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mocking">
+    <h2>Mocking with <code>unittest.mock</code>, and when not to</h2>
+    <p>A unit test should not send emails, charge credit cards, or call a weather API. A <strong>test double</strong>
+      stands in for such a dependency. The standard library's <code>unittest.mock</code> provides the most flexible
+      kind, the <strong>mock</strong>: an object that accepts any call, returns whatever you configure, and records how
+      it was used so you can assert on it afterwards.</p>
+    <ul>
+      <li><code>Mock()</code> / <code>MagicMock()</code>: every attribute access returns another mock; calls are
+        recorded. <code>MagicMock</code> also supports dunder methods such as <code>len()</code> and iteration.</li>
+      <li><code>m.method.return_value = 42</code>: what a call returns.</li>
+      <li><code>m.method.side_effect = ConnectionError("down")</code>: raise instead (or a list of values to return in
+        turn, or a function to call).</li>
+      <li><code>m.method.assert_called_once_with(...)</code>, <code>m.method.call_count</code>,
+        <code>m.method.call_args_list</code>: verify the interaction.</li>
+      <li><code>Mock(spec=RealClass)</code>: only attributes that exist on <code>RealClass</code> are allowed, so a typo
+        such as <code>m.chrage()</code> raises <code>AttributeError</code> instead of silently "working".
+        <code>create_autospec(RealClass)</code> also checks call signatures.</li>
+    </ul>
+    <div class="runnable" data-title="Mocks record what happened">
+<textarea>
+from unittest.mock import Mock, create_autospec
+
+class PaymentGateway:
+    def charge(self, customer_id: str, cents: int) -> str:
+        raise NotImplementedError("talks to the bank")
+
+def checkout(cart_total_cents, customer_id, gateway):
+    if cart_total_cents <= 0:
+        raise ValueError("nothing to charge")
+    receipt = gateway.charge(customer_id, cart_total_cents)
+    return f"paid: {receipt}"
+
+gateway = Mock(spec=PaymentGateway)
+gateway.charge.return_value = "rcpt-001"
+
+print(checkout(1999, "cust-7", gateway))
+gateway.charge.assert_called_once_with("cust-7", 1999)
+print("calls:", gateway.charge.call_args_list)
+
+try:
+    gateway.chrage("typo", 1)
+except AttributeError as e:
+    print("spec caught a typo:", e)
+
+strict = create_autospec(PaymentGateway, instance=True)
+try:
+    strict.charge("only-one-arg")
+except TypeError as e:
+    print("autospec caught a bad call:", e)
+
+gateway.charge.side_effect = ConnectionError("bank offline")
+try:
+    checkout(500, "cust-8", gateway)
+except ConnectionError as e:
+    print("side_effect raised:", e)
+</textarea>
+    </div>
+    <h3><code>patch</code>: replace a name for the duration of a test</h3>
+    <p>When code looks up a dependency by name instead of receiving it as an argument, <code>unittest.mock.patch</code>
+      temporarily replaces that name. The golden rule: <strong>patch where the name is looked up, not where it is
+      defined</strong>. If <code>shop/report.py</code> does <code>from datetime import date</code>, you patch
+      <code>"shop.report.date"</code>, not <code>"datetime.date"</code>.</p>
+    <div class="runnable" data-title="patch as a context manager">
+<textarea>
+import random
+from unittest.mock import patch
+
+def roll_dice():
+    return random.randint(1, 6) + random.randint(1, 6)
+
+with patch("random.randint", side_effect=[6, 6]) as fake:
+    print("double six:", roll_dice())
+    print("randint called", fake.call_count, "times with", fake.call_args_list)
+
+print("outside the block, randint is real again:", 2 <= roll_dice() <= 12)
+</textarea>
+    </div>
+    <h3>When not to mock</h3>
+    <ul>
+      <li><strong>Prefer dependency injection and simple fakes.</strong> If a function takes a <code>clock</code> or a
+        <code>notifier</code> parameter (as in <a href="../projects/p02-library-system.html">Project 2</a>), a ten-line
+        <code>FixedClock</code> class is clearer than patching <code>datetime</code>.</li>
+      <li><strong>Do not mock what you are testing</strong>, or the internals of your own code. Tests that assert
+        "function A called helper B with X" break on every refactor even when behavior is unchanged. Test results and
+        side effects at the boundary.</li>
+      <li><strong>Do not mock what you do not own</strong> in detail. Wrap third-party clients in a small adapter you own,
+        mock the adapter in unit tests, and test the adapter itself in integration tests.</li>
+      <li><strong>Use real lightweight resources</strong> when they are fast: <code>tmp_path</code> instead of mocking
+        <code>open</code>, an in-memory SQLite database instead of mocking SQL calls.</li>
+    </ul>
+    <aside class="callout pro"><p>A useful smell test: if a test needs more than two or three mocks, the code under test
+      probably has too many responsibilities. Split it so the logic is a pure function you can test without any mocks.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="coverage-organizing">
+    <h2>Coverage, organization, and Pixi tasks</h2>
+    <h3>Measuring coverage</h3>
+    <p><strong>Coverage</strong> measures which lines (and, with branch coverage, which <code>if</code>/<code>else</code>
+      paths) your tests executed. <code>pytest-cov</code> integrates <code>coverage.py</code> with pytest:</p>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run pytest tests --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=90
+Name                    Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------
+src/shop/__init__.py        2      0      0      0   100%
+src/shop/cart.py           41      2     12      1    94%   57-58
+src/shop/pricing.py        18      0      6      0   100%
+-------------------------------------------------------------------
+TOTAL                      61      2     18      1    96%
+Required test coverage of 90% reached. Total coverage: 96.20%</code></pre>
+    <p>The <code>Missing</code> column tells you exactly which lines never ran. <code>--cov-fail-under=90</code> makes
+      the command fail if total coverage drops below 90%, so CI can enforce it as a <strong>gate</strong>.</p>
+    <aside class="callout warn"><p>Coverage tells you what was <em>executed</em>, not what was <em>checked</em>. A test
+      that calls every function and asserts nothing reaches 100% and catches nothing. Treat coverage as a tool for
+      finding untested code, and a high gate as a floor, not proof of quality.</p></aside>
+    <h3>Organizing a test suite</h3>
+    <pre data-label="Project layout"><code class="language-bash">src/shop/
+    cart.py
+    pricing.py
+tests/
+    conftest.py              # fixtures shared by all tests
+    unit/
+        conftest.py          # unit-only fixtures (fakes, sample objects)
+        test_cart.py         # mirrors src/shop/cart.py
+        test_pricing.py
+    integration/
+        conftest.py          # real resources: temp databases, files
+        test_storage.py      # every test marked @pytest.mark.integration</code></pre>
+    <ul>
+      <li>Mirror the source layout so finding a module's tests is obvious.</li>
+      <li>Keep unit tests free of I/O so <code>pixi run test</code> stays fast enough to run after every change.</li>
+      <li>Every test must leave the world as it found it: use <code>tmp_path</code>, fixtures with teardown, and
+        transactions that roll back. Tests that depend on order or leftovers fail randomly.</li>
+    </ul>
+    <aside class="callout pixi"><p>Wire it together with tasks so everyone runs tests the same way:
+      <code>test = "pytest tests/unit"</code>, <code>test-integration = "pytest tests/integration"</code>, and
+      <code>cov = "pytest tests --cov=src --cov-report=term-missing --cov-fail-under=90"</code>. Then
+      <code>pixi run test</code> while coding and <code>pixi run cov</code> before every commit. This course's
+      repository uses exactly these tasks.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tdd">
+    <h2>Test-driven development: red, green, refactor</h2>
+    <p><strong>Test-driven development</strong> (TDD) flips the usual order: you write a failing test <em>first</em>,
+      then the simplest code that passes it, then clean up. Repeat in tiny steps.</p>
+    <ol>
+      <li><strong>Red:</strong> write one small test for behavior that does not exist yet. Run it and watch it fail
+        (this proves the test can fail).</li>
+      <li><strong>Green:</strong> write the simplest code that makes it pass. Resist the urge to write more.</li>
+      <li><strong>Refactor:</strong> with all tests green, improve names, remove duplication, and simplify. Run the tests
+        after each change.</li>
+    </ol>
+    <p>Let us do a classic kata (a small practice problem): convert integers to Roman numerals.</p>
+    <div class="tabs">
+      <div class="tab" data-label="1 · Red">
+        <pre><code class="language-python">def test_one():
+    assert to_roman(1) == "I"
+# NameError: to_roman is not defined. Red.</code></pre>
+      </div>
+      <div class="tab" data-label="2 · Green">
+        <pre><code class="language-python">def to_roman(n):
+    return "I"          # the simplest thing that passes. Really.</code></pre>
+      </div>
+      <div class="tab" data-label="3 · Red">
+        <pre><code class="language-python">def test_three():
+    assert to_roman(3) == "III"     # fails: got "I"</code></pre>
+      </div>
+      <div class="tab" data-label="4 · Green">
+        <pre><code class="language-python">def to_roman(n):
+    return "I" * n</code></pre>
+      </div>
+      <div class="tab" data-label="5 · Red, Green">
+        <pre><code class="language-python">def test_five_and_four():
+    assert to_roman(5) == "V"
+    assert to_roman(4) == "IV"
+
+def to_roman(n):
+    result = ""
+    if n &gt;= 5:
+        result += "V"; n -= 5
+    if n == 4:
+        return result + "IV"
+    return result + "I" * n</code></pre>
+      </div>
+      <div class="tab" data-label="6 · Refactor">
+        <pre><code class="language-python"># The if-chain is a pattern: a table of values, largest first, greedily subtracted.
+NUMERALS = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+            (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+def to_roman(n):
+    result = []
+    for value, symbol in NUMERALS:
+        count, n = divmod(n, value)
+        result.append(symbol * count)
+    return "".join(result)</code></pre>
+      </div>
+    </div>
+    <p>The refactor generalizes the solution, and the tests from every earlier step prove that it still works. Run the
+      final version against the whole growing suite:</p>
+    <div class="runnable" data-title="The kata's final state">
+<textarea>
+NUMERALS = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+            (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+def to_roman(n):
+    if not 0 < n < 4000:
+        raise ValueError("Roman numerals cover 1..3999")
+    result = []
+    for value, symbol in NUMERALS:
+        count, n = divmod(n, value)
+        result.append(symbol * count)
+    return "".join(result)
+
+cases = {1: "I", 3: "III", 4: "IV", 5: "V", 9: "IX", 14: "XIV", 40: "XL",
+         90: "XC", 400: "CD", 1994: "MCMXCIV", 2026: "MMXXVI", 3999: "MMMCMXCIX"}
+failures = [(n, to_roman(n), want) for n, want in cases.items() if to_roman(n) != want]
+print("failures:", failures or "none")
+
+for bad in (0, 4000):
+    try:
+        to_roman(bad)
+    except ValueError as e:
+        print(f"to_roman({bad}) raised ValueError: {e}")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Why write the deliberately "dumb" <code>return "I"</code>? Because it forces your
+      <em>next</em> test to demand real behavior. If you jump ahead, you write code no test requires, and that code is
+      untested by definition.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="property-based">
+    <h2>Preview: property-based testing with Hypothesis</h2>
+    <p>Example-based tests check the inputs you thought of. <strong>Property-based tests</strong> state a rule that must
+      hold for <em>all</em> inputs, and a library generates hundreds of inputs trying to break it. When it finds a
+      failure, it <strong>shrinks</strong> the input to the smallest example that still fails. The Python library is
+      <strong>Hypothesis</strong>.</p>
+    <p>Good properties: <em>round trips</em> (decode(encode(x)) == x), <em>invariants</em> (sorting keeps the length and
+      the items), <em>idempotence</em> (normalize(normalize(x)) == normalize(x)), and comparison with a slow but obviously
+      correct <em>oracle</em>.</p>
+    <div class="runnable" data-local="Hypothesis is a separate package; install it with pixi add hypothesis and run with pixi run pytest." data-title="Properties instead of examples">
+<textarea>
+# tests/unit/test_roman_properties.py
+from hypothesis import given, strategies as st
+
+from kata.roman import from_roman, to_roman
+
+@given(st.integers(min_value=1, max_value=3999))
+def test_round_trip(n):
+    assert from_roman(to_roman(n)) == n
+
+@given(st.lists(st.integers()))
+def test_sorting_keeps_items(xs):
+    result = sorted(xs)
+    assert len(result) == len(xs)
+    assert all(a <= b for a, b in zip(result, result[1:]))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Some exercises ask you to write code that passes tests; others ask you to write the <em>tests</em>. For the
+      latter, the checker runs your test function against a correct implementation (it must pass) and against several
+      buggy ones (it must catch each bug). This is called <strong>mutation testing</strong>, and it measures whether your
+      tests actually check anything.</p>
+
+    <div class="exercise" data-id="m17-e1" data-title="Read the tests, write the code">
+      <div class="exercise-prompt">
+        <p>The tests are the specification. Write <code>slugify(title)</code> so that they pass: lower-case, words joined
+          by single hyphens, only <code>a-z</code> and <code>0-9</code> kept, no leading or trailing hyphens. Read the
+          hidden tests' names in the results panel after your first <em>Check</em>.</p>
+      </div>
+<textarea class="starter">
+import re
+
+def slugify(title):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_simple_title():
+    assert slugify("Hello World") == "hello-world", "spaces become hyphens, letters lower-case"
+
+def test_punctuation_is_removed():
+    assert slugify("Python 3.14: What's New?") == "python-3-14-what-s-new", "dots, colons, apostrophes, and question marks all act as separators"
+
+def test_runs_of_separators_collapse():
+    assert slugify("  a -- b __ c  ") == "a-b-c", "collapse any run of non-alphanumerics into one hyphen"
+
+def test_empty_and_symbols_only():
+    assert slugify("") == "" and slugify("!!!") == "", "nothing left means an empty slug"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>re.sub(r"[^a-z0-9]+", "-", title.lower())</code> then
+        <code>.strip("-")</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+def slugify(title):
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m17-e2" data-title="Write tests that catch bugs">
+      <div class="exercise-prompt">
+        <p>Write <code>check_is_leap(is_leap)</code>: a test function that receives an implementation of
+          <code>is_leap(year)</code> and uses <code>assert</code> to check it thoroughly. It must pass for a correct
+          implementation and raise <code>AssertionError</code> for each of four hidden buggy versions (one ignores the
+          century rule, one ignores the 400 rule, one returns truthy ints instead of <code>True</code>/<code>False</code>,
+          and one accepts years below 1 instead of raising). Think about which years distinguish each rule.</p>
+        <p>Rules: divisible by 4 → leap, except centuries (divisible by 100) are not, except multiples of 400 are. Years
+          below 1 must raise <code>ValueError</code>.</p>
+      </div>
+<textarea class="starter">
+def check_is_leap(is_leap):
+    assert is_leap(2024) is True
+    # add more asserts...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _correct(year):
+    if year < 1:
+        raise ValueError("year must be positive")
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+def _no_century(year):
+    if year < 1:
+        raise ValueError("year must be positive")
+    return year % 4 == 0
+
+def _no_400(year):
+    if year < 1:
+        raise ValueError("year must be positive")
+    return year % 4 == 0 and year % 100 != 0
+
+def _truthy_int(year):
+    if year < 1:
+        raise ValueError("year must be positive")
+    return int(year % 4 == 0 and (year % 100 != 0 or year % 400 == 0))
+
+def _no_validation(year):
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+def _catches(buggy):
+    try:
+        check_is_leap(buggy)
+    except AssertionError:
+        return True
+    except Exception:
+        return True
+    return False
+
+def test_passes_correct_implementation():
+    check_is_leap(_correct)
+
+def test_catches_missing_century_rule():
+    assert _catches(_no_century), "your tests let 1900 be a leap year; check a century like 1900"
+
+def test_catches_missing_400_rule():
+    assert _catches(_no_400), "your tests let 2000 be a common year; check a multiple of 400"
+
+def test_catches_truthy_ints():
+    assert _catches(_truthy_int), "check the result `is True` / `is False`, not just truthiness"
+
+def test_catches_missing_validation():
+    assert _catches(_no_validation), "check that year 0 raises ValueError (use try/except inside your test)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>You need at least: a plain leap year, a plain common year, a
+        century (1900), and a multiple of 400 (2000), all compared with <code>is</code>; then a
+        <code>try: is_leap(0)</code> / <code>except ValueError</code> / <code>else: raise AssertionError(...)</code>
+        block.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def check_is_leap(is_leap):
+    assert is_leap(2024) is True, "2024 is divisible by 4"
+    assert is_leap(2023) is False, "2023 is not divisible by 4"
+    assert is_leap(1900) is False, "centuries are not leap years"
+    assert is_leap(2000) is True, "multiples of 400 are leap years"
+    try:
+        is_leap(0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("year 0 should raise ValueError")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m17-e3" data-title="Build your own raises()">
+      <div class="exercise-prompt">
+        <p>Write a context manager class <code>raises(expected, match=None)</code> that behaves like
+          <code>pytest.raises</code>:</p>
+        <ul>
+          <li>If the block raises <code>expected</code> (or a subclass), suppress it and store it in <code>.value</code>.</li>
+          <li>If <code>match</code> is given, <code>re.search(match, str(exc))</code> must succeed, otherwise raise
+            <code>AssertionError</code>.</li>
+          <li>If the block raises nothing, raise <code>AssertionError</code> with a message containing
+            <code>"DID NOT RAISE"</code>.</li>
+          <li>Any other exception type propagates unchanged.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import re
+
+class raises:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_catches_expected():
+    with raises(ValueError) as info:
+        int("nope")
+    assert isinstance(info.value, ValueError), ".value should hold the caught exception"
+
+def test_subclass_counts():
+    with raises(LookupError) as info:
+        {}["k"]
+    assert isinstance(info.value, KeyError), "KeyError is a LookupError, so it should be caught"
+
+def test_match():
+    with raises(ValueError, match=r"invalid literal"):
+        int("x")
+    try:
+        with raises(ValueError, match=r"^banana"):
+            int("x")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("a non-matching message should fail with AssertionError")
+
+def test_did_not_raise():
+    try:
+        with raises(ValueError):
+            pass
+    except AssertionError as e:
+        assert "DID NOT RAISE" in str(e), "message should say DID NOT RAISE"
+    else:
+        raise AssertionError("no exception in the block should fail")
+
+def test_other_errors_propagate():
+    try:
+        with raises(ValueError):
+            raise KeyError("other")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("unexpected exception types must propagate")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>All the logic is in <code>__exit__(self, exc_type, exc, tb)</code>.
+        Return <code>False</code> for a non-matching type, <code>True</code> to suppress, and raise
+        <code>AssertionError</code> for the two failure cases.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+class raises:
+    def __init__(self, expected, match=None):
+        self.expected = expected
+        self.match = match
+        self.value = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            raise AssertionError(f"DID NOT RAISE {self.expected.__name__}")
+        if not issubclass(exc_type, self.expected):
+            return False
+        if self.match is not None and not re.search(self.match, str(exc)):
+            raise AssertionError(f"pattern {self.match!r} not found in {str(exc)!r}")
+        self.value = exc
+        return True</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m17-e4" data-title="Test an interaction with a mock">
+      <div class="exercise-prompt">
+        <p><code>send_reminders(members, today, mailer)</code> should email every member whose loan is due
+          <em>tomorrow</em>, calling <code>mailer.send(email, subject)</code> once per such member with the subject
+          <code>"Due tomorrow"</code>, and return how many emails it sent. Members are dicts with <code>email</code> and
+          <code>due</code> (a <code>date</code>).</p>
+        <p>Write <code>check_send_reminders(send_reminders)</code>: build a <code>Mock(spec=Mailer)</code>, call the
+          function with a small list of members, and assert on the return value and on
+          <code>mailer.send</code>'s calls. It must pass for the correct version and catch three buggy ones.</p>
+      </div>
+<textarea class="starter">
+from datetime import date, timedelta
+from unittest.mock import Mock, call
+
+class Mailer:
+    def send(self, email: str, subject: str) -> None: ...
+
+def check_send_reminders(send_reminders):
+    mailer = Mock(spec=Mailer)
+    today = date(2026, 3, 1)
+    members = [
+        {"email": "ada@example.org", "due": date(2026, 3, 2)},     # due tomorrow
+        {"email": "alan@example.org", "due": date(2026, 3, 5)},    # not yet
+    ]
+    count = send_reminders(members, today, mailer)
+    # assert on count and on mailer.send's calls...
+</textarea>
+      <script type="text/x-python" class="tests">
+from datetime import timedelta as _td
+
+def _good(members, today, mailer):
+    sent = 0
+    for m in members:
+        if m["due"] == today + _td(days=1):
+            mailer.send(m["email"], "Due tomorrow")
+            sent += 1
+    return sent
+
+def _everyone(members, today, mailer):
+    for m in members:
+        mailer.send(m["email"], "Due tomorrow")
+    return len(members)
+
+def _wrong_subject(members, today, mailer):
+    sent = 0
+    for m in members:
+        if m["due"] == today + _td(days=1):
+            mailer.send(m["email"], "Overdue")
+            sent += 1
+    return sent
+
+def _wrong_count(members, today, mailer):
+    for m in members:
+        if m["due"] == today + _td(days=1):
+            mailer.send(m["email"], "Due tomorrow")
+    return 0
+
+def _catches(impl):
+    try:
+        check_send_reminders(impl)
+    except AssertionError:
+        return True
+    return False
+
+def test_correct_passes():
+    check_send_reminders(_good)
+
+def test_catches_emailing_everyone():
+    assert _catches(_everyone), "assert exactly which emails were sent (assert_called_once_with or call_args_list)"
+
+def test_catches_wrong_subject():
+    assert _catches(_wrong_subject), "check the subject argument too"
+
+def test_catches_wrong_count():
+    assert _catches(_wrong_count), "check the returned count"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Add <code>assert count == 1</code> and
+        <code>mailer.send.assert_called_once_with("ada@example.org", "Due tomorrow")</code>. The <code>assert_*</code>
+        methods raise <code>AssertionError</code> on mismatch.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from datetime import date, timedelta
+from unittest.mock import Mock, call
+
+class Mailer:
+    def send(self, email: str, subject: str) -&gt; None: ...
+
+def check_send_reminders(send_reminders):
+    mailer = Mock(spec=Mailer)
+    today = date(2026, 3, 1)
+    members = [
+        {"email": "ada@example.org", "due": date(2026, 3, 2)},
+        {"email": "alan@example.org", "due": date(2026, 3, 5)},
+    ]
+    count = send_reminders(members, today, mailer)
+    assert count == 1, f"expected 1 email, got {count}"
+    mailer.send.assert_called_once_with("ada@example.org", "Due tomorrow")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m17-e5" data-title="TDD the inverse: from_roman">
+      <div class="exercise-prompt">
+        <p>Continue the kata. Write <code>from_roman(s)</code> that converts a Roman numeral string to an int. Work test
+          by test: press <em>Check</em> early and make one failing test pass at a time. Invalid characters must raise
+          <code>ValueError</code>. (You do not need to reject malformed but valid-character strings like
+          <code>"IIII"</code>.)</p>
+      </div>
+<textarea class="starter">
+VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+
+def from_roman(s):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_single_symbols():
+    assert [from_roman(c) for c in "IVXLCDM"] == [1, 5, 10, 50, 100, 500, 1000], "single symbols"
+
+def test_additive():
+    assert from_roman("III") == 3 and from_roman("XVI") == 16, "symbols add when not decreasing"
+
+def test_subtractive():
+    assert from_roman("IV") == 4 and from_roman("IX") == 9, "a smaller symbol before a larger one subtracts"
+    assert from_roman("XL") == 40 and from_roman("CM") == 900
+
+def test_full_numbers():
+    assert from_roman("MCMXCIV") == 1994, "MCMXCIV is 1994"
+    assert from_roman("MMXXVI") == 2026
+
+def test_invalid_characters():
+    try:
+        from_roman("XIZ")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an invalid character should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Walk the string left to right. If a symbol's value is less than the
+        next symbol's value, subtract it; otherwise add it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+
+def from_roman(s):
+    try:
+        values = [VALUES[ch] for ch in s]
+    except KeyError as exc:
+        raise ValueError(f"invalid Roman numeral character: {exc.args[0]!r}") from None
+    total = 0
+    for i, value in enumerate(values):
+        if i + 1 &lt; len(values) and value &lt; values[i + 1]:
+            total -= value
+        else:
+            total += value
+    return total</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: TDD the string calculator kata</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">String calculator, one red-green-refactor at a time</span></div>
+      <div class="widget-body">
+        <p>Roy Osherove's <em>string calculator</em> is the classic TDD kata. The rule: read only the next requirement,
+          write a failing test for it, make it pass, refactor, commit. Do not read ahead.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init calculator &amp;&amp; cd calculator
+pixi add pytest pytest-cov
+mkdir -p src/calculator tests/unit
+# add [pypi-dependencies] calculator = { path = ".", editable = true } and the test/cov tasks to pixi.toml
+pixi run test</code></pre>
+        <ol>
+          <li><code>add("")</code> returns <code>0</code>; <code>add("4")</code> returns <code>4</code>; <code>add("1,2")</code> returns <code>3</code>.</li>
+          <li>Any number of numbers: <code>add("1,2,3,4")</code> returns <code>10</code>.</li>
+          <li>Newlines are separators too: <code>add("1\n2,3")</code> returns <code>6</code>.</li>
+          <li>Custom delimiter: <code>add("//;\n1;2")</code> returns <code>3</code>.</li>
+          <li>Negatives raise <code>ValueError("negatives not allowed: -1, -3")</code>, listing all of them.</li>
+          <li>Numbers bigger than 1000 are ignored: <code>add("2,1001")</code> returns <code>2</code>.</li>
+          <li>Delimiters of any length: <code>add("//[***]\n1***2***3")</code> returns <code>6</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m17-mini">
+          <li>Every step started with a failing test that you saw fail</li>
+          <li>Tests use <code>@pytest.mark.parametrize</code> for the input/output tables</li>
+          <li>The negatives rule is tested with <code>pytest.raises(ValueError, match=...)</code></li>
+          <li>A <code>cov</code> task enforces <code>--cov-fail-under=90</code> and passes (aim for 100% with branch coverage)</li>
+          <li><code>add</code> is refactored into small helpers (parse delimiter, split, validate) with tests still green</li>
+          <li>One commit per green step, with Conventional Commit messages (<code>test:</code>, <code>feat:</code>, <code>refactor:</code>)</li>
+        </ul>
+        <p><strong>Stretch:</strong> add a Hypothesis property (for any list of non-negative ints up to 1000, joining with
+          commas and calling <code>add</code> equals <code>sum</code>); support multiple custom delimiters
+          (<code>//[*][%]\n1*2%3</code>).</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m17-quiz">
+<script type="application/json">
+{"title": "Testing with pytest", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "According to the testing pyramid, which kind of test should you have the most of?", "options": ["End-to-end tests", "Integration tests", "Unit tests", "Manual tests"], "answer": 2, "explanation": "<p>Unit tests are fast and pinpoint failures, so they form the wide base. Integration and E2E tests are slower and fewer.</p>"},
+  {"type": "multi", "prompt": "Which will pytest collect by default?", "options": ["<code>test_cart.py::test_total</code>", "<code>cart_test.py::test_total</code>", "<code>tests.py::check_total</code>", "<code>test_cart.py::TestCart::test_total</code> (no <code>__init__</code>)"], "answer": [0, 1, 3], "explanation": "<p>Files <code>test_*.py</code> or <code>*_test.py</code>; functions <code>test_*</code>; classes <code>Test*</code> without <code>__init__</code>. <code>check_total</code> does not start with <code>test</code>.</p>"},
+  {"type": "single", "prompt": "Why do pytest tests use bare <code>assert</code> rather than methods like <code>assertEqual</code>?", "options": ["assert is faster", "pytest rewrites assert statements to show the values of sub-expressions on failure", "assertEqual is deprecated", "assert works even when Python runs with -O"], "answer": 1, "explanation": "<p>Assertion rewriting gives rich failure messages such as <code>assert 75.5 == 75</code> plus where each value came from.</p>"},
+  {"type": "single", "prompt": "How does a test receive a fixture named <code>cart</code>?", "options": ["By importing it", "By calling <code>cart()</code> inside the test", "By declaring a parameter named <code>cart</code>", "By decorating the test with <code>@cart</code>"], "answer": 2, "explanation": "<p>pytest matches parameter names to fixture names and injects the fixture's value.</p>"},
+  {"type": "single", "prompt": "In a fixture that uses <code>yield</code>, when does the code after <code>yield</code> run?", "options": ["Before the test", "After the test, whether it passed or failed", "Only if the test passed", "Never"], "answer": 1, "explanation": "<p>It is teardown, like the <code>finally</code> part of a context manager.</p>"},
+  {"type": "single", "prompt": "Which built-in fixture gives each test a fresh empty temporary directory as a <code>Path</code>?", "options": ["<code>tmpdir_factory</code>", "<code>tmp_path</code>", "<code>capsys</code>", "<code>monkeypatch</code>"], "answer": 1, "explanation": "<p><code>tmp_path</code> is a <code>pathlib.Path</code> unique to each test.</p>"},
+  {"type": "output", "prompt": "A test is decorated with <code>@pytest.mark.parametrize(\"n\", [1, 2, 3])</code> and another with <code>@pytest.mark.parametrize(\"m\", [\"a\", \"b\"])</code> stacked on top of it. How many test cases does pytest run?", "answer": "6", "explanation": "<p>Stacked parametrize decorators produce the Cartesian product: 3 × 2 = 6.</p>"},
+  {"type": "single", "prompt": "What does <code>match=</code> in <code>pytest.raises(ValueError, match=\"negative\")</code> do?", "options": ["Matches the exception type by name", "Searches the exception message with a regular expression", "Requires the message to equal the string exactly", "Filters warnings"], "answer": 1, "explanation": "<p>It is <code>re.search</code> against <code>str(exception)</code>.</p>"},
+  {"type": "single", "prompt": "<code>shop/report.py</code> does <code>from datetime import date</code>. Which target should you patch to control <code>date</code> in that module?", "options": ["<code>\"datetime.date\"</code>", "<code>\"shop.report.date\"</code>", "<code>\"date\"</code>", "<code>\"shop.date\"</code>"], "answer": 1, "explanation": "<p>Patch where the name is looked up. The module holds its own reference named <code>date</code>.</p>"},
+  {"type": "single", "prompt": "What does <code>Mock(spec=PaymentGateway)</code> add over a plain <code>Mock()</code>?", "options": ["It calls the real methods", "Accessing attributes that PaymentGateway lacks raises AttributeError", "It is faster", "It records nothing"], "answer": 1, "explanation": "<p>A spec catches typos and API drift; <code>create_autospec</code> also checks call signatures.</p>"},
+  {"type": "multi", "prompt": "Which are good reasons <em>not</em> to use a mock?", "options": ["The dependency can be injected and a simple fake is clearer", "You would be mocking internals of the code under test", "A fast real resource exists, such as <code>tmp_path</code> or in-memory SQLite", "The dependency sends real emails"], "answer": [0, 1, 2], "explanation": "<p>Mocks are right for slow or side-effecting boundaries such as email. Prefer fakes and real lightweight resources otherwise, and never mock what you are testing.</p>"},
+  {"type": "single", "prompt": "Your suite reports 100% line coverage. What does that guarantee?", "options": ["The code has no bugs", "Every line ran at least once during the tests", "Every branch was tested", "Every assertion is correct"], "answer": 1, "explanation": "<p>Coverage measures execution, not verification. A test without asserts can still cover lines.</p>"},
+  {"type": "text", "prompt": "Name the three TDD steps in order, separated by commas.", "answer": ["red, green, refactor", "red,green,refactor", "red green refactor"], "explanation": "<p>Red: a failing test. Green: the simplest code that passes. Refactor: improve the design with tests green.</p>"},
+  {"type": "single", "prompt": "In property-based testing, what is shrinking?", "options": ["Compressing test output", "Reducing a failing input to a minimal example that still fails", "Running fewer tests", "Removing duplicate tests"], "answer": 1, "explanation": "<p>Hypothesis simplifies a failing input (shorter lists, smaller numbers) so the bug is easy to understand.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Tests catch regressions, enable refactoring, document behavior, and improve design. Most should be fast unit tests.</li>
+      <li>pytest collects <code>test_*</code> functions in <code>test_*.py</code> files; bare <code>assert</code> gets rich failure output via rewriting.</li>
+      <li>Fixtures are injected by parameter name; <code>yield</code> provides teardown; scope controls reuse.</li>
+      <li><code>parametrize</code> turns a table into tests; marks select, skip, and expect failures.</li>
+      <li><code>pytest.raises(..., match=...)</code> tests errors; keep the block minimal.</li>
+      <li><code>unittest.mock</code> doubles slow or side-effecting boundaries; use <code>spec</code>; patch where looked up; prefer injection and fakes.</li>
+      <li>Coverage finds untested code; gate at 90% in CI; it is a floor, not proof.</li>
+      <li>TDD: red, green, refactor, in tiny steps. Hypothesis tests properties over generated inputs.</li>
+    </ul>
+    <div class="flashcards" data-title="Testing">
+<script type="application/json">
+[{"front": "Arrange, Act, Assert", "back": "Set up inputs, call the code under test, check the outcome. One behavior per test."},
+ {"front": "pytest discovery", "back": "Files <code>test_*.py</code>/<code>*_test.py</code>, functions <code>test_*</code>, classes <code>Test*</code> without <code>__init__</code>."},
+ {"front": "Assertion rewriting", "back": "pytest rewrites <code>assert</code> in test modules to report the values of each sub-expression."},
+ {"front": "Fixture injection", "back": "Name a parameter after the fixture; pytest calls the fixture and passes its value."},
+ {"front": "Fixture teardown", "back": "<code>yield</code> the value; code after <code>yield</code> runs after the test."},
+ {"front": "<code>tmp_path</code> / <code>monkeypatch</code> / <code>capsys</code>", "back": "Temporary directory / reversible patching of attributes and env vars / captured stdout and stderr."},
+ {"front": "<code>@pytest.mark.parametrize</code>", "back": "Run one test per row of arguments; each row reported separately."},
+ {"front": "<code>pytest.raises(E, match=r\"...\")</code>", "back": "Assert that the block raises <code>E</code> with a message matching the regex."},
+ {"front": "Where to patch", "back": "Where the name is looked up (the module that uses it), not where it is defined."},
+ {"front": "<code>Mock(spec=Cls)</code>", "back": "Only attributes that exist on <code>Cls</code> are allowed; <code>create_autospec</code> also checks signatures."},
+ {"front": "Coverage gate", "back": "<code>pytest --cov=src --cov-fail-under=90</code> fails the run when coverage drops below 90%."},
+ {"front": "TDD cycle", "back": "Red (failing test), green (simplest passing code), refactor (improve with tests green)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.pytest.org/en/stable/">pytest documentation</a>: "How-to guides" for fixtures, parametrize, and monkeypatch</li>
+      <li><a href="https://docs.python.org/3/library/unittest.mock.html"><code>unittest.mock</code></a> and its
+        <a href="https://docs.python.org/3/library/unittest.mock.html#where-to-patch">"Where to patch"</a> section</li>
+      <li><a href="https://pytest-cov.readthedocs.io/">pytest-cov</a> and <a href="https://coverage.readthedocs.io/">coverage.py</a></li>
+      <li><a href="https://hypothesis.readthedocs.io/">Hypothesis</a> documentation</li>
+      <li>Kent Beck, <em>Test-Driven Development: By Example</em></li>
+      <li>Next: <a href="m18-functional.html">M18 Functional Python</a>. Pure functions are the easiest code in the world to test.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

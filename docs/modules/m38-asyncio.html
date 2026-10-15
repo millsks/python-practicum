@@ -1,0 +1,1219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M38 · Async Programming with asyncio · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m38">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Module 38</p>
+    <h1>Async Programming with asyncio</h1>
+    <p class="lede">One thread, thousands of concurrent network calls, and no locks around your data structures:
+      that's the promise of <code>asyncio</code>. It delivers, but only if you understand the event loop well enough
+      to never block it, to structure tasks so none leak, and to handle timeouts and cancellation correctly. This module
+      builds that understanding from the loop up.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m37-concurrency.html">M37 Concurrency</a>, <a href="m14-iterators.html">M14 Iterators &amp; Generators</a></span></div>
+    <ul class="objectives">
+      <li>Explain the event loop: cooperative scheduling, <code>await</code> as a suspension point, and the ready queue</li>
+      <li>Distinguish coroutine functions, coroutine objects, Tasks, and Futures, and create tasks safely</li>
+      <li>Choose between <code>asyncio.gather</code> and <code>TaskGroup</code>, and handle <code>ExceptionGroup</code>s with <code>except*</code></li>
+      <li>Apply timeouts with <code>asyncio.timeout</code> and write cancellation-safe code</li>
+      <li>Build producer/consumer pipelines with <code>asyncio.Queue</code> and limit concurrency with semaphores</li>
+      <li>Use async iterators, async generators, and async context managers; run blocking code with <code>to_thread</code></li>
+      <li>Inspect running programs with 3.14's <code>python -m asyncio ps</code>/<code>pstree</code> and call-graph APIs</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="event-loop">
+    <h2>The event loop mental model</h2>
+    <p>In <a href="m37-concurrency.html">M37</a> you saw that threads overlap I/O waits, but they bring preemptive
+      switching and therefore races at any instruction. <code>asyncio</code> takes a different approach called
+      <dfn>cooperative multitasking</dfn>. All your tasks run in <strong>one thread</strong>. A task runs until it
+      reaches an <code>await</code> on something that isn't ready yet (a network reply, a timer); at that point it
+      voluntarily <em>suspends</em> and hands control back to the <dfn>event loop</dfn>. The loop then runs another task
+      that is ready. When the reply arrives, the loop marks the waiting task ready again and resumes it exactly where it
+      left off.</p>
+    <p>Conceptually, the loop is just this:</p>
+    <pre><code class="language-python">while tasks_exist:
+    run every callback in the READY queue        # each runs until its next await
+    wait for I/O or the next timer (selectors / epoll / kqueue / IOCP)
+    move tasks whose I/O or timer completed to the READY queue</code></pre>
+    <p>Compare the three ways of doing three 1-second waits. Step through each scenario and watch what the CPU is doing
+      during the waits:</p>
+    <div class="viz" data-viz="event-loop" data-config='{"scenario": "sequential"}'></div>
+    <div class="viz" data-viz="event-loop" data-config='{"scenario": "asyncio"}'></div>
+    <div class="viz" data-viz="event-loop" data-config='{"scenario": "threads"}'></div>
+    <p>Three consequences follow from "one thread, switch only at <code>await</code>":</p>
+    <ul>
+      <li><strong>Races are rarer and visible.</strong> Code between two <code>await</code>s runs without interruption,
+        so <code>self.count += 1</code> needs no lock. But any <code>check → await → act</code> sequence can still
+        interleave with other tasks (you'll see this in <a href="../projects/p05-async-crawler.html">Project 5</a>).</li>
+      <li><strong>Blocking is catastrophic.</strong> A task that calls <code>time.sleep(1)</code> or a blocking HTTP
+        library freezes <em>every</em> task for that second, because the loop can't run anything else until it returns.</li>
+      <li><strong>No parallelism.</strong> asyncio is for I/O-bound concurrency. CPU-heavy work stalls the loop just like
+        blocking I/O; offload it (see <a href="#blocking">Mixing in blocking code</a>).</li>
+    </ul>
+    <aside class="callout note" data-title="Running async code here vs locally"><p>A normal script starts the loop with
+      <code>asyncio.run(main())</code>, which creates a loop, runs <code>main()</code> to completion, cancels leftovers,
+      and closes the loop. In this course's browser cells an event loop is <em>already running</em> (Pyodide drives
+      asyncio from the browser's own event loop), so <code>asyncio.run()</code> would fail with "cannot be called from
+      a running event loop". Instead, the cells use top-level <code>await main()</code>, the same thing
+      <code>python -m asyncio</code>'s REPL allows. When you copy code into a <code>.py</code> file, replace
+      <code>await main()</code> with <code>asyncio.run(main())</code>.</p></aside>
+    <div class="runnable" data-title="Sequential vs concurrent waits">
+<textarea>
+import asyncio
+import time
+
+async def fake_request(name, delay):
+    await asyncio.sleep(delay)          # suspends this task; the loop runs others meanwhile
+    return f"{name} done after {delay}s"
+
+async def main():
+    start = time.perf_counter()
+    for name in "abc":
+        await fake_request(name, 0.3)   # awaiting one at a time: sequential
+    print(f"sequential: {time.perf_counter() - start:.2f}s")
+
+    start = time.perf_counter()
+    results = await asyncio.gather(*(fake_request(n, 0.3) for n in "abc"))
+    print(f"concurrent: {time.perf_counter() - start:.2f}s", results)
+
+await main()      # locally: asyncio.run(main())
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="coroutines-tasks">
+    <h2>Coroutines, <code>await</code>, and Tasks</h2>
+    <p>Precise vocabulary prevents most asyncio confusion:</p>
+    <table>
+      <thead><tr><th>Term</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr><td><dfn>Coroutine function</dfn></td><td>A function defined with <code>async def</code>. Calling it does <em>not</em> run its body.</td></tr>
+        <tr><td><dfn>Coroutine object</dfn></td><td>What calling a coroutine function returns: a paused computation. It runs only when awaited or wrapped in a Task.</td></tr>
+        <tr><td><dfn>Awaitable</dfn></td><td>Anything usable after <code>await</code>: coroutines, Tasks, Futures, objects with <code>__await__</code>.</td></tr>
+        <tr><td><dfn>Task</dfn></td><td>A coroutine scheduled to run on the loop <em>independently</em>. Created by <code>asyncio.create_task</code> or <code>TaskGroup.create_task</code>. It's a subclass of Future.</td></tr>
+        <tr><td><dfn>Future</dfn></td><td>A low-level placeholder for a result that will be set later (by a callback, a thread, or the loop).</td></tr>
+      </tbody>
+    </table>
+    <p>The crucial difference: <code>await coro()</code> runs the coroutine <em>now</em>, inside the current task, and
+      waits for it. Concurrency only happens when you create <em>Tasks</em>, because each Task is a separate entry the
+      loop can switch between. Under the hood, a coroutine is a generator-like object: <code>await</code> works much
+      like <code>yield from</code>, passing suspension requests up to the Task that drives it.</p>
+    <div class="runnable" data-title="Calling vs awaiting vs creating a task">
+<textarea>
+import asyncio
+
+async def work(name):
+    print(f"  {name}: start")
+    await asyncio.sleep(0.1)
+    print(f"  {name}: end")
+    return name.upper()
+
+async def main():
+    coro = work("A")
+    print("1. calling gave:", type(coro).__name__, "(nothing ran yet)")
+    print("2. awaiting runs it now:", await coro)
+
+    task = asyncio.create_task(work("B"), name="task-B")
+    print("3. task created; it starts at our next await. done?", task.done())
+    await asyncio.sleep(0)            # yield to the loop once: B starts and suspends at its sleep
+    print("4. back in main while B sleeps")
+    print("5. result:", await task, "| done?", task.done(), "| name:", task.get_name())
+
+await main()
+</textarea>
+    </div>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 700 200" role="img" aria-label="Task lifecycle states">
+        <defs><marker id="m38-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
+        <rect x="10" y="70" width="110" height="46" rx="8" fill="var(--viz-1)" opacity="0.18" stroke="var(--viz-1)"/>
+        <text x="65" y="98" text-anchor="middle" font-size="13" fill="var(--fg)">created</text>
+        <rect x="170" y="70" width="110" height="46" rx="8" fill="var(--viz-2)" opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="225" y="98" text-anchor="middle" font-size="13" fill="var(--fg)">ready</text>
+        <rect x="330" y="70" width="110" height="46" rx="8" fill="var(--viz-3)" opacity="0.18" stroke="var(--viz-3)"/>
+        <text x="385" y="98" text-anchor="middle" font-size="13" fill="var(--fg)">running</text>
+        <rect x="330" y="150" width="110" height="40" rx="8" fill="none" stroke="var(--fg-muted)"/>
+        <text x="385" y="175" text-anchor="middle" font-size="12" fill="var(--fg)">suspended</text>
+        <rect x="500" y="10" width="190" height="40" rx="8" fill="var(--viz-2)" opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="595" y="35" text-anchor="middle" font-size="12" fill="var(--fg)">done: result</text>
+        <rect x="500" y="72" width="190" height="40" rx="8" fill="var(--viz-4)" opacity="0.18" stroke="var(--viz-4)"/>
+        <text x="595" y="97" text-anchor="middle" font-size="12" fill="var(--fg)">done: exception</text>
+        <rect x="500" y="134" width="190" height="40" rx="8" fill="var(--viz-5)" opacity="0.18" stroke="var(--viz-5)"/>
+        <text x="595" y="159" text-anchor="middle" font-size="12" fill="var(--fg)">done: cancelled</text>
+        <g stroke="var(--fg-muted)" stroke-width="1.5" fill="none" marker-end="url(#m38-arrow)">
+          <line x1="120" y1="93" x2="168" y2="93"/>
+          <line x1="280" y1="93" x2="328" y2="93"/>
+          <path d="M385 116 L385 148"/>
+          <path d="M340 160 Q250 160 240 118"/>
+          <line x1="440" y1="85" x2="498" y2="32"/>
+          <line x1="440" y1="93" x2="498" y2="92"/>
+          <line x1="440" y1="105" x2="498" y2="152"/>
+        </g>
+        <text x="145" y="85" font-size="10" fill="var(--fg-muted)">scheduled</text>
+        <text x="392" y="135" font-size="10" fill="var(--fg-muted)">await (not ready)</text>
+        <text x="240" y="150" font-size="10" fill="var(--fg-muted)">I/O or timer ready</text>
+      </svg>
+      <figcaption>A Task alternates between running and suspended (each <code>await</code> on something not ready), until
+        it finishes with a result, an exception, or cancellation.</figcaption>
+    </figure>
+    <aside class="callout danger"><p><strong>Keep a reference to every task you create.</strong> The event loop holds
+      only <em>weak</em> references to tasks. A "fire and forget" <code>asyncio.create_task(job())</code> whose result
+      you don't store can be garbage-collected mid-flight, and an exception inside it is reported only as a "Task
+      exception was never retrieved" log line, if at all. The fix is structural: create tasks in a
+      <code>TaskGroup</code>, or store them in a set and discard them in a done-callback.</p></aside>
+    <div class="runnable" data-title="Predict: what order do these print?" data-predict>
+<textarea>
+import asyncio
+
+async def say(word, delay):
+    await asyncio.sleep(delay)
+    print(word)
+
+async def main():
+    t1 = asyncio.create_task(say("world", 0.02))
+    t2 = asyncio.create_task(say("hello", 0.01))
+    print("start")
+    await t1
+    await t2
+
+await main()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="gather-taskgroup">
+    <h2><code>gather</code> vs <code>TaskGroup</code>: structured concurrency</h2>
+    <p><code>asyncio.gather(*aws)</code> runs awaitables concurrently and returns their results in argument order. Its
+      error handling is the problem: by default, the first exception propagates to the awaiting code, but the
+      <em>other tasks keep running</em>, unsupervised, in the background. With <code>return_exceptions=True</code>,
+      exceptions are returned as values in the result list, which is handy for "try everything, report failures" but
+      easy to forget to check.</p>
+    <p><code>asyncio.TaskGroup</code> (3.11+) implements <dfn>structured concurrency</dfn>: tasks are created inside an
+      <code>async with</code> block and <strong>cannot outlive it</strong>. The block waits for all of them. If any
+      task fails, the group cancels all the others, waits for them to finish cancelling, and raises an
+      <code>ExceptionGroup</code> containing every failure. Lifetimes are visible in the code's indentation, like
+      variables in a scope.</p>
+    <div class="runnable" data-title="Failure handling: gather vs TaskGroup">
+<textarea>
+import asyncio
+
+log = []
+
+async def job(name, delay, fail=False):
+    try:
+        await asyncio.sleep(delay)
+        if fail:
+            raise ValueError(f"{name} failed")
+        log.append(f"{name} finished")
+        return name
+    except asyncio.CancelledError:
+        log.append(f"{name} cancelled")
+        raise                                      # always re-raise CancelledError
+
+async def main():
+    # gather: the error propagates, but 'slow' keeps running unsupervised
+    try:
+        await asyncio.gather(job("fast", 0.01), job("bad", 0.02, fail=True), job("slow", 0.1))
+    except ValueError as e:
+        print("gather raised:", e)
+    await asyncio.sleep(0.15)                      # wait to see what the orphan did
+    print("after gather:", log); log.clear()
+
+    print(await asyncio.gather(job("ok", 0.01), job("bad", 0.01, fail=True), return_exceptions=True))
+    log.clear()
+
+    # TaskGroup: the failure cancels siblings and everything is accounted for
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(job("fast", 0.01))
+            tg.create_task(job("bad", 0.02, fail=True))
+            tg.create_task(job("slow", 0.1))
+    except* ValueError as eg:
+        print("TaskGroup raised:", [str(e) for e in eg.exceptions])
+    print("after TaskGroup:", log)
+
+await main()
+</textarea>
+    </div>
+    <p>The <code>except*</code> syntax (3.11+) matches exceptions <em>inside</em> an <code>ExceptionGroup</code>:
+      each <code>except*</code> clause handles the matching subgroup, and anything unmatched is re-raised. Several
+      clauses can run for one group.</p>
+    <div class="runnable" data-title="except* with several failures">
+<textarea>
+import asyncio
+
+async def check(name):
+    await asyncio.sleep(0.01)
+    if name.startswith("t"):
+        raise TimeoutError(f"{name} timed out")
+    if name.startswith("v"):
+        raise ValueError(f"{name} bad data")
+    return name
+
+async def main():
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(check(n)) for n in ["ok", "t1", "v1", "t2"]]
+    except* TimeoutError as eg:
+        print("timeouts:", sorted(str(e) for e in eg.exceptions))
+    except* ValueError as eg:
+        print("bad data:", [str(e) for e in eg.exceptions])
+    print("first task still finished:", tasks[0].result())
+
+await main()
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Default to <code>TaskGroup</code>. Use <code>gather(..., return_exceptions=True)</code>
+      when you deliberately want "run all, collect all outcomes" and you check every result. Note that one task failing
+      in a TaskGroup cancels its siblings; if you want independent jobs to keep going, catch the exception
+      <em>inside</em> each job and return an error value instead of raising.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="timeouts">
+    <h2>Timeouts</h2>
+    <p>Every network operation needs a timeout; a peer that never answers otherwise hangs your task forever.
+      <code>async with asyncio.timeout(seconds):</code> (3.11+) cancels the enclosed code if it runs too long and
+      converts that cancellation into <code>TimeoutError</code> at the <code>async with</code> boundary. Because it
+      scopes a <em>block</em>, one deadline can cover several awaits (connect, send, read). Related tools:</p>
+    <ul>
+      <li><code>asyncio.timeout_at(loop.time() + n)</code>: an absolute deadline, ideal for propagating one budget
+        through nested calls.</li>
+      <li><code>cm.reschedule(new_deadline)</code> on the context manager to extend or shorten it; <code>timeout(None)</code>
+        means "no deadline yet".</li>
+      <li><code>asyncio.wait_for(aw, timeout)</code>: the older single-awaitable form, now implemented with
+        <code>timeout</code>.</li>
+    </ul>
+    <div class="runnable" data-title="One deadline for a multi-step operation">
+<textarea>
+import asyncio
+
+async def step(name, delay):
+    await asyncio.sleep(delay)
+    return name
+
+async def handshake(delays):
+    results = []
+    async with asyncio.timeout(0.1):           # budget for ALL steps together
+        for name, d in zip(["connect", "send", "read"], delays):
+            results.append(await step(name, d))
+    return results
+
+async def main():
+    print(await handshake([0.02, 0.02, 0.02]))
+    try:
+        await handshake([0.02, 0.05, 0.05])     # 0.12s in total
+    except TimeoutError:
+        print("TimeoutError: the whole handshake exceeded 0.1s")
+
+    try:
+        print(await asyncio.wait_for(step("single", 0.5), timeout=0.05))
+    except TimeoutError:
+        print("wait_for timed out too")
+
+await main()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="cancellation">
+    <h2>Cancellation semantics</h2>
+    <p>Cancellation is asyncio's mechanism for stopping work: timeouts, TaskGroup failures, and shutdown all use it.
+      <code>task.cancel()</code> doesn't kill anything immediately. It schedules a <code>CancelledError</code> to be
+      <em>raised inside the task</em> at its current (or next) <code>await</code>. The task can then run cleanup in
+      <code>finally</code> blocks and <code>async with</code> exits, and must let the exception propagate.</p>
+    <ul>
+      <li><code>CancelledError</code> inherits from <code>BaseException</code>, not <code>Exception</code>, so a
+        generic <code>except Exception:</code> doesn't swallow it. Never catch it without re-raising (unless you are
+        the code that requested the cancellation, and even then prefer the structured tools).</li>
+      <li>Cleanup code may <code>await</code> (closing a connection), but keep it short: a second cancel can interrupt it.</li>
+      <li><code>asyncio.shield(aw)</code> protects an inner awaitable from cancellation of the outer task: the outer
+        await is cancelled, but the inner operation keeps running. Use it rarely (for example, finishing a commit).</li>
+      <li>Internally, tasks count cancellation requests (<code>task.cancelling()</code>, <code>task.uncancel()</code>);
+        this is how <code>timeout()</code> and <code>TaskGroup</code> distinguish their own cancellations from yours.</li>
+    </ul>
+    <div class="runnable" data-title="Cancellation reaches the task at its await">
+<textarea>
+import asyncio
+
+async def worker(events):
+    events.append("acquired connection")
+    try:
+        while True:
+            await asyncio.sleep(0.01)          # CancelledError is raised HERE
+            events.append("tick")
+    except asyncio.CancelledError:
+        events.append("cancel requested: cleaning up")
+        await asyncio.sleep(0.01)              # async cleanup is allowed
+        raise                                  # propagate! (swallowing it breaks timeouts and TaskGroups)
+    finally:
+        events.append("released connection")
+
+async def main():
+    events = []
+    task = asyncio.create_task(worker(events))
+    await asyncio.sleep(0.035)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        print("task.cancelled():", task.cancelled())
+    print(events)
+
+await main()
+</textarea>
+    </div>
+    <aside class="callout warn"><p>A <code>try: ... except BaseException: pass</code> or a bare <code>except:</code> in a
+      coroutine silently eats cancellation; the task keeps running after a timeout "fired", and TaskGroups hang on exit.
+      If you must catch broadly, re-raise <code>asyncio.CancelledError</code> first.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="queues">
+    <h2>Producer/consumer with <code>asyncio.Queue</code></h2>
+    <p><code>asyncio.Queue</code> mirrors <code>queue.Queue</code> but its <code>put</code>/<code>get</code> are
+      coroutines that suspend instead of blocking a thread. It's not thread-safe; it's for tasks on one loop. The
+      standard worker-pool shape:</p>
+    <ol>
+      <li>Create the queue (optionally with <code>maxsize</code> for back-pressure) and N worker tasks.</li>
+      <li>Each worker loops: <code>item = await queue.get()</code>, process, and <code>queue.task_done()</code> in a <code>finally</code>.</li>
+      <li>The producer puts items; then <code>await queue.join()</code> waits until every item is done.</li>
+      <li>Stop workers: cancel them, put one sentinel per worker, or (3.13+) call <code>queue.shutdown()</code>, which makes
+        pending and future <code>get()</code> calls raise <code>asyncio.QueueShutDown</code> once the queue is empty.</li>
+    </ol>
+    <div class="runnable" data-title="Worker pool with queue.shutdown()">
+<textarea>
+import asyncio
+import random
+
+async def producer(queue, n):
+    for i in range(n):
+        await queue.put(i)                      # suspends when the queue is full
+    queue.shutdown()                            # 3.13+: no more items; workers exit once drained
+
+async def worker(name, queue, results):
+    while True:
+        try:
+            item = await queue.get()
+        except asyncio.QueueShutDown:
+            return
+        try:
+            await asyncio.sleep(random.uniform(0.001, 0.01))   # simulated I/O
+            results.append((name, item, item * item))
+        finally:
+            queue.task_done()
+
+async def main():
+    queue = asyncio.Queue(maxsize=3)
+    results = []
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(producer(queue, 12))
+        for i in range(4):
+            tg.create_task(worker(f"w{i}", queue, results))
+    print(len(results), "results; per worker:",
+          {w: sum(1 for r in results if r[0] == w) for w in sorted({r[0] for r in results})})
+    print(sorted(r[2] for r in results))
+
+await main()
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>queue.shutdown(immediate=True)</code> also discards items still in the queue,
+      which suits "stop now" shutdowns. The sentinel pattern still works everywhere and is what
+      <a href="../projects/p05-async-crawler.html">Project 5</a> uses, because there the workers themselves are
+      producers and only <code>queue.join()</code> knows when the crawl is truly done.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="semaphores">
+    <h2>Limiting concurrency and rate</h2>
+    <p>Creating 10,000 tasks is cheap; opening 10,000 simultaneous connections to one server is rude and usually fails.
+      Two different limits are often needed:</p>
+    <ul>
+      <li><strong>Concurrency limit</strong> (how many at once): <code>asyncio.Semaphore(n)</code>. Each task does
+        <code>async with sem:</code> around the request; at most <em>n</em> are inside.</li>
+      <li><strong>Rate limit</strong> (how many per second): a <dfn>token bucket</dfn> or a minimum interval between
+        starts. A semaphore alone doesn't bound rate: fast responses let tasks cycle through it quickly.</li>
+    </ul>
+    <div class="runnable" data-title="Semaphore plus a simple rate limiter">
+<textarea>
+import asyncio
+import time
+
+class RateLimiter:
+    """Allow at most `rate` acquisitions per second (evenly spaced)."""
+    def __init__(self, rate):
+        self.interval = 1 / rate
+        self.next_time = 0.0
+        self.lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self.lock:                  # serialize the bookkeeping across tasks
+            now = time.monotonic()
+            wait = self.next_time - now
+            self.next_time = max(now, self.next_time) + self.interval
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+active = peak = 0
+starts = []
+
+async def request(i, sem, limiter):
+    global active, peak
+    async with sem:                            # at most 3 in flight
+        await limiter.acquire()                # at most 20 starts per second
+        starts.append(time.monotonic())
+        active += 1; peak = max(peak, active)
+        await asyncio.sleep(0.2)               # simulated latency
+        active -= 1
+
+async def main():
+    sem, limiter = asyncio.Semaphore(3), RateLimiter(rate=20)
+    t0 = time.monotonic()
+    async with asyncio.TaskGroup() as tg:
+        for i in range(12):
+            tg.create_task(request(i, sem, limiter))
+    gaps = [round(b - a, 3) for a, b in zip(starts, starts[1:])]
+    print(f"peak concurrency {peak}, total {time.monotonic() - t0:.2f}s, min gap {min(gaps):.3f}s")
+
+await main()
+</textarea>
+    </div>
+    <aside class="callout note"><p>Why does a single-threaded program need <code>asyncio.Lock</code>? Inside
+      <code>acquire</code> there's no <code>await</code> between reading and updating <code>next_time</code>, so it's
+      actually safe here. But the moment someone adds an <code>await</code> in that section (say, logging to an async
+      sink), it becomes a race. The lock documents and enforces the critical section.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="async-iteration">
+    <h2>Async iterators, generators, and context managers</h2>
+    <p>Some protocols need to <code>await</code> in the middle: fetching the next page of results, or closing a
+      connection. Python has async versions of the iteration and context-manager protocols:</p>
+    <table>
+      <thead><tr><th>Sync</th><th>Async</th><th>Dunder methods</th></tr></thead>
+      <tbody>
+        <tr><td><code>for x in it</code></td><td><code>async for x in ait</code></td><td><code>__aiter__</code>, <code>async __anext__</code> (raise <code>StopAsyncIteration</code>)</td></tr>
+        <tr><td>generator (<code>yield</code> in <code>def</code>)</td><td>async generator (<code>yield</code> in <code>async def</code>)</td><td>generated for you; <code>aclose()</code> for cleanup</td></tr>
+        <tr><td><code>with cm</code></td><td><code>async with acm</code></td><td><code>async __aenter__</code>, <code>async __aexit__</code></td></tr>
+        <tr><td><code>@contextmanager</code></td><td><code>@asynccontextmanager</code></td><td>from <code>contextlib</code></td></tr>
+        <tr><td>comprehension</td><td><code>[x async for x in ait]</code></td><td>inside an <code>async def</code> (or top-level await)</td></tr>
+        <tr><td><code>next()</code>, <code>iter()</code></td><td><code>await anext()</code>, <code>aiter()</code></td><td>built-ins since 3.10</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Paginated API as an async generator">
+<textarea>
+import asyncio
+from contextlib import asynccontextmanager
+
+PAGES = {1: ["a", "b"], 2: ["c", "d"], 3: ["e"]}
+
+@asynccontextmanager
+async def session(log):
+    log.append("open")
+    try:
+        yield {"page_size": 2}
+    finally:
+        await asyncio.sleep(0)                # e.g. await conn.close()
+        log.append("closed")
+
+async def fetch_page(n):
+    await asyncio.sleep(0.01)
+    return PAGES.get(n, [])
+
+async def all_items():
+    """Yield items across pages, fetching lazily as the consumer asks."""
+    page = 1
+    while items := await fetch_page(page):
+        for item in items:
+            yield item
+        page += 1
+
+async def main():
+    log = []
+    async with session(log) as s:
+        print([x.upper() async for x in all_items()])
+        gen = all_items()
+        print(await anext(gen), await anext(gen))   # pull two, then stop early
+        await gen.aclose()                          # finalize the generator deterministically
+    print(log)
+
+await main()
+</textarea>
+    </div>
+    <aside class="callout tip"><p>An async generator abandoned halfway (for example by a <code>break</code> in an
+      <code>async for</code>) can't run its <code>finally</code> synchronously; the loop finalizes it later. When the
+      generator holds a resource, wrap it with <code>contextlib.aclosing(gen)</code> so cleanup happens at a known
+      point.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="blocking">
+    <h2>Mixing in blocking code</h2>
+    <p>Not every library is async. A synchronous database driver, <code>requests</code>, <code>urllib</code>, or a
+      CPU-heavy function will block the loop. The bridges:</p>
+    <ul>
+      <li><code>await asyncio.to_thread(func, *args)</code> (3.9+): run a blocking function in the loop's default
+        thread pool; perfect for blocking I/O (the GIL is released while it waits). This is how
+        <a href="../projects/p05-async-crawler.html">Project 5</a>'s real fetcher uses <code>urllib</code>.</li>
+      <li><code>await loop.run_in_executor(executor, func, *args)</code>: the same with an executor of your choice; use
+        a <code>ProcessPoolExecutor</code> (or <code>InterpreterPoolExecutor</code>) for CPU-bound work.</li>
+      <li><code>asyncio.run_coroutine_threadsafe(coro, loop)</code>: the reverse direction, submitting a coroutine to a
+        loop running in another thread (returns a <code>concurrent.futures.Future</code>).</li>
+    </ul>
+    <div class="runnable" data-title="How blocking the loop hurts (heartbeat test)">
+<textarea>
+import asyncio
+import time
+
+async def heartbeat(beats):
+    """A healthy loop runs this every ~10 ms."""
+    last = time.perf_counter()
+    for _ in range(15):
+        await asyncio.sleep(0.01)
+        now = time.perf_counter()
+        beats.append(round((now - last) * 1000))
+        last = now
+
+def blocking_work():
+    end = time.perf_counter() + 0.1            # 100 ms of CPU, never awaiting
+    while time.perf_counter() < end:
+        pass
+
+async def bad():
+    blocking_work()                            # runs ON the loop: everything freezes
+
+async def main():
+    beats = []
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(heartbeat(beats))
+        await asyncio.sleep(0.03)
+        tg.create_task(bad())
+    print("gaps between heartbeats (ms):", beats)
+    print("worst gap:", max(beats), "ms  <- the loop was blocked")
+
+await main()
+</textarea>
+    </div>
+    <div class="runnable" data-local="asyncio.to_thread needs real threads (unavailable in the browser). Run locally with pixi run python offload.py" data-title="Offloading with to_thread and a process pool">
+<textarea>
+import asyncio
+import time
+import urllib.request
+from concurrent.futures import ProcessPoolExecutor
+
+def blocking_download(url: str) -> int:
+    with urllib.request.urlopen(url, timeout=10) as reply:   # blocking library
+        return len(reply.read())
+
+def cpu_heavy(n: int) -> int:
+    return sum(i * i for i in range(n))
+
+async def main() -> None:
+    urls = ["https://www.python.org/", "https://docs.python.org/3/"]
+    sizes = await asyncio.gather(*(asyncio.to_thread(blocking_download, u) for u in urls))
+    print("downloaded bytes:", sizes)
+
+    loop = asyncio.get_running_loop()
+    with ProcessPoolExecutor() as pool:
+        start = time.perf_counter()
+        totals = await asyncio.gather(*(loop.run_in_executor(pool, cpu_heavy, 3_000_000) for _ in range(4)))
+        print(f"4 CPU jobs in processes: {time.perf_counter() - start:.2f}s")
+
+if __name__ == "__main__":
+    asyncio.run(main(), debug=True)   # debug mode logs callbacks that block the loop > 100 ms
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Run with <code>asyncio.run(main(), debug=True)</code> or <code>PYTHONASYNCIODEBUG=1</code>
+      during development. Debug mode warns about coroutines that were never awaited, logs any callback that blocks the
+      loop for more than <code>loop.slow_callback_duration</code> (100 ms), and reports non-threadsafe calls.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="introspection">
+    <h2>Inspecting running async programs</h2>
+    <aside class="callout py314"><p>Python 3.14 can show you what a <em>live</em> asyncio program is doing, from the
+      outside, without modifying it. Using the safe external debugger interface (PEP 768), the
+      <code>asyncio</code> CLI attaches to a running process by PID:</p>
+<pre data-label="Terminal"><code class="language-bash">pixi run python crawler.py &amp;              # some long-running asyncio program
+pixi run python -m asyncio ps 12345         # flat table: every task, its name, coroutine stack, awaiter
+pixi run python -m asyncio pstree 12345     # tree: which task is awaiting which</code></pre>
+      <p>This is invaluable for "why is my service stuck?" questions: a task waiting forever on a lock or a queue shows up
+        immediately, and <code>pstree</code> also detects await cycles. (Attaching to another process may require
+        permissions, for example running as the same user; on macOS it may need elevated privileges.)</p></aside>
+    <p>Inside a program, the same information is available as an API. <code>asyncio.capture_call_graph(task)</code>
+      returns a <code>FutureCallGraph</code> (the task, its coroutine call stack, and who awaits it);
+      <code>asyncio.print_call_graph(task)</code> and <code>format_call_graph</code> render it. Omit the argument to
+      describe the current task.</p>
+    <div class="runnable" data-title="print_call_graph from inside the program">
+<textarea>
+import asyncio
+
+async def fetch(name):
+    await asyncio.sleep(0.05)
+
+async def crawl_section(name):
+    await fetch(name)
+
+async def report():
+    await asyncio.sleep(0.01)                  # let the others start
+    for task in asyncio.all_tasks():
+        if task.get_name() == "section-docs":
+            asyncio.print_call_graph(task)     # who is this task, what is it awaiting, who awaits it?
+
+async def main():
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(crawl_section("docs"), name="section-docs")
+        tg.create_task(report(), name="reporter")
+    graph = asyncio.capture_call_graph()       # the current task
+    print("current task:", graph.future.get_name(), "| frames:", len(graph.call_stack))
+
+await main()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="taskgroup-cancel">
+    <h2>Preview: <code>TaskGroup.cancel()</code> in 3.15</h2>
+    <aside class="callout py315"><p>Python 3.15 adds <code>TaskGroup.cancel()</code>, a direct way to stop every task
+      in a group <em>without</em> treating it as an error. In 3.14, "stop the group when the first result arrives"
+      requires raising a private exception in one task and catching it with <code>except*</code> outside the group, or
+      cancelling each task by hand. With 3.15, the group exits normally after cancelling its children.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="First result wins (3.15)">
+<textarea>
+import asyncio
+
+async def mirror(name, delay, tg, winner):
+    await asyncio.sleep(delay)
+    winner.append(name)
+    tg.cancel()                       # 3.15: cancel all siblings; the group exits without an error
+
+async def main():
+    winner = []
+    async with asyncio.TaskGroup() as tg:
+        for name, delay in [("eu", 0.3), ("us", 0.1), ("ap", 0.2)]:
+            tg.create_task(mirror(name, delay, tg, winner))
+    print("fastest mirror:", winner)
+
+asyncio.run(main())
+</textarea>
+    </div>
+    <p>In 3.14 you can get the same behavior portably with <code>asyncio.wait(tasks, return_when=FIRST_COMPLETED)</code>
+      followed by cancelling the pending set, or by the "raise a private exception" pattern:</p>
+    <div class="runnable" data-title="First result wins (3.14 pattern)">
+<textarea>
+import asyncio
+
+class _Done(Exception):
+    pass
+
+async def mirror(name, delay, winner):
+    await asyncio.sleep(delay)
+    winner.append(name)
+    raise _Done                        # makes the TaskGroup cancel the siblings
+
+async def main():
+    winner = []
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for name, delay in [("eu", 0.03), ("us", 0.01), ("ap", 0.02)]:
+                tg.create_task(mirror(name, delay, winner))
+    except* _Done:
+        pass
+    print("fastest mirror:", winner)
+
+await main()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="pitfalls">
+    <h2>Common bugs and how to spot them</h2>
+    <table>
+      <thead><tr><th>Bug</th><th>Symptom</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Forgetting <code>await</code></td><td><code>RuntimeWarning: coroutine '...' was never awaited</code>; a coroutine object where you expected a value</td><td>Add <code>await</code>; enable debug mode; mypy flags unused coroutines</td></tr>
+        <tr><td>Blocking the loop (<code>time.sleep</code>, <code>requests</code>, CPU loops)</td><td>Everything stalls; timeouts fire late; heartbeats skip</td><td><code>await asyncio.sleep</code>, async libraries, <code>to_thread</code>, executors</td></tr>
+        <tr><td>Fire-and-forget tasks</td><td>Lost exceptions; tasks vanish (GC)</td><td><code>TaskGroup</code>, or keep references</td></tr>
+        <tr><td>Swallowing <code>CancelledError</code></td><td>Timeouts don't stop work; TaskGroup exit hangs</td><td>Always re-raise it</td></tr>
+        <tr><td>Awaiting in a loop when you meant concurrency</td><td>Total time = sum of latencies</td><td>Create tasks first, then await them (or use a TaskGroup)</td></tr>
+        <tr><td>Check-then-act across an <code>await</code></td><td>Duplicate work (fetching the same URL twice)</td><td>Mark state before awaiting, or hold an <code>asyncio.Lock</code></td></tr>
+        <tr><td><code>asyncio.run()</code> inside a running loop</td><td><code>RuntimeError: asyncio.run() cannot be called from a running event loop</code></td><td>Just <code>await</code> (as in these browser cells and Jupyter)</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Spot the bug: forgotten await">
+<textarea>
+import asyncio
+
+async def get_price(item):
+    await asyncio.sleep(0.01)
+    return {"apple": 3, "pear": 4}[item]
+
+async def main():
+    total = 0
+    for item in ["apple", "pear"]:
+        price = get_price(item)            # BUG: no await
+        print(type(price).__name__, price)
+        price.close()                      # tidy up the un-run coroutine (suppresses the warning)
+    prices = [await get_price(i) for i in ["apple", "pear"]]
+    print("fixed:", prices, "total", sum(prices))
+
+await main()
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m38-e1" data-title="Fetch all with a TaskGroup">
+      <div class="exercise-prompt">
+        <p>Write <code>async def fetch_all(urls, fetch)</code> that calls the async function <code>fetch(url)</code>
+          for every URL <strong>concurrently</strong> using an <code>asyncio.TaskGroup</code>, and returns a dict
+          mapping each URL to its result. Duplicated URLs must be fetched only once.</p>
+      </div>
+<textarea class="starter">
+import asyncio
+
+async def fetch_all(urls, fetch):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import asyncio, time
+
+async def test_results_and_concurrency():
+    calls = []
+    async def fetch(url):
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return len(url)
+    start = time.perf_counter()
+    result = await fetch_all(["a", "bb", "ccc", "bb"], fetch)
+    elapsed = time.perf_counter() - start
+    assert result == {"a": 1, "bb": 2, "ccc": 3}, f"got {result}"
+    assert sorted(calls) == ["a", "bb", "ccc"], f"each URL once, got {calls}"
+    assert elapsed < 0.12, f"calls must run concurrently (took {elapsed:.2f}s)"
+
+async def test_error_propagates_as_group():
+    async def fetch(url):
+        await asyncio.sleep(0.01)
+        if url == "bad":
+            raise ValueError("bad url")
+        return 1
+    caught = False
+    try:
+        await fetch_all(["ok", "bad"], fetch)
+    except* ValueError:
+        caught = True
+    assert caught, "a failing fetch should raise an ExceptionGroup containing ValueError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Create one task per unique URL inside the
+        <code>async with</code> block, keep them in a dict, and read <code>task.result()</code> after the block.
+        <code>dict.fromkeys(urls)</code> de-duplicates while keeping order.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import asyncio
+
+async def fetch_all(urls, fetch):
+    async with asyncio.TaskGroup() as tg:
+        tasks = {url: tg.create_task(fetch(url)) for url in dict.fromkeys(urls)}
+    return {url: task.result() for url, task in tasks.items()}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m38-e2" data-title="Bounded concurrency with a Semaphore">
+      <div class="exercise-prompt">
+        <p>Write <code>async def bounded_map(func, items, limit)</code> that awaits <code>func(item)</code> for every
+          item with at most <code>limit</code> calls in flight at once, and returns results in input order. Raise
+          <code>ValueError</code> if <code>limit &lt; 1</code>.</p>
+      </div>
+<textarea class="starter">
+import asyncio
+
+async def bounded_map(func, items, limit):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import asyncio
+
+async def test_order_and_limit():
+    active = peak = 0
+    async def slow_double(x):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01 * (5 - x % 5))
+        active -= 1
+        return x * 2
+    result = await bounded_map(slow_double, list(range(10)), 3)
+    assert result == [x * 2 for x in range(10)], f"results must be in input order, got {result}"
+    assert peak == 3, f"exactly 3 calls should be in flight at peak, saw {peak}"
+
+async def test_invalid_limit():
+    try:
+        await bounded_map(lambda x: x, [1], 0)
+    except ValueError:
+        return
+    raise AssertionError("limit < 1 should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Wrap each call in a small coroutine that does
+        <code>async with sem: return await func(item)</code>, then <code>gather</code> them (gather preserves order) or
+        use a TaskGroup and read results afterwards.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import asyncio
+
+async def bounded_map(func, items, limit):
+    if limit &lt; 1:
+        raise ValueError("limit must be &gt;= 1")
+    sem = asyncio.Semaphore(limit)
+
+    async def one(item):
+        async with sem:
+            return await func(item)
+
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(one(item)) for item in items]
+    return [t.result() for t in tasks]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m38-e3" data-title="Timeout with a fallback">
+      <div class="exercise-prompt">
+        <p>Write <code>async def with_fallback(aw, seconds, default)</code> that returns the result of awaiting
+          <code>aw</code>, or <code>default</code> if it takes longer than <code>seconds</code>. Use
+          <code>asyncio.timeout</code>. Other exceptions must propagate. Then write
+          <code>async def first_ok(coros, seconds)</code> that tries each awaitable <em>in order</em> with that timeout
+          and returns the first non-timeout result, or raises <code>TimeoutError</code> if all time out.</p>
+      </div>
+<textarea class="starter">
+import asyncio
+
+async def with_fallback(aw, seconds, default):
+    ...
+
+async def first_ok(coros, seconds):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import asyncio
+
+async def value_after(v, delay):
+    await asyncio.sleep(delay)
+    return v
+
+async def test_fast_returns_value():
+    assert await with_fallback(value_after("x", 0.001), 0.1, "d") == "x", "fast awaitable returns its value"
+
+async def test_slow_returns_default():
+    assert await with_fallback(value_after("x", 0.2), 0.02, "d") == "d", "slow awaitable returns the default"
+
+async def test_errors_propagate():
+    async def boom():
+        raise KeyError("k")
+    try:
+        await with_fallback(boom(), 0.1, None)
+    except KeyError:
+        return
+    raise AssertionError("non-timeout exceptions must propagate")
+
+async def test_first_ok():
+    got = await first_ok([value_after("slow", 0.2), value_after("fast", 0.001)], 0.02)
+    assert got == "fast", f"expected the first awaitable that beats the timeout, got {got!r}"
+    try:
+        await first_ok([value_after(1, 0.2), value_after(2, 0.2)], 0.01)
+    except TimeoutError:
+        return
+    raise AssertionError("all timing out should raise TimeoutError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>try: async with asyncio.timeout(seconds): return await aw</code>
+        then <code>except TimeoutError: return default</code>. For <code>first_ok</code>, use a unique sentinel object as
+        the default so a legitimate <code>None</code> result isn't mistaken for a timeout.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import asyncio
+
+async def with_fallback(aw, seconds, default):
+    try:
+        async with asyncio.timeout(seconds):
+            return await aw
+    except TimeoutError:
+        return default
+
+_TIMED_OUT = object()
+
+async def first_ok(coros, seconds):
+    for aw in coros:
+        result = await with_fallback(aw, seconds, _TIMED_OUT)
+        if result is not _TIMED_OUT:
+            return result
+    raise TimeoutError("every attempt timed out")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m38-e4" data-title="An async generator with cleanup">
+      <div class="exercise-prompt">
+        <p>Write an async generator <code>countdown(n, log)</code> that yields <code>n, n-1, ..., 1</code>, awaiting
+          <code>asyncio.sleep(0)</code> before each value, and appends <code>"closed"</code> to the list
+          <code>log</code> when it finishes <em>or</em> is closed early. Then write <code>async def take(agen, k)</code>
+          that returns a list of the first <code>k</code> items and closes the generator deterministically (use
+          <code>contextlib.aclosing</code>).</p>
+      </div>
+<textarea class="starter">
+import asyncio
+from contextlib import aclosing
+
+async def countdown(n, log):
+    ...
+
+async def take(agen, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+async def test_full_iteration():
+    log = []
+    assert [x async for x in countdown(3, log)] == [3, 2, 1], "should count down to 1"
+    assert log == ["closed"], "cleanup runs when the generator finishes"
+
+async def test_take_closes_early():
+    log = []
+    assert await take(countdown(10, log), 2) == [10, 9], "take returns the first k items"
+    assert log == ["closed"], "take must close the generator immediately"
+
+async def test_take_more_than_available():
+    log = []
+    assert await take(countdown(2, log), 5) == [2, 1], "take stops when the generator is exhausted"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Put the loop in <code>try</code> and the
+        <code>log.append("closed")</code> in <code>finally</code>. In <code>take</code>:
+        <code>async with aclosing(agen) as g: async for x in g: ...</code>, breaking when you have <code>k</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import asyncio
+from contextlib import aclosing
+
+async def countdown(n, log):
+    try:
+        for i in range(n, 0, -1):
+            await asyncio.sleep(0)
+            yield i
+    finally:
+        log.append("closed")
+
+async def take(agen, k):
+    out = []
+    async with aclosing(agen) as g:
+        async for item in g:
+            out.append(item)
+            if len(out) == k:
+                break
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m38-e5" data-title="A worker pool with asyncio.Queue">
+      <div class="exercise-prompt">
+        <p>Write <code>async def process_all(items, handler, workers)</code> that pushes every item into an
+          <code>asyncio.Queue</code>, starts <code>workers</code> worker tasks that each <code>await handler(item)</code>,
+          and returns the list of results in the <strong>same order as <code>items</code></strong>. Use
+          <code>queue.join()</code> to know when all items are processed, and make sure no worker task is still running
+          when the function returns. If a handler raises, the exception must propagate (an <code>ExceptionGroup</code>
+          is fine).</p>
+      </div>
+<textarea class="starter">
+import asyncio
+
+async def process_all(items, handler, workers):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import asyncio, random
+
+async def test_results_in_order():
+    rng = random.Random(1)
+    async def handler(x):
+        await asyncio.sleep(rng.uniform(0, 0.005))
+        return x * 10
+    before = len(asyncio.all_tasks())
+    result = await process_all(list(range(25)), handler, 4)
+    assert result == [x * 10 for x in range(25)], f"results must follow input order, got {result}"
+    assert len(asyncio.all_tasks()) == before, "no worker tasks may be left running"
+
+async def test_uses_several_workers():
+    active = peak = 0
+    async def handler(x):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.005)
+        active -= 1
+        return x
+    await process_all(list(range(12)), handler, 3)
+    assert peak == 3, f"3 workers should overlap, saw peak {peak}"
+
+async def test_empty():
+    async def handler(x):
+        return x
+    assert await process_all([], handler, 2) == [], "no items gives an empty list"
+
+async def test_error_propagates():
+    async def handler(x):
+        await asyncio.sleep(0)
+        if x == 3:
+            raise RuntimeError("boom")
+        return x
+    try:
+        await process_all(list(range(6)), handler, 2)
+    except Exception as exc:
+        found = exc.subgroup(RuntimeError) if isinstance(exc, ExceptionGroup) else exc
+        assert isinstance(found, (RuntimeError, ExceptionGroup)) and found is not None, f"unexpected {exc!r}"
+        return
+    raise AssertionError("a failing handler should raise")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Queue <code>(index, item)</code> pairs and store results in a
+        list pre-filled with <code>None</code>. Run workers in a TaskGroup; after <code>await queue.join()</code>, put
+        one <code>None</code> sentinel per worker. If a worker crashes, the TaskGroup cancels the body (including the
+        <code>join()</code>), so the error still propagates.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import asyncio
+
+async def process_all(items, handler, workers):
+    queue = asyncio.Queue()
+    results = [None] * len(items)
+    for pair in enumerate(items):
+        queue.put_nowait(pair)
+
+    async def worker():
+        while True:
+            job = await queue.get()
+            try:
+                if job is None:
+                    return
+                index, item = job
+                results[index] = await handler(item)
+            finally:
+                queue.task_done()
+
+    async with asyncio.TaskGroup() as tg:
+        for _ in range(workers):
+            tg.create_task(worker())
+        await queue.join()
+        for _ in range(workers):
+            queue.put_nowait(None)
+    return results</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an async rate-limited fetcher simulator</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">fetchsim: a polite, resilient async client</span></div>
+      <div class="widget-body">
+        <p>Real APIs throttle you (HTTP 429), fail intermittently (503), and occasionally hang. Build a simulator of such
+          an API and a client that fetches 200 resources from it as fast as the rules allow, without ever exceeding the
+          limits. Everything runs locally with <code>asyncio.sleep</code> standing in for the network, so it's fast and
+          deterministic with a seeded RNG.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init fetchsim
+cd fetchsim
+pixi add python=3.14 pytest
+pixi run python fetchsim.py --requests 200 --concurrency 10 --rate 50
+pixi run python -m pytest -q</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>FakeAPI(seed, latency=(0.01, 0.05), error_rate=0.05, hang_rate=0.01, max_rate=50)</code> with
+            <code>async def get(path)</code>: sleeps a random latency, sometimes raises <code>ServerError(503)</code>,
+            sometimes hangs for 10 s, and returns 429 if called more than <code>max_rate</code> times in any sliding
+            1-second window.</li>
+          <li><code>Client</code> with a <code>Semaphore</code> (concurrency), a token-bucket <code>RateLimiter</code>
+            (rate), per-request <code>asyncio.timeout</code>, and retries with exponential backoff and jitter on 503,
+            429, and timeouts.</li>
+          <li><code>fetch_many(paths)</code> runs inside a <code>TaskGroup</code>, returns results in input order, and
+            reports stats: successes, retries, timeouts, 429s, p50/p95 latency, and total time.</li>
+          <li>Ctrl+C (or an overall <code>asyncio.timeout</code>) cancels cleanly and prints partial stats.</li>
+          <li>While it runs, inspect it from another terminal with <code>pixi run python -m asyncio pstree &lt;PID&gt;</code>.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m38-mini">
+          <li>All 200 requests eventually succeed with the default settings</li>
+          <li>The client never receives a 429 when its rate is set at or below the API's limit</li>
+          <li>Peak concurrency never exceeds the semaphore size (asserted in a test)</li>
+          <li>Hung requests are cut off by the timeout and retried</li>
+          <li>A test cancels <code>fetch_many</code> midway and checks that no tasks remain</li>
+          <li>Tests use an injected <code>sleep</code>/clock or tiny latencies and finish in under two seconds</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Honor a <code>Retry-After</code> value carried by the 429 response.</li>
+          <li>Adaptive concurrency: shrink the semaphore on 429s and grow it on successes (AIMD).</li>
+          <li>Plot the latency distribution with matplotlib.</li>
+          <li>Then build the real thing: <a href="../projects/p05-async-crawler.html">Project 5: Async Web Crawler</a>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m38-quiz">
+<script type="application/json">
+{"title": "asyncio quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "When can the event loop switch from one task to another?", "options": ["At any bytecode instruction", "Only when the running task awaits something that isn't ready", "Every 5 ms", "Only when a task finishes"], "answer": 1, "explanation": "<p>asyncio is cooperative: a task runs until it suspends at an <code>await</code>. Code between awaits runs without interruption.</p>"},
+  {"type": "single", "prompt": "What does calling <code>fetch()</code> do if <code>fetch</code> is defined with <code>async def</code>?", "options": ["Runs it in a thread", "Returns a coroutine object without running the body", "Runs it to completion", "Schedules it as a Task"], "answer": 1, "explanation": "<p>Calling a coroutine function only creates the coroutine object. It runs when awaited or wrapped in a Task.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import asyncio\n\nasync def say(w, d):\n    await asyncio.sleep(d)\n    print(w)\n\nasync def main():\n    a = asyncio.create_task(say('B', 0.02))\n    b = asyncio.create_task(say('A', 0.01))\n    print('C')\n    await a\n    await b\n\nasyncio.run(main())", "answer": "C\nA\nB", "explanation": "<p>Tasks start at main's first await. <code>C</code> prints first; then the 0.01 s task prints <code>A</code> before the 0.02 s task prints <code>B</code>.</p>"},
+  {"type": "single", "prompt": "One task in a <code>TaskGroup</code> raises <code>ValueError</code>. What happens?", "options": ["The others keep running and the error is logged", "The group cancels the other tasks, waits for them, and raises an ExceptionGroup", "Only the ValueError propagates immediately", "The program exits"], "answer": 1, "explanation": "<p>That's structured concurrency: no task outlives the block, and all failures are reported together.</p>"},
+  {"type": "single", "prompt": "With plain <code>asyncio.gather(a, b, c)</code>, if <code>b</code> raises, what happens to <code>c</code>?", "options": ["It is cancelled", "It keeps running in the background", "It is restarted", "gather waits for it, then raises"], "answer": 1, "explanation": "<p>gather propagates the first exception but doesn't cancel the other awaitables, which keep running unsupervised.</p>"},
+  {"type": "text", "prompt": "Which syntax handles exceptions inside an ExceptionGroup by type? (two tokens)", "answer": ["except*", "except *"], "explanation": "<p><code>except* ValueError as eg:</code> handles the matching subgroup; unmatched exceptions are re-raised.</p>"},
+  {"type": "single", "prompt": "Where is <code>CancelledError</code> raised when you call <code>task.cancel()</code>?", "options": ["In the caller of cancel()", "Inside the task, at its current or next await", "In the event loop", "Nowhere; the task is killed"], "answer": 1, "explanation": "<p>Cancellation is delivered as an exception inside the task, so <code>finally</code> blocks and <code>async with</code> exits run.</p>"},
+  {"type": "single", "prompt": "Why must you re-raise <code>CancelledError</code> after catching it?", "options": ["Style only", "Swallowing it means the task keeps running; timeouts and TaskGroups then misbehave or hang", "It would leak memory", "It's required by the GIL"], "answer": 1, "explanation": "<p>The requester of the cancellation (timeout, TaskGroup, shutdown) depends on the task actually finishing as cancelled.</p>"},
+  {"type": "multi", "prompt": "Which calls block the event loop if used directly inside a coroutine?", "options": ["<code>time.sleep(1)</code>", "<code>await asyncio.sleep(1)</code>", "<code>requests.get(url)</code>", "A 2-second pure-Python loop", "<code>await asyncio.to_thread(requests.get, url)</code>"], "answer": [0, 2, 3], "explanation": "<p>Blocking calls and CPU work hold the only thread. <code>asyncio.sleep</code> suspends; <code>to_thread</code> moves the blocking call to a worker thread.</p>"},
+  {"type": "single", "prompt": "A semaphore of 5 around each request limits what?", "options": ["Requests per second", "Requests in flight at the same time", "Total number of requests", "Retries"], "answer": 1, "explanation": "<p>A semaphore bounds concurrency. Rate (requests per second) needs a separate limiter such as a token bucket.</p>"},
+  {"type": "single", "prompt": "Why do browser cells in this course use <code>await main()</code> instead of <code>asyncio.run(main())</code>?", "options": ["asyncio.run is deprecated", "An event loop is already running in the page, and asyncio.run refuses to start a second one", "Pyodide lacks asyncio", "It's faster"], "answer": 1, "explanation": "<p>Pyodide integrates asyncio with the browser's event loop, so top-level await is used. In a script, use <code>asyncio.run(main())</code>.</p>"},
+  {"type": "text", "prompt": "Which 3.14 command prints a tree of awaiting tasks in a running process with PID 4242? (python -m ...)", "answer": ["python -m asyncio pstree 4242", "pixi run python -m asyncio pstree 4242", "asyncio pstree 4242"], "explanation": "<p><code>python -m asyncio pstree PID</code> shows the await tree; <code>ps PID</code> shows a flat table.</p>"},
+  {"type": "single", "prompt": "What does 3.15's <code>TaskGroup.cancel()</code> add over 3.14?", "options": ["Cancelling a group was impossible before", "A way to cancel all tasks in a group and exit normally, without raising an error", "Automatic retries", "Thread-safe cancellation"], "answer": 1, "explanation": "<p>In 3.14 you need a workaround (a private exception plus <code>except*</code>, or manual cancels). 3.15 makes \"stop the group\" a first-class operation.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>asyncio runs many tasks on one thread, switching only at <code>await</code>; never block the loop.</li>
+      <li>Coroutine functions create coroutine objects; Tasks schedule them concurrently. Keep references, or better, use a <code>TaskGroup</code>.</li>
+      <li><code>TaskGroup</code> gives structured concurrency and <code>ExceptionGroup</code>s; handle them with <code>except*</code>.</li>
+      <li>Use <code>asyncio.timeout</code> for deadlines; cancellation is an exception raised at an await, so clean up in <code>finally</code> and re-raise.</li>
+      <li><code>asyncio.Queue</code> (with <code>task_done</code>/<code>join</code>, sentinels, or 3.13's <code>shutdown()</code>) builds worker pools; <code>Semaphore</code> bounds concurrency; rate needs its own limiter.</li>
+      <li><code>async for</code>, async generators, and <code>async with</code> handle protocols that need to await; close generators with <code>aclosing</code>.</li>
+      <li><code>to_thread</code> and executors bridge blocking code; 3.14 adds <code>python -m asyncio ps/pstree</code> and <code>capture_call_graph</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="asyncio">
+<script type="application/json">
+[
+  {"front": "Event loop in one sentence", "back": "Repeatedly runs ready tasks until they await, then waits for I/O or timers and marks the corresponding tasks ready."},
+  {"front": "Coroutine object vs Task", "back": "A coroutine object is a paused computation; a Task schedules one to run concurrently on the loop."},
+  {"front": "Why keep a reference to tasks?", "back": "The loop only holds weak references; unreferenced tasks can be garbage-collected and their exceptions lost."},
+  {"front": "gather vs TaskGroup on error", "back": "gather: first error propagates, others keep running. TaskGroup: cancels siblings, raises ExceptionGroup."},
+  {"front": "<code>asyncio.timeout(s)</code>", "back": "Async context manager that cancels its block after s seconds and raises TimeoutError at the boundary."},
+  {"front": "CancelledError base class", "back": "BaseException, so <code>except Exception</code> doesn't catch it. Always re-raise it."},
+  {"front": "<code>asyncio.Queue.shutdown()</code>", "back": "3.13+: future puts fail; gets raise QueueShutDown once the queue is empty (immediately with immediate=True)."},
+  {"front": "Semaphore vs rate limiter", "back": "Semaphore: max in flight. Rate limiter (token bucket): max starts per second."},
+  {"front": "<code>asyncio.to_thread(f, *a)</code>", "back": "Runs blocking f in a worker thread and awaits its result without blocking the loop."},
+  {"front": "<code>contextlib.aclosing</code>", "back": "Ensures an async generator's <code>aclose()</code> runs at the end of the block."},
+  {"front": "3.14 async introspection", "back": "<code>python -m asyncio ps PID</code> / <code>pstree PID</code>; in-process <code>asyncio.capture_call_graph</code> and <code>print_call_graph</code>."},
+  {"front": "Browser vs script", "back": "Browser cells: top-level <code>await main()</code>. Scripts: <code>asyncio.run(main())</code>."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/asyncio.html"><code>asyncio</code> documentation</a>, especially <a href="https://docs.python.org/3/library/asyncio-task.html">Coroutines and Tasks</a> and <a href="https://docs.python.org/3/library/asyncio-dev.html">Developing with asyncio</a></li>
+      <li><a href="https://docs.python.org/3/library/asyncio-graph.html">Call graph introspection</a> (3.14)</li>
+      <li><a href="https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/">Notes on structured concurrency</a> (Nathaniel J. Smith)</li>
+      <li><a href="https://peps.python.org/pep-0654/">PEP 654: Exception Groups and except*</a></li>
+      <li>Next: <a href="m39-performance.html">M39 Performance &amp; Profiling</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python Cheat Sheet · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-python">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Language</p>
+    <h1>Python Cheat Sheet</h1>
+    <p class="lede">The syntax and built-ins you reach for every day, grouped by topic, for Python 3.14. Every code block
+      has a Copy button; tabs show alternatives side by side; a few cells let you try things right here.</p>
+    <div class="lesson-meta"><span>⏱ Keep open while you work</span><span><span class="tag v314">3.14</span> baseline</span><span>Full docs: <a href="https://docs.python.org/3.14/library/index.html">Python standard library</a></span></div>
+    <ul class="objectives">
+      <li>Look up syntax quickly without leaving the course</li>
+      <li>Pick the idiomatic built-in or stdlib tool for a common job</li>
+      <li>Jump to the module that explains each topic in depth</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="types">
+    <h2>Built-in types and operators</h2>
+    <table>
+      <thead><tr><th>Type</th><th>Literal</th><th>Mutable?</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>int</code></td><td><code>42</code>, <code>0xFF</code>, <code>0b1010</code>, <code>1_000_000</code></td><td>No</td><td>Arbitrary precision</td></tr>
+        <tr><td><code>float</code></td><td><code>3.14</code>, <code>1e-9</code>, <code>float("inf")</code></td><td>No</td><td>IEEE-754 double; <code>0.1 + 0.2 != 0.3</code></td></tr>
+        <tr><td><code>complex</code></td><td><code>2 + 3j</code></td><td>No</td><td><code>.real</code>, <code>.imag</code></td></tr>
+        <tr><td><code>bool</code></td><td><code>True</code>, <code>False</code></td><td>No</td><td>Subclass of <code>int</code></td></tr>
+        <tr><td><code>NoneType</code></td><td><code>None</code></td><td>No</td><td>Test with <code>is None</code></td></tr>
+        <tr><td><code>str</code></td><td><code>"hi"</code>, <code>'hi'</code>, <code>"""multi"""</code>, <code>r"\d"</code></td><td>No</td><td>Unicode text</td></tr>
+        <tr><td><code>bytes</code> / <code>bytearray</code></td><td><code>b"\x00"</code></td><td>No / Yes</td><td>Raw binary data</td></tr>
+        <tr><td><code>list</code></td><td><code>[1, 2]</code></td><td>Yes</td><td>Ordered sequence</td></tr>
+        <tr><td><code>tuple</code></td><td><code>(1, 2)</code>, <code>1,</code></td><td>No</td><td>Fixed record</td></tr>
+        <tr><td><code>dict</code></td><td><code>{"a": 1}</code></td><td>Yes</td><td>Insertion-ordered mapping</td></tr>
+        <tr><td><code>set</code> / <code>frozenset</code></td><td><code>{1, 2}</code>, <code>set()</code></td><td>Yes / No</td><td><code>{}</code> is an empty <em>dict</em></td></tr>
+        <tr><td><code>range</code></td><td><code>range(0, 10, 2)</code></td><td>No</td><td>Lazy arithmetic sequence</td></tr>
+      </tbody>
+    </table>
+<pre><code class="language-python">7 / 2    # 3.5   true division
+7 // 2   # 3     floor division (-7 // 2 == -4)
+7 % 2    # 1     remainder (sign follows the divisor)
+2 ** 10  # 1024
+divmod(7, 2)          # (3, 1)
+abs(-3), round(2.675, 2), round(2.5)   # 3, 2.67, 2 (banker's rounding)
+x == y   # equal values      x is y   # same object
+a &lt; b &lt; c             # chained comparison
+x if cond else y      # conditional expression
+a and b, a or b, not a   # short-circuit; return an operand, not always a bool
+if (n := len(items)) &gt; 10: ...   # walrus: assign inside an expression
+int("42"), float("1.5"), str(3), bool(""), list("abc")  # conversions
+isinstance(x, (int, float))   # type check (prefer over type(x) == int)</code></pre>
+    <p>Falsy values: <code>False</code>, <code>None</code>, <code>0</code>, <code>0.0</code>, <code>""</code>,
+      <code>[]</code>, <code>()</code>, <code>{}</code>, <code>set()</code>, <code>range(0)</code>. Everything else is
+      truthy. More in <a href="../modules/m02-values-types.html">M02</a>.</p>
+    <div class="runnable" data-title="Predict: floor division and rounding" data-predict>
+<textarea>
+print(-7 // 2, -7 % 2, round(0.5), round(1.5), 0.1 + 0.2 == 0.3)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="strings">
+    <h2>Strings, f-strings, and t-strings</h2>
+    <div class="tabs">
+      <div class="tab" data-label="Methods">
+<pre><code class="language-python">s = "  Hello, World  "
+s.strip(), s.lstrip(), s.rstrip()      # trim whitespace
+s.lower(), s.upper(), s.title(), s.casefold()
+s.split(","), "a b  c".split()          # ['  Hello', ' World  '], ['a', 'b', 'c']
+", ".join(["a", "b"])                   # 'a, b'
+s.replace("World", "Py")
+s.startswith("  H"), s.endswith("  ")
+s.find("o"), s.index("o"), s.count("l") # find returns -1 if missing; index raises
+"42".isdigit(), "abc".isalpha(), " ".isspace()
+"py".center(8, "*"), "7".zfill(3)       # '***py***', '007'
+"report.csv".removesuffix(".csv")       # 'report'
+s.partition(",")                        # ('  Hello', ',', ' World  ')</code></pre></div>
+      <div class="tab" data-label="Slicing">
+<pre><code class="language-python">s = "python"
+s[0], s[-1]       # 'p', 'n'
+s[1:4]            # 'yth'   start inclusive, stop exclusive
+s[:2], s[2:]      # 'py', 'thon'
+s[::2]            # 'pto'
+s[::-1]           # 'nohtyp'  reversed
+len(s)            # 6</code></pre></div>
+      <div class="tab" data-label="f-strings">
+<pre><code class="language-python">name, n, pi = "Ada", 1234567, 3.14159
+f"{name!r}"         # "'Ada'"     repr
+f"{n:,}"            # '1,234,567'
+f"{n:_}"            # '1_234_567'
+f"{pi:.2f}"         # '3.14'
+f"{0.256:.1%}"      # '25.6%'
+f"{name:&gt;8}"        # '     Ada'   right align (&lt; left, ^ center)
+f"{name:*^9}"       # '***Ada***'
+f"{255:#x} {5:08b}" # '0xff 00000101'
+f"{n = }"           # 'n = 1234567'  self-documenting
+f"{'nested' + "quotes"}"   # same quotes allowed inside since 3.12</code></pre></div>
+      <div class="tab" data-label="t-strings (3.14)">
+<pre><code class="language-python">from string.templatelib import Template, Interpolation
+
+user = "&lt;b&gt;Ada&lt;/b&gt;"
+tpl: Template = t"Hello {user}!"
+tpl.strings          # ('Hello ', '!')
+tpl.values           # ('&lt;b&gt;Ada&lt;/b&gt;',)
+for part in tpl:     # str and Interpolation, in order
+    if isinstance(part, Interpolation):
+        part.value, part.expression, part.conversion, part.format_spec</code></pre></div>
+      <div class="tab" data-label="Unicode & bytes">
+<pre><code class="language-python">ord("A"), chr(65)              # 65, 'A'
+"café".encode("utf-8")         # b'caf\xc3\xa9'
+b"caf\xc3\xa9".decode("utf-8") # 'café'
+len("café"), len("café".encode())   # 4, 5
+open("f.txt", encoding="utf-8")     # always say the encoding</code></pre></div>
+    </div>
+    <p>Depth: <a href="../modules/m03-strings.html">M03 Strings &amp; Text</a>.
+      Template strings: <a href="python-314.html#t-strings">What's New in 3.14</a>.</p>
+    <div class="runnable" data-title="Format spec playground">
+<textarea>
+value = 1234.5678
+for spec in [",.2f", ">12.1f", "^12.0f", "e", ".3%", "_.1f"]:
+    print(f"{spec!r:>10} -> {value:{spec}}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="collections">
+    <h2>Collections</h2>
+    <div class="tabs">
+      <div class="tab" data-label="list">
+<pre><code class="language-python">xs = [3, 1, 2]
+xs.append(4); xs.extend([5, 6]); xs.insert(0, 0)
+xs.pop(), xs.pop(0), xs.remove(3)    # by end, by index, by value
+xs.index(2), xs.count(2), 2 in xs
+xs.sort(); xs.sort(key=abs, reverse=True)   # in place, returns None
+sorted(xs), reversed(xs), min(xs), max(xs), sum(xs)
+xs[1:3] = [9, 9]       # slice assignment
+xs.copy(), xs[:]       # shallow copies
+del xs[0]</code></pre></div>
+      <div class="tab" data-label="tuple & unpacking">
+<pre><code class="language-python">point = (3, 4)
+x, y = point
+first, *rest = [1, 2, 3, 4]      # 1, [2, 3, 4]
+a, b = b, a                      # swap
+(x, y), z = (1, 2), 3            # nested
+for i, item in enumerate(items, start=1): ...
+for a, b in zip(xs, ys, strict=True): ...
+from collections import namedtuple
+P = namedtuple("P", "x y"); P(1, 2).x</code></pre></div>
+      <div class="tab" data-label="dict">
+<pre><code class="language-python">d = {"a": 1, "b": 2}
+d["c"] = 3; d.get("z", 0); d.setdefault("k", [])
+d.pop("a"), d.popitem()          # popitem removes the last inserted
+d.keys(), d.values(), d.items()
+for key, value in d.items(): ...
+d | {"x": 9}; d |= {"y": 8}      # merge (new / in place)
+dict.fromkeys("abc", 0)          # {'a': 0, 'b': 0, 'c': 0}
+{**d1, **d2}                     # merge, d2 wins
+"a" in d                         # checks keys</code></pre></div>
+      <div class="tab" data-label="set">
+<pre><code class="language-python">s = {1, 2, 3}
+s.add(4); s.discard(9); s.remove(1)   # remove raises if missing
+a | b, a &amp; b, a - b, a ^ b             # union, intersection, difference, symmetric
+a &lt;= b, a.isdisjoint(b)
+frozenset(s)                          # hashable</code></pre></div>
+      <div class="tab" data-label="collections">
+<pre><code class="language-python">from collections import Counter, defaultdict, deque, OrderedDict, ChainMap
+Counter("banana").most_common(2)    # [('a', 3), ('n', 2)]
+groups = defaultdict(list); groups["k"].append(1)
+q = deque(maxlen=3); q.append(1); q.appendleft(0); q.popleft(); q.rotate(1)
+ChainMap(cli_args, env, defaults)["key"]   # layered lookup</code></pre></div>
+    </div>
+    <p>Depth: <a href="../modules/m06-collections.html">M06 Collections</a>; costs in the
+      <a href="complexity-cheatsheet.html#builtins">Complexity cheat sheet</a>.</p>
+    <div class="runnable" data-title="Predict: aliasing vs copying" data-predict>
+<textarea>
+a = [[0], [0]]
+b = a[:]          # shallow copy
+b[0].append(1)
+b[1] = [9]
+print(a, b)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="comprehensions">
+    <h2>Comprehensions and generator expressions</h2>
+<pre><code class="language-python">[x * x for x in range(5)]                    # list
+[x for x in nums if x % 2 == 0]              # filter
+["even" if x % 2 == 0 else "odd" for x in nums]  # map with a condition
+{w: len(w) for w in words}                   # dict
+{c.lower() for c in text if c.isalpha()}     # set
+(x * x for x in range(10**9))                # generator: lazy, O(1) memory
+sum(x * x for x in nums)                     # no extra brackets needed
+[(r, c) for r in range(3) for c in range(3) if r != c]   # nested: outer loop first
+[x for row in matrix for x in row]           # flatten one level</code></pre>
+    <aside class="callout py315"><p>Python 3.15 adds unpacking in comprehensions: <code>[*row for row in matrix]</code>
+      and <code>{**d for d in dicts}</code>. See the <a href="python-315.html#unpacking">3.15 preview</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="control-flow">
+    <h2>Control flow</h2>
+    <div class="two-col">
+<pre><code class="language-python">if x &gt; 0:
+    ...
+elif x == 0:
+    ...
+else:
+    ...
+
+while n &gt; 0:
+    n -= 1
+    if n == 3:
+        continue
+    if n == 1:
+        break
+else:
+    ...   # runs only if no break</code></pre>
+<pre><code class="language-python">for i in range(10):            # 0..9
+for i in range(10, 0, -2):     # 10, 8, 6, 4, 2
+for i, x in enumerate(xs):
+for a, b in zip(xs, ys):
+for k, v in d.items():
+for x in reversed(xs):
+for x in sorted(xs, key=len):
+
+for item in items:
+    if is_match(item):
+        break
+else:
+    item = None   # loop finished without break</code></pre>
+    </div>
+    <p>Depth: <a href="../modules/m04-control-flow.html">M04 Control Flow</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="match">
+    <h2>Structural pattern matching</h2>
+<pre><code class="language-python">match command.split():
+    case ["go", direction]:                     # sequence with capture
+        move(direction)
+    case ["drop", *objects]:                    # star capture
+        drop(objects)
+    case ["quit" | "exit"]:                     # alternatives
+        quit()
+    case _:                                     # wildcard
+        print("unknown")
+
+match event:
+    case {"type": "click", "pos": (x, y)}:      # mapping + nested sequence
+        ...
+    case Point(x=0, y=0):                       # class pattern
+        ...
+    case Point(x=x, y=y) if x == y:             # guard
+        ...
+    case int() | float() as number:             # type check + bind
+        ...
+    case Color.RED:                             # dotted name = value pattern
+        ...</code></pre>
+    <div class="runnable" data-title="Try match on a few shapes">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+def describe(obj):
+    match obj:
+        case Point(x=0, y=0):
+            return "origin"
+        case Point(x=x, y=y) if x == y:
+            return f"on the diagonal at {x}"
+        case [first, *rest]:
+            return f"sequence starting with {first!r} and {len(rest)} more"
+        case {"error": message}:
+            return f"error: {message}"
+        case str() | bytes():
+            return "text-ish"
+        case _:
+            return "something else"
+
+for value in [Point(0, 0), Point(2, 2), [1, 2, 3], {"error": "disk full"}, "hi", 3.5]:
+    print(f"{value!r:>28} -> {describe(value)}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="functions">
+    <h2>Functions</h2>
+<pre><code class="language-python">def greet(name: str, greeting: str = "Hello") -&gt; str:
+    """Return a greeting."""
+    return f"{greeting}, {name}!"
+
+def f(pos_only, /, normal, *args, kw_only, **kwargs): ...
+f(1, 2, 3, 4, kw_only=5, extra=6)   # args=(3, 4), kwargs={'extra': 6}
+f(*[1, 2], **{"kw_only": 3})       # unpack into a call
+
+square = lambda x: x * x             # small anonymous function
+sorted(people, key=lambda p: (p.age, p.name))
+
+def outer():
+    count = 0
+    def inc():
+        nonlocal count             # rebind the enclosing variable
+        count += 1
+        return count
+    return inc                     # a closure
+
+def bad(items=[]): ...             # mutable default: shared between calls!
+def good(items=None):
+    items = [] if items is None else items</code></pre>
+<pre><code class="language-python">import functools
+
+@functools.cache                      # memoize
+def fib(n: int) -&gt; int:
+    return n if n &lt; 2 else fib(n - 1) + fib(n - 2)
+
+def timed(func):                      # a decorator
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper</code></pre>
+    <p>Scope rule: <dfn>LEGB</dfn> (Local, Enclosing, Global, Built-in). Depth:
+      <a href="../modules/m05-functions.html">M05 Functions</a>, <a href="../modules/m15-decorators.html">M15 Decorators</a>,
+      <a href="../modules/m18-functional.html">M18 Functional Python</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="classes">
+    <h2>Classes and dataclasses</h2>
+    <div class="tabs">
+      <div class="tab" data-label="class">
+<pre><code class="language-python">class Account:
+    interest = 0.02                      # class attribute (shared)
+
+    def __init__(self, owner: str, balance: float = 0) -&gt; None:
+        self.owner = owner                # instance attribute
+        self._balance = balance           # "private" by convention
+
+    @property
+    def balance(self) -&gt; float:           # read like an attribute
+        return self._balance
+
+    def deposit(self, amount: float) -&gt; None:
+        if amount &lt;= 0:
+            raise ValueError("amount must be positive")
+        self._balance += amount
+
+    @classmethod
+    def empty(cls, owner: str) -&gt; "Account":   # alternative constructor
+        return cls(owner)
+
+    @staticmethod
+    def fee(amount: float) -&gt; float:
+        return amount * 0.01
+
+    def __repr__(self) -&gt; str:
+        return f"Account({self.owner!r}, {self._balance})"
+
+class Savings(Account):
+    def __init__(self, owner: str) -&gt; None:
+        super().__init__(owner)</code></pre></div>
+      <div class="tab" data-label="dataclass">
+<pre><code class="language-python">from dataclasses import dataclass, field
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Item:
+    name: str
+    price: float
+    tags: list[str] = field(default_factory=list)   # never a bare [] default
+
+    def __post_init__(self) -&gt; None:
+        if self.price &lt; 0:
+            raise ValueError("price must be &gt;= 0")
+
+item = Item(name="pen", price=1.5)
+# free: __init__, __repr__, __eq__, and (frozen) __hash__
+from dataclasses import replace, asdict
+replace(item, price=2.0), asdict(item)</code></pre></div>
+      <div class="tab" data-label="enum & records">
+<pre><code class="language-python">from enum import Enum, StrEnum, auto
+class Color(Enum):
+    RED = auto()
+    GREEN = auto()
+class Level(StrEnum):
+    DEBUG = auto()      # value 'debug'
+
+from typing import NamedTuple, TypedDict
+class Pair(NamedTuple):
+    left: int
+    right: int
+class Movie(TypedDict):
+    title: str
+    year: int</code></pre></div>
+      <div class="tab" data-label="dunder methods">
+<pre><code class="language-python">__repr__ / __str__        repr(x) / str(x)
+__eq__ / __hash__         x == y / hash(x)  (define both, or neither)
+__lt__ (+ functools.total_ordering)   sorting
+__len__ / __getitem__ / __contains__ / __iter__   containers
+__add__ / __radd__ / __iadd__        + / reflected + / +=
+__call__                  x()
+__enter__ / __exit__      with x:
+__bool__                  truthiness</code></pre></div>
+    </div>
+    <p>Depth: <a href="../modules/m10-classes.html">M10</a>, <a href="../modules/m11-data-model.html">M11</a>,
+      <a href="../modules/m12-inheritance.html">M12</a>, <a href="../modules/m13-dataclasses.html">M13</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="exceptions">
+    <h2>Exceptions</h2>
+<pre><code class="language-python">try:
+    value = int(text)
+except ValueError as exc:            # one type, bound to a name
+    log_bad_input(exc)
+except KeyError, IndexError:         # 3.14: several types, no parentheses (no 'as')
+    ...
+except (TypeError, OverflowError) as exc:   # with 'as', parentheses are required
+    ...
+else:
+    use(value)                       # only if no exception
+finally:
+    cleanup()                        # always (no return/break/continue here: 3.14 warns)
+
+raise ValueError(f"bad value: {value!r}")
+raise ConfigError("cannot load") from exc   # chain: shows the cause
+
+class ConfigError(Exception):
+    """Raised when configuration is invalid."""
+
+try:
+    async_work()
+except* TimeoutError as group:       # exception groups (TaskGroup errors)
+    ...
+exc.add_note("while loading settings.toml")</code></pre>
+    <p>Common built-ins: <code>ValueError</code>, <code>TypeError</code>, <code>KeyError</code>,
+      <code>IndexError</code>, <code>AttributeError</code>, <code>FileNotFoundError</code>, <code>ZeroDivisionError</code>,
+      <code>StopIteration</code>, <code>NotImplementedError</code>. Depth:
+      <a href="../modules/m07-exceptions.html">M07 Errors &amp; Exceptions</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="iterators">
+    <h2>Iterators and generators</h2>
+<pre><code class="language-python">it = iter([1, 2, 3]); next(it); next(it, "default")
+
+def countdown(n):                 # generator function
+    while n &gt; 0:
+        yield n
+        n -= 1
+
+def chain_all(*iterables):
+    for iterable in iterables:
+        yield from iterable       # delegate
+
+import itertools as it
+it.count(10), it.cycle("ab"), it.repeat(0, 3)
+it.chain([1], [2]), it.islice(gen, 5), it.batched(range(7), 3)
+it.groupby(sorted(rows, key=key), key=key)    # sort first!
+it.accumulate([1, 2, 3]), it.pairwise("abc")
+it.product("ab", repeat=2), it.permutations("abc", 2), it.combinations("abc", 2)
+it.takewhile(pred, xs), it.dropwhile(pred, xs), it.zip_longest(a, b, fillvalue=0)
+map(f, xs, ys, strict=True)       # 3.14: strict length check
+any(x &gt; 0 for x in xs), all(...)</code></pre>
+    <div class="runnable" data-title="A lazy pipeline">
+<textarea>
+import itertools
+
+def numbers():
+    n = 0
+    while True:           # infinite, but lazy
+        yield n
+        n += 1
+
+evens = (n for n in numbers() if n % 2 == 0)
+squares = (n * n for n in evens)
+print(list(itertools.islice(squares, 6)))
+print(list(itertools.batched("abcdefg", 3)))
+</textarea>
+    </div>
+    <p>Depth: <a href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="context-managers">
+    <h2>Context managers</h2>
+<pre><code class="language-python">with open("in.txt", encoding="utf-8") as src, open("out.txt", "w", encoding="utf-8") as dst:
+    dst.write(src.read())
+
+from contextlib import contextmanager, suppress, ExitStack, redirect_stdout, chdir
+
+@contextmanager
+def timer(label):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        print(label, time.perf_counter() - start)
+
+with suppress(FileNotFoundError):      # deliberate, documented ignore
+    os.remove("tmp.txt")
+
+with ExitStack() as stack:             # a dynamic number of resources
+    files = [stack.enter_context(open(p, encoding="utf-8")) for p in paths]
+
+class Managed:
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc, tb): return False   # False: don't swallow errors</code></pre>
+    <p>Depth: <a href="../modules/m15-decorators.html">M15 Decorators &amp; Context Managers</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="typing">
+    <h2>Type hints</h2>
+<pre><code class="language-python">def mean(values: list[float]) -&gt; float: ...
+def find(name: str) -&gt; User | None: ...           # optional
+def merge(a: dict[str, int], b: dict[str, int]) -&gt; dict[str, int]: ...
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+def apply(f: Callable[[int], str], xs: Iterable[int]) -&gt; list[str]: ...
+
+def first[T](items: Sequence[T]) -&gt; T: ...       # PEP 695 generics
+class Box[T]:
+    def __init__(self, item: T) -&gt; None: self.item = item
+type Vector = list[float]                         # type alias
+
+from typing import Protocol, Literal, Final, TypedDict, Self, Any, overload
+class SupportsClose(Protocol):
+    def close(self) -&gt; None: ...
+Mode = Literal["r", "w"]
+MAX: Final = 10
+
+class Node:                                        # 3.14: forward refs without quotes
+    def add(self, child: Node) -&gt; Node: ...
+
+from annotationlib import get_annotations, Format
+get_annotations(Node.add, format=Format.STRING)</code></pre>
+<pre data-label="Terminal"><code class="language-bash">pixi run mypy --strict src/</code></pre>
+    <p>Depth: <a href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="async">
+    <h2>Async</h2>
+<pre><code class="language-python">import asyncio
+
+async def fetch(name: str, delay: float) -&gt; str:
+    await asyncio.sleep(delay)              # yield to the event loop
+    return name
+
+async def main() -&gt; None:
+    a, b = await asyncio.gather(fetch("a", 1), fetch("b", 1))   # ~1 s total
+
+    async with asyncio.TaskGroup() as tg:   # structured concurrency
+        t1 = tg.create_task(fetch("x", 0.5))
+        t2 = tg.create_task(fetch("y", 0.2))
+    print(t1.result(), t2.result())
+
+    async with asyncio.timeout(2):          # cancel if too slow
+        await fetch("slow", 1)
+
+    sem = asyncio.Semaphore(10)             # limit concurrency
+    async with sem: ...
+
+asyncio.run(main())                         # in a script (top-level await in the browser)</code></pre>
+    <div class="runnable" data-title="Concurrent sleeps">
+<textarea>
+import asyncio
+import time
+
+async def job(name, delay):
+    await asyncio.sleep(delay)
+    return f"{name} done after {delay:.1f}s"
+
+async def main():
+    start = time.perf_counter()
+    async with asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(job(f"job{i}", 0.2 * i)) for i in range(1, 4)]
+    for t in tasks:
+        print(t.result())
+    print(f"total {time.perf_counter() - start:.1f}s (not 1.2s)")
+
+await main()      # local scripts: asyncio.run(main())
+</textarea>
+    </div>
+    <p>Depth: <a href="../modules/m38-asyncio.html">M38 Async Programming</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="stdlib">
+    <h2>Common standard library</h2>
+    <table>
+      <thead><tr><th>Job</th><th>Reach for</th><th>One-liner</th></tr></thead>
+      <tbody>
+        <tr><td>Paths and files</td><td><code>pathlib</code></td><td><code>Path("data").glob("*.csv")</code>, <code>p.read_text(encoding="utf-8")</code>, <code>p.copy(dst)</code> (3.14)</td></tr>
+        <tr><td>JSON</td><td><code>json</code></td><td><code>json.loads(s)</code>, <code>json.dumps(obj, indent=2)</code></td></tr>
+        <tr><td>CSV</td><td><code>csv</code></td><td><code>csv.DictReader(f)</code>, <code>csv.DictWriter(f, fieldnames)</code></td></tr>
+        <tr><td>TOML (read)</td><td><code>tomllib</code></td><td><code>tomllib.load(open("pixi.toml", "rb"))</code></td></tr>
+        <tr><td>Dates and times</td><td><code>datetime</code>, <code>zoneinfo</code></td><td><code>datetime.now(ZoneInfo("Europe/Oslo"))</code>, <code>date.fromisoformat("2026-10-14")</code></td></tr>
+        <tr><td>Regular expressions</td><td><code>re</code></td><td><code>re.findall(r"\d+", s)</code>, <code>re.sub(r"\s+", " ", s)</code></td></tr>
+        <tr><td>Math and stats</td><td><code>math</code>, <code>statistics</code>, <code>random</code>, <code>decimal</code>, <code>fractions</code></td><td><code>math.isclose(a, b)</code>, <code>statistics.median(xs)</code></td></tr>
+        <tr><td>Heaps and binary search</td><td><code>heapq</code>, <code>bisect</code></td><td><code>heapq.nlargest(3, xs)</code>, <code>heapq.heappop_max(h)</code> (3.14), <code>bisect.insort(xs, x)</code></td></tr>
+        <tr><td>IDs and secrets</td><td><code>uuid</code>, <code>secrets</code>, <code>hashlib</code></td><td><code>uuid.uuid7()</code> (3.14), <code>secrets.token_urlsafe(16)</code>, <code>hashlib.sha256(b).hexdigest()</code></td></tr>
+        <tr><td>CLI arguments</td><td><code>argparse</code></td><td><code>ArgumentParser(suggest_on_error=True)</code></td></tr>
+        <tr><td>Compression</td><td><code>compression.zstd</code> (3.14), <code>gzip</code>, <code>zipfile</code>, <code>tarfile</code></td><td><code>zstd.compress(data)</code></td></tr>
+        <tr><td>Databases</td><td><code>sqlite3</code></td><td><code>with sqlite3.connect("app.db") as con: con.execute(sql, params)</code></td></tr>
+        <tr><td>Processes</td><td><code>subprocess</code></td><td><code>subprocess.run(["git", "status"], check=True, capture_output=True, text=True)</code></td></tr>
+        <tr><td>Concurrency</td><td><code>concurrent.futures</code></td><td><code>ThreadPoolExecutor</code>, <code>ProcessPoolExecutor</code>, <code>InterpreterPoolExecutor</code> (3.14)</td></tr>
+        <tr><td>Timing and profiling</td><td><code>time</code>, <code>timeit</code>, <code>cProfile</code></td><td><code>time.perf_counter()</code>, <code>pixi run python -m cProfile -s cumtime app.py</code></td></tr>
+        <tr><td>Copying</td><td><code>copy</code></td><td><code>copy.copy(x)</code>, <code>copy.deepcopy(x)</code></td></tr>
+        <tr><td>Logging (professional code)</td><td><code>structlog</code> (via Pixi)</td><td><code>log = structlog.get_logger(); log.info("loaded", rows=n)</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Stdlib sampler">
+<textarea>
+import json
+import re
+import statistics
+from collections import Counter
+from datetime import date, timedelta
+
+text = "Order 17 shipped 2026-10-14; order 23 shipped 2026-10-16."
+numbers = [int(n) for n in re.findall(r"\border (\d+)", text, flags=re.I)]
+dates = [date.fromisoformat(d) for d in re.findall(r"\d{4}-\d{2}-\d{2}", text)]
+print(numbers, dates[1] - dates[0], dates[0] + timedelta(weeks=1))
+print(statistics.mean(numbers), Counter(text.lower().split()).most_common(2))
+print(json.dumps({"orders": numbers, "first": dates[0].isoformat()}, indent=2))
+</textarea>
+    </div>
+    <p>Depth: <a href="../modules/m09-files-io.html">M09 Files</a>, <a href="../modules/m40-stdlib.html">M40 Standard
+      Library Power Tools</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-python-quiz">
+<script type="application/json">
+{"title": "Python quick-reference quiz", "passScore": 0.7, "questions": [
+  {"type": "output", "prompt": "What does this print?", "code": "print(-7 // 2)", "answer": "-4", "explanation": "<p><code>//</code> floors toward negative infinity: -3.5 becomes -4.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "s = \"python\"\nprint(s[1:4], s[::-1])", "answer": "yth nohtyp", "explanation": "<p>Slices include the start and exclude the stop; a step of -1 reverses.</p>"},
+  {"type": "single", "prompt": "What is <code>type({})</code>?", "options": ["<code>set</code>", "<code>dict</code>", "<code>frozenset</code>", "<code>tuple</code>"], "answer": 1, "explanation": "<p>Empty braces make an empty dict. Use <code>set()</code> for an empty set.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "first, *rest = [1, 2, 3]\nprint(rest)", "answer": "[2, 3]", "explanation": "<p>The starred name collects the remaining items into a list.</p>"},
+  {"type": "single", "prompt": "Why is <code>def add(item, bucket=[])</code> a bug?", "options": ["Lists are not allowed as defaults", "The same list is shared across every call that uses the default", "It makes the function slower", "It raises a SyntaxError"], "answer": 1, "explanation": "<p>Defaults are evaluated once at definition time. Use <code>None</code> and create a new list inside.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(f\"{1234567:,}|{0.5:.0%}|{'ab':*^6}\")", "answer": "1,234,567|50%|**ab**", "explanation": "<p><code>,</code> groups thousands, <code>.0%</code> multiplies by 100 with no decimals, and <code>*^6</code> centers in width 6 with <code>*</code> fill.</p>"},
+  {"type": "multi", "prompt": "Which values are falsy?", "options": ["<code>0.0</code>", "<code>\"0\"</code>", "<code>[]</code>", "<code>None</code>", "<code>[0]</code>"], "answer": [0, 2, 3], "explanation": "<p>Zero numbers, empty containers, and None are falsy. <code>\"0\"</code> and <code>[0]</code> are non-empty, so truthy.</p>"},
+  {"type": "text", "prompt": "Which keyword makes a function a generator?", "answer": ["yield"], "explanation": "<p>Any function containing <code>yield</code> returns a generator object when called.</p>"},
+  {"type": "single", "prompt": "In <code>for ... else</code>, when does the <code>else</code> block run?", "options": ["When the loop body raises", "When the loop finished without <code>break</code>", "Only when the iterable is empty", "Never; it is a syntax error"], "answer": 1, "explanation": "<p>Think of it as \"no break\". It is handy for search loops.</p>"},
+  {"type": "single", "prompt": "What does <code>@dataclass(frozen=True)</code> add?", "options": ["Faster attribute access", "Immutability (assignment raises) and a generated <code>__hash__</code>", "Automatic JSON serialization", "Thread safety"], "answer": 1, "explanation": "<p>Frozen dataclasses raise <code>FrozenInstanceError</code> on assignment and are hashable when all fields are.</p>"}
+]}
+</script>
+    </div>
+    <div class="flashcards" data-title="Idioms to remember">
+<script type="application/json">
+[{"front": "Swap two variables", "back": "<code>a, b = b, a</code>"},
+ {"front": "Count things", "back": "<code>Counter(items).most_common(n)</code>"},
+ {"front": "Group into lists", "back": "<code>groups = defaultdict(list); groups[k].append(v)</code>"},
+ {"front": "Index and value", "back": "<code>for i, x in enumerate(xs, start=1):</code>"},
+ {"front": "Iterate pairs safely", "back": "<code>zip(a, b, strict=True)</code>"},
+ {"front": "Sort by several keys", "back": "<code>sorted(rows, key=lambda r: (r.city, -r.score))</code>"},
+ {"front": "Test for None", "back": "<code>if x is None:</code> (never <code>== None</code>)"},
+ {"front": "Read a text file", "back": "<code>Path(p).read_text(encoding=\"utf-8\")</code>"}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/index.html">The Python Tutorial</a> and <a href="https://docs.python.org/3.14/library/functions.html">Built-in Functions</a></li>
+      <li><a href="https://docs.python.org/3.14/library/string.html#format-specification-mini-language">Format specification mini-language</a></li>
+      <li><a href="glossary.html">Glossary</a> for any term on this page</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

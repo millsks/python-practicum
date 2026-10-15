@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 7 · City Data EDA Report · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p07">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Graded project</p>
+    <h1>Project 7: City Data EDA Report</h1>
+    <p class="lede">Turn a messy export of a city's 311 service requests into a cleaned dataset, honest statistics,
+      clear charts, and a Markdown report a city manager can read. Every cleaning decision is documented and every
+      number is reproducible, because the tests check the exact values.</p>
+    <div class="lesson-meta"><span>⏱ ~8–12 hours</span><span>Prerequisites:
+      <a href="../modules/m51-pandas.html">M51</a>, <a href="../modules/m53-visualization.html">M53</a>,
+      <a href="../modules/m54-statistics.html">M54</a> (and <a href="../modules/m50-scipy.html">M50</a> for scipy.stats)</span></div>
+    <ul class="objectives">
+      <li>Load raw data with explicit dtypes instead of letting pandas guess</li>
+      <li>Design cleaning rules as small, ordered, logged steps whose effects can be counted and tested</li>
+      <li>Engineer features from timestamps and detect outliers relative to each group</li>
+      <li>Quantify uncertainty with a bootstrap confidence interval and compare groups with a nonparametric test</li>
+      <li>Produce publication-quality charts headlessly with matplotlib's <code>Figure</code> API</li>
+      <li>Assemble a reproducible pipeline that writes a Markdown report, verified by 60+ tests</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>Every large city runs a <strong>311</strong> line: the non-emergency number (and app) where residents report
+      noise, missing heat, potholes, broken street lights, and illegal parking. Each report becomes a <em>service
+      request</em> with an ID, a creation time, a closing time once resolved, a category, and a borough.</p>
+    <p>The deputy mayor's office wants a monthly <strong>exploratory data analysis</strong> (EDA) report: what people
+      complain about, where, how the volume is trending, how long the city takes to resolve requests, and whether one
+      borough is being served more slowly than another. Last month an analyst built it by hand in a spreadsheet; nobody
+      can reproduce the numbers, and the borough totals did not add up because <code>BROOKLYN</code>,
+      <code>Bklyn</code>, and <code>Brooklyn</code> were counted separately.</p>
+    <p>Your job is to build <code>cityeda</code>, a small Python package that runs the whole analysis from the raw
+      export to <code>report.md</code> plus charts, with a cleaning log that explains every row that was dropped or
+      changed. The raw export is genuinely messy:</p>
+    <ul>
+      <li>borough names in many spellings (<code>BRONX</code>, <code>The Bronx</code>, <code>BX</code>), and some blank;</li>
+      <li>categories with random casing and stray spaces (<code> STREET LIGHT </code>);</li>
+      <li>creation dates that are not dates at all (<code>not a date</code>, <code>31/02/2025</code>, <code>N/A</code>);</li>
+      <li>closing dates of <code>unknown</code>, and some requests that "close" before they were opened;</li>
+      <li>a few requests that took thousands of hours, and request IDs that appear twice.</li>
+    </ul>
+    <p>Because the real export cannot be shipped with the course, the package includes a <strong>deterministic
+      synthetic generator</strong>, <code>generate_requests(n, seed)</code>, that produces a realistic CSV with exactly
+      known amounts of each kind of mess. That is what lets the tests check your cleaning counts and statistics
+      exactly.</p>
+    <p>Here is a small sample in the same format. Explore it before you write any code:</p>
+    <div class="runnable" data-title="Explore a sample of the raw export">
+<textarea>
+import io
+import pandas as pd
+
+sample = """request_id,created_at,closed_at,category,borough,channel,status
+SR-0000878,2025-04-04 11:31:23,2025-04-08 16:11:01,STREET LIGHT,BX,Online,Closed
+SR-0000099,2025-03-04 20:33:35,2025-03-06 17:25:09,Street Light,Queens,Online,Closed
+SR-0000813,2025-02-24 17:07:07,2025-03-01 08:25:50, Street Light ,Queens,Phone,Closed
+SR-0000418,2025-03-16 02:52:49,2025-03-16 08:28:59,heat/hot water,BROOKLYN,Online,Closed
+SR-0000454,2025-01-13 19:16:22,2025-01-14 07:56:58,Noise,New York,Mobile,Closed
+SR-0000501,not a date,2025-02-02 10:00:00,Noise,Brooklyn,Phone,Closed
+SR-0000502,2025-02-03 09:15:00,unknown,Water Leak,,Phone,Closed
+SR-0000503,2025-02-05 14:00:00,2025-02-05 09:00:00,noise,The Bronx,Mobile,Closed
+SR-0000454,2025-01-13 19:16:22,2025-01-14 07:56:58,Noise,New York,Mobile,Closed
+SR-0000504,2025-02-06 08:30:00,,Illegal Parking,MN,Online,Open
+"""
+raw = pd.read_csv(io.StringIO(sample), dtype=str)
+print(raw.dtypes)
+print(raw["borough"].value_counts(dropna=False))
+print("duplicate ids:", raw["request_id"].duplicated().sum())
+print("unparseable created_at:", pd.to_datetime(raw["created_at"], format="%Y-%m-%d %H:%M:%S", errors="coerce").isna().sum())
+</textarea>
+    </div>
+    <aside class="callout think"><p>Before reading the spec, write down your own cleaning rules for this sample. Which
+      rows would you drop, which would you repair, and which would you keep but mark as unknown? What would you tell
+      the deputy mayor about each choice?</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals and feature spec</h2>
+    <div class="card-grid">
+      <div class="card"><h4>0. <code>cityeda.generate</code> (provided)</h4>
+        <p><code>generate_requests(n=2000, seed=311) -&gt; str</code> returns CSV text with <code>n + n // 50</code>
+          rows; <code>write_requests(path, n, seed)</code> writes it. <code>mess_counts(n)</code> tells you exactly how
+          many rows of each kind of mess were injected. You do not change this module.</p></div>
+      <div class="card"><h4>1. <code>cityeda.load</code></h4>
+        <p><code>RAW_DTYPES</code> maps every column to an explicit dtype: text as <code>"str"</code> (dates stay text
+          for now), <code>channel</code> and <code>status</code> as <code>"category"</code>.
+          <code>load_requests(path)</code> raises <code>ValueError("... missing columns ...")</code> if a column is
+          absent and returns the columns in <code>COLUMNS</code> order.</p></div>
+      <div class="card"><h4>2. <code>cityeda.clean</code></h4>
+        <p><code>normalize_borough</code>, <code>normalize_category</code>, and
+          <code>clean_requests(raw) -&gt; (frame, log)</code> applying seven rules in order, each recorded as a
+          <code>CleaningStep(rule, description, rows_affected)</code>. The input is never modified.</p></div>
+      <div class="card"><h4>3. <code>cityeda.features</code></h4>
+        <p><code>iqr_outliers(values, k=3.0)</code> (Tukey fences) and <code>add_features(df)</code> adding
+          <code>resolution_hours</code>, ordered <code>weekday</code>, <code>hour</code>, <code>week</code> (the
+          Monday), and <code>is_outlier</code> computed <em>within each category</em>.</p></div>
+      <div class="card"><h4>4. <code>cityeda.analysis</code></h4>
+        <p><code>requests_by</code> (counts, largest first, ties alphabetical), <code>resolution_summary</code>
+          (named aggregations), <code>bootstrap_median_ci</code> (seeded), <code>weekly_trend</code> (weekly counts and a
+          rolling mean), and <code>compare_boroughs</code> (Mann-Whitney U).</p></div>
+      <div class="card"><h4>5. <code>cityeda.charts</code>, <code>report</code>, <code>pipeline</code></h4>
+        <p>Three PNG charts via <code>matplotlib.figure.Figure</code>; <code>markdown_table</code>,
+          <code>render_report</code>, <code>write_report</code>; <code>run_pipeline(csv, out_dir)</code> and a
+          <code>main()</code> CLI that logs with structlog.</p></div>
+    </div>
+    <h3>The seven cleaning rules</h3>
+    <table>
+      <thead><tr><th>#</th><th>Rule name (in the log)</th><th>What it does</th><th>rows_affected counts</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>drop_duplicate_ids</code></td><td>keep the first row for each <code>request_id</code></td><td>rows removed</td></tr>
+        <tr><td>2</td><td><code>normalize_category</code></td><td>collapse whitespace and title-case</td><td>rows whose value changed</td></tr>
+        <tr><td>3</td><td><code>normalize_borough</code></td><td>map spellings to Manhattan, Brooklyn, Queens, Bronx, Staten Island</td><td>non-blank rows whose value changed</td></tr>
+        <tr><td>4</td><td><code>fill_missing_borough</code></td><td>blank boroughs become <code>"Unknown"</code></td><td>blank rows</td></tr>
+        <tr><td>5</td><td><code>drop_invalid_created</code></td><td>drop rows whose <code>created_at</code> does not parse with the exact format</td><td>rows removed</td></tr>
+        <tr><td>6</td><td><code>null_invalid_closed</code></td><td>unparseable <code>closed_at</code> becomes missing (<code>NaT</code>)</td><td>values nulled</td></tr>
+        <tr><td>7</td><td><code>null_closed_before_created</code></td><td><code>closed_at</code> earlier than <code>created_at</code> becomes missing</td><td>values nulled</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout note"><p>Why null an impossible closing time instead of dropping the row? The request still
+      happened: it belongs in the volume counts. Only its <em>duration</em> is unknown. Dropping it would undercount
+      requests; keeping the negative duration would corrupt the median. Each rule in the table makes that kind of
+      trade-off explicitly, and the log makes it visible to the reader.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>The pipeline is a straight line of pure functions, each taking a DataFrame and returning a new one (or a result
+      object). That makes every stage testable on its own and the whole run deterministic.</p>
+    <pre class="mermaid">
+flowchart LR
+  G[generate.py<br/>generate_requests] -->|CSV| L[load.py<br/>load_requests]
+  L -->|raw frame| C[clean.py<br/>clean_requests]
+  C -->|clean frame + log| F[features.py<br/>add_features]
+  F --> A[analysis.py<br/>counts, CI, trend, test]
+  F --> V[charts.py<br/>PNG files]
+  A --> R[report.py<br/>render_report]
+  V --> R
+  R -->|report.md| O[(out_dir)]
+  P[pipeline.py<br/>run_pipeline / main] -.orchestrates.-> L
+    </pre>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["load", "clean", "features", "analyze", "chart", "report"]}'></div>
+    <pre data-label="Layout"><code class="language-bash">work/p07_eda_report/
+  cityeda/
+    __init__.py
+    generate.py     # provided: the synthetic data generator
+    load.py         # milestone 1
+    clean.py        # milestone 2
+    features.py     # milestone 3
+    analysis.py     # milestone 4
+    charts.py       # milestone 5
+    report.py       # milestone 5
+    pipeline.py     # milestone 5 (main() is provided)</code></pre>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Setup and commands</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects            # list every project and whether you started it
+pixi run start p07           # copy the starter into work/p07_eda_report/
+pixi run grade p07           # run all 67 grading tests against your work/ copy
+pixi run grade p07 -- -k clean       # grade one milestone (any pytest -k expression)
+cd work/p07_eda_report &amp;&amp; pixi run python -m cityeda.pipeline --out reports</code></pre>
+    <p>The last command generates <code>reports/requests.csv</code> (2,000 requests, seed 311), runs your pipeline,
+      and writes <code>reports/report.md</code> and <code>reports/charts/*.png</code>. Open the report in any Markdown
+      viewer. Everything you need (pandas, NumPy, SciPy, matplotlib, structlog) is already in the course's Pixi
+      environment.</p>
+    <aside class="callout pixi"><p>In your own project you would add the same stack with
+      <code>pixi add pandas numpy scipy matplotlib structlog</code> and define a task such as
+      <code>report = "python -m cityeda.pipeline --out reports"</code> so anyone can rebuild the report with
+      <code>pixi run report</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h3>Milestone 0: Meet the data</h3>
+      <p>Generate a dataset and explore it in a REPL (<code>pixi run python</code> from inside
+        <code>work/p07_eda_report</code>) before writing any cleaning code. Read <code>generate.py</code>: it documents
+        every kind of mess and how many rows of each it injects (<code>mess_counts</code>). Profile the raw columns with
+        <code>value_counts(dropna=False)</code>, <code>isna().sum()</code>, and
+        <code>duplicated().sum()</code>, and note what you find. The generator tests already pass.</p>
+      <ul class="checklist" data-id="p07-m0">
+        <li>I generated <code>requests.csv</code> and inspected it with <code>head</code>, <code>info</code>, and <code>value_counts</code></li>
+        <li>I listed every borough spelling and every invalid date pattern in the raw data</li>
+        <li><code>pixi run grade p07 -- -k cityeda_generate</code> passes (7 tests)</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 1: Load with explicit dtypes</h3>
+      <p>Fill in <code>RAW_DTYPES</code> and <code>load_requests</code>. Read the header first with
+        <code>pd.read_csv(path, nrows=0)</code> to check for missing columns and raise a clear
+        <code>ValueError</code>; then read with <code>usecols</code> and <code>dtype</code>. Leave dates as text: if
+        <code>read_csv</code> parses them, the bad ones vanish silently and you cannot count them.</p>
+      <ul class="checklist" data-id="p07-m1">
+        <li>Columns come back in <code>COLUMNS</code> order with string dtypes for text</li>
+        <li><code>channel</code> and <code>status</code> are categorical</li>
+        <li>Blank fields load as missing values</li>
+        <li>A file with missing columns raises <code>ValueError</code> mentioning "missing columns"</li>
+        <li><code>pixi run grade p07 -- -k cityeda_load</code> passes (6 tests)</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 2: Clean, and log every rule</h3>
+      <p>Implement the normalizers first; they are plain functions on one value, easy to test in isolation. Then build
+        <code>clean_requests</code> as a sequence of steps, appending a <code>CleaningStep</code> after each. Use
+        <code>df.assign(...)</code>, boolean masks, and <code>Series.mask(...)</code>; under pandas 3.0 Copy-on-Write,
+        chained assignment like <code>df["closed_at"][mask] = pd.NaT</code> silently does nothing. Parse dates with an
+        explicit <code>format=</code> and <code>errors="coerce"</code>, then count the <code>NaT</code>s you created.</p>
+      <ul class="checklist" data-id="p07-m2">
+        <li><code>normalize_borough</code> handles casing, extra spaces, aliases, "The ...", blanks, and <code>NaN</code></li>
+        <li>The log lists all seven rules in order with honest counts</li>
+        <li>Counts match <code>mess_counts(n)</code>: duplicates, blanks, bad created, bad closed, closed-before-created</li>
+        <li>The cleaned frame is sorted by <code>created_at</code> with a fresh index and the input is unchanged</li>
+        <li><code>pixi run grade p07 -- -k cityeda_clean</code> passes (24 tests including parametrized cases)</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 3: Feature engineering</h3>
+      <p>Subtracting two datetime columns gives a timedelta column; <code>.dt.total_seconds() / 3600</code> turns it
+        into hours (missing closing times stay <code>NaN</code>). <code>weekday</code> should be an
+        <em>ordered</em> categorical so charts and group-bys list Monday to Sunday, not alphabetically. For outliers,
+        a single global fence would flag every legitimately slow street-light repair, so compute the fences per
+        category with <code>groupby(...).transform(iqr_outliers)</code>.</p>
+      <ul class="checklist" data-id="p07-m3">
+        <li><code>resolution_hours</code> is non-negative or <code>NaN</code></li>
+        <li><code>weekday</code> is ordered Monday..Sunday; <code>hour</code> is 0-23; <code>week</code> is a Monday</li>
+        <li>Every injected extreme (over 1,500 hours) is flagged, and fewer than 5% of rows are</li>
+        <li><code>pixi run grade p07 -- -k cityeda_features</code> passes (7 tests)</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 4: Analysis with uncertainty</h3>
+      <p>Counts first: <code>requests_by(df, "category")</code> must order ties alphabetically so reports are stable.
+        Then the statistics from <a href="../modules/m54-statistics.html">M54</a>: a percentile bootstrap for the
+        median resolution time (resolution times are skewed, so the median is the honest "typical" value and there is
+        no simple formula for its CI), a weekly trend with <code>resample("W-MON", label="left", closed="left")</code>
+        and a 4-week rolling mean, and a <strong>Mann-Whitney U</strong> test comparing two boroughs. Why not a t-test?
+        The data are heavily right-skewed with extreme values; a rank-based test is robust to that.</p>
+      <ul class="checklist" data-id="p07-m4">
+        <li>On the seed-311 dataset: 1,980 cleaned rows, Noise is top with 503, Bronx 366 vs Manhattan 362 requests</li>
+        <li>Median resolution is about 25.2 hours from 1,806 closed requests, with a deterministic bootstrap CI</li>
+        <li>The weekly trend has 26 weeks starting 2025-01-06 and sums to the row count</li>
+        <li>The borough comparison matches <code>scipy.stats.mannwhitneyu</code> and finds the Bronx slower</li>
+        <li><code>pixi run grade p07 -- -k cityeda_analysis</code> passes (13 tests)</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 5: Charts, report, and pipeline</h3>
+      <p>Build charts with <code>from matplotlib.figure import Figure</code>: <code>fig = Figure()</code>,
+        <code>ax = fig.subplots()</code>, ..., <code>fig.savefig(path)</code>. No pyplot means no GUI backend and no
+        global state, so it works in tests and CI. Apply <a href="../modules/m53-visualization.html">M53</a>: sorted
+        horizontal bars, a gray weekly line with a colored rolling mean, colorblind-safe colors, titles that say what
+        the chart shows. Then render Markdown: headings, a bullet summary, the cleaning log as a table, and image links
+        relative to the report (<code>charts/by_category.png</code>). Finally wire everything in
+        <code>run_pipeline</code>.</p>
+      <ul class="checklist" data-id="p07-m5">
+        <li>All four PNGs exist, start with the PNG signature, and live in <code>out_dir/charts/</code></li>
+        <li><code>report.md</code> has every required section, the cleaning table, the computed numbers, and all four images</li>
+        <li>The borough comparison is interpreted in words, including what the p-value does not mean</li>
+        <li>Running the pipeline twice on the same CSV produces byte-identical reports</li>
+        <li><code>pixi run grade p07</code> passes all 67 tests</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Weight</th><th>Excellent</th><th>Needs work</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>35%</td><td>All 67 tests pass; counts and statistics match the fixed-seed values</td><td>Cleaning counts are off, or statistics differ from the expected values</td></tr>
+        <tr><td>Data cleaning judgment</td><td>20%</td><td>Every rule is justified, logged, and preserves information where possible (null a duration rather than drop a request)</td><td>Rows disappear silently; rules depend on order by accident</td></tr>
+        <tr><td>Statistical honesty</td><td>15%</td><td>Skew-aware summaries (median, percentiles), uncertainty reported, test chosen for the data, p-value interpreted correctly</td><td>Means of skewed data without context; "significant" presented as "important"</td></tr>
+        <tr><td>Communication</td><td>15%</td><td>Charts are accessible and labelled; the report reads well for a non-technical audience</td><td>Default-styled charts, unlabeled axes, a report that is only numbers</td></tr>
+        <tr><td>Code quality</td><td>15%</td><td>Pure functions, no chained assignment, typed and documented, ruff-clean, deterministic</td><td>Mutates inputs, uses pyplot global state, unseeded randomness</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Quality checks"><code class="language-bash">pixi run grade p07
+pixi run ruff check work/p07_eda_report
+pixi run ruff format --check work/p07_eda_report</code></pre>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>My duplicate count is right but the borough counts are off by one</summary>
+      <p>Duplicates are exact copies, so a blank-borough row can be duplicated. Remove duplicates <em>first</em> (rule
+        1), then count blanks; the log counts are defined on the frame as it is at each step.</p></details>
+    <details class="reveal"><summary>How do I count rows a normalizer "changed"?</summary>
+      <p>Compute the new Series, compare with the old one (<code>new != old</code>), and sum the mask. For boroughs,
+        exclude blank rows from that count (<code>&amp; ~missing</code>) because they belong to rule 4.</p></details>
+    <details class="reveal"><summary><code>pd.to_datetime</code> accepts "2025-13-40 25:00:00" or warns about formats</summary>
+      <p>Always pass <code>format=TIMESTAMP_FORMAT</code> and <code>errors="coerce"</code>. With an explicit format,
+        pandas rejects impossible dates instead of guessing, and does not emit format-inference warnings.</p></details>
+    <details class="reveal"><summary>My closed_before_created rule changes nothing</summary>
+      <p>That is the Copy-on-Write trap: <code>df["closed_at"][backwards] = pd.NaT</code> modifies a temporary copy.
+        Write <code>df = df.assign(closed_at=df["closed_at"].mask(backwards))</code>, or use
+        <code>df.loc[backwards, "closed_at"] = pd.NaT</code> on a frame you own.</p></details>
+    <details class="reveal"><summary>My weekly trend has 27 rows or starts on a Sunday</summary>
+      <p>The default weekly rule <code>"W"</code> means weeks <em>ending</em> Sunday, labelled by the Sunday. Use
+        <code>resample("W-MON", label="left", closed="left")</code> so each bin starts on a Monday and is labelled by
+        it.</p></details>
+    <details class="reveal"><summary>My bootstrap interval changes every run</summary>
+      <p>Create the generator inside the function from the <code>seed</code> argument
+        (<code>np.random.default_rng(seed)</code>) and draw all resamples at once with
+        <code>rng.choice(data, size=(n_boot, data.size), replace=True)</code>, so the sequence of draws is fixed.</p></details>
+    <details class="reveal"><summary>Tests about chart files fail with "no such file or directory"</summary>
+      <p>Create the parent folder before saving: <code>path.parent.mkdir(parents=True, exist_ok=True)</code>.</p></details>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>Time zones:</strong> localize timestamps to <code>America/New_York</code>, store UTC, and handle the
+        March daylight-saving gap (<code>nonexistent="shift_forward"</code>).</li>
+      <li><strong>Heatmap:</strong> requests by weekday and hour with a sequential colormap (<code>pivot_table</code>
+        + <code>ax.imshow</code>).</li>
+      <li><strong>All pairs:</strong> compare every pair of boroughs and apply a Holm correction; report which
+        differences survive.</li>
+      <li><strong>Effect size:</strong> add the Hodges-Lehmann estimate (median of pairwise differences) or a bootstrap
+        CI for the difference in medians next to the p-value.</li>
+      <li><strong>Polars port:</strong> re-implement <code>clean_requests</code> with the Polars lazy API
+        (<a href="../modules/m52-polars-arrow.html">M52</a>) and assert both versions agree on 200,000 rows; compare timings.</li>
+      <li><strong>HTML report:</strong> render the Markdown to a single self-contained HTML file with embedded images.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="reflection">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p07-quiz">
+<script type="application/json">
+{"title": "City Data EDA reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why load <code>created_at</code> as text instead of using <code>parse_dates</code>?", "options": ["Text is faster to load", "So invalid dates can be counted and logged by a cleaning rule instead of disappearing silently", "pandas cannot parse dates in read_csv", "Dates use more memory"], "answer": 1, "explanation": "<p>Parsing is a decision with consequences. Doing it in a cleaning step with <code>errors=\"coerce\"</code> lets you count exactly how many values were invalid and report it.</p>"},
+  {"type": "single", "prompt": "A request's <code>closed_at</code> is before its <code>created_at</code>. Why null the closing time rather than drop the row?", "options": ["Dropping rows is slower", "The request still counts toward volume; only its duration is unknown", "pandas cannot drop rows with timestamps", "The row might be a duplicate"], "answer": 1, "explanation": "<p>Keeping the row preserves the request counts; nulling the bad value keeps it out of duration statistics.</p>"},
+  {"type": "single", "prompt": "Why compute outlier fences within each category?", "options": ["It is faster", "Typical resolution times differ hugely by category, so one global fence would flag normal slow categories", "The tests require it for performance", "Categories have no missing values"], "answer": 1, "explanation": "<p>A 200-hour street-light repair is normal; a 200-hour noise complaint is extreme. Group-relative rules respect that context.</p>"},
+  {"type": "single", "prompt": "Why use the median and a bootstrap CI for resolution time?", "options": ["The mean is not defined for hours", "Resolution times are right-skewed with extreme values, and the median's CI has no simple formula", "Bootstraps are always narrower", "The median is easier to code"], "answer": 1, "explanation": "<p>The median describes the typical request robustly, and the bootstrap gives its uncertainty without distributional assumptions.</p>"},
+  {"type": "single", "prompt": "The borough test gives p = 1e-05. Which statement is correct?", "options": ["The Bronx is 100,000 times slower", "If both boroughs had the same distribution, a difference this extreme would be very unlikely", "There is a 99.999% chance the Bronx is slower", "The difference is large enough to act on"], "answer": 1, "explanation": "<p>A p-value is computed assuming no difference. How large and important the gap is comes from the medians and their uncertainty.</p>"},
+  {"type": "multi", "prompt": "Which choices make the pipeline reproducible?", "options": ["A seeded data generator", "Seeding the bootstrap from a function argument", "Sorting the cleaned frame and breaking count ties alphabetically", "Using pyplot's current figure"], "answer": [0, 1, 2], "explanation": "<p>Determinism needs fixed randomness and fixed ordering. pyplot's global state is unrelated to reproducibility and makes code harder to test.</p>"},
+  {"type": "text", "prompt": "Which matplotlib class do the chart functions build directly so no GUI backend or global state is involved?", "answer": ["Figure", "matplotlib.figure.Figure"], "explanation": "<p><code>matplotlib.figure.Figure</code> renders with Agg when saved and is safe in tests, servers, and CI.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

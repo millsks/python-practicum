@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M13 · Dataclasses, Enums &amp; Records · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m13">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 13</p>
+    <h1>Dataclasses, Enums &amp; Records</h1>
+    <p class="lede">Much of a real program is records: a user, an order line, a configuration, a status code. Python gives you purpose-built tools for them that write the repetitive dunder methods from M11 for you and make invalid states harder to represent.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m10-classes.html">M10 Classes</a>, <a href="m11-data-model.html">M11 Data Model</a></span></div>
+    <ul class="objectives">
+      <li>Define dataclasses with fields, defaults, <code>default_factory</code>, and <code>__post_init__</code> validation</li>
+      <li>Choose dataclass options: <code>frozen</code>, <code>order</code>, <code>slots</code>, <code>kw_only</code></li>
+      <li>Transform records with <code>replace</code>, <code>asdict</code>, and <code>astuple</code></li>
+      <li>Model fixed sets of choices with <code>Enum</code>, <code>IntEnum</code>, <code>StrEnum</code>, <code>Flag</code>, and <code>auto</code></li>
+      <li>Use <code>NamedTuple</code> and <code>TypedDict</code>, and pick the right record type for a job</li>
+      <li>Preview Python 3.15's <code>frozendict</code> (PEP 814) and <code>sentinel</code> (PEP 661)</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-records">
+    <h2>The boilerplate problem</h2>
+    <p>A <dfn>record</dfn> is an object whose main job is to hold a few named fields together. Writing one by hand, properly, means writing an initializer, a <code>__repr__</code>, and <code>__eq__</code>; if you want ordering or hashing, more again. Every field name is typed four or five times, and adding a field later means editing every method. Step through a hand-written record and count how much of it is pure ceremony:</p>
+    <div class="tracer" data-title="A hand-written record">
+<textarea>
+class Product:
+    def __init__(self, sku, name, price=0.0):
+        self.sku = sku
+        self.name = name
+        self.price = price
+
+    def __repr__(self):
+        return f"Product(sku={self.sku!r}, name={self.name!r}, price={self.price!r})"
+
+    def __eq__(self, other):
+        if other.__class__ is not self.__class__:
+            return NotImplemented
+        return (self.sku, self.name, self.price) == (other.sku, other.name, other.price)
+
+a = Product("A1", "Pen", 1.5)
+b = Product("A1", "Pen", 1.5)
+same = a == b
+text = repr(a)
+</textarea>
+    </div>
+    <p>That class is roughly what the <code>@dataclass</code> decorator <em>generates</em> from three annotated lines. The decorator reads the class's <dfn>type annotations</dfn> (the <code>name: type</code> lines), treats each as a field, and writes the methods for you:</p>
+    <pre><code class="language-python">from dataclasses import dataclass
+
+@dataclass
+class Product:
+    sku: str
+    name: str
+    price: float = 0.0</code></pre>
+    <p>Same behavior, a quarter of the code, and impossible to get out of sync when a field is added.</p>
+    <p><strong>Remember:</strong> records are everywhere; write them with tools that generate the boilerplate.</p>
+  </section>
+
+  <section class="lesson-section" id="dataclass-basics">
+    <h2><code>@dataclass</code> basics</h2>
+    <p>A <dfn>dataclass</dfn> is an ordinary class, decorated with <code>@dataclass</code> from the standard library <code>dataclasses</code> module. You can still add methods, properties, and class attributes. By default the decorator generates <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> (comparing fields in order, and only with instances of the same class).</p>
+    <div class="runnable" data-title="Your first dataclass">
+<textarea>
+from dataclasses import dataclass, fields
+import math
+
+@dataclass
+class Point:
+    x: float
+    y: float = 0.0           # fields with defaults must come after fields without
+
+    def distance_to(self, other: "Point") -> float:   # ordinary methods are fine
+        return math.hypot(self.x - other.x, self.y - other.y)
+
+p = Point(3, 4)
+print(p)                               # generated __repr__
+print(p == Point(3.0, 4.0))            # generated __eq__ compares fields
+print(p.distance_to(Point(0)))
+print([f.name for f in fields(Point)]) # introspect the fields
+p.x = 10                               # regular dataclasses are mutable
+print(p)
+</textarea>
+    </div>
+    <p>A few rules worth knowing:</p>
+    <ul>
+      <li><strong>Annotations are required.</strong> A class attribute without an annotation (<code>count = 0</code>) is <em>not</em> a field; it stays an ordinary class attribute.</li>
+      <li><strong>Annotations are not enforced.</strong> <code>Point("a", "b")</code> works at runtime. Type hints are for readers and type checkers like mypy (<a href="m16-typing.html">M16</a>); validate in <code>__post_init__</code> if you need runtime checks.</li>
+      <li><strong>Defaults go last.</strong> A non-default field after a default one is a <code>TypeError</code> at class creation, for the same reason as function parameters. <code>kw_only</code> (below) lifts this restriction.</li>
+      <li><strong>Use <code>ClassVar</code> for shared constants</strong> that are annotated but shouldn't be fields: <code>MAX: ClassVar[int] = 10</code>.</li>
+    </ul>
+    <div class="runnable" data-title="Predict: what is a field?" data-predict>
+<textarea>
+from dataclasses import dataclass, fields
+from typing import ClassVar
+
+@dataclass
+class Config:
+    host: str
+    port: int = 8080
+    retries = 3                    # no annotation
+    LIMIT: ClassVar[int] = 100     # explicitly not a field
+
+print([f.name for f in fields(Config)], Config("db"))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> annotated class-body names become fields; the decorator writes <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code>; hints are not enforced at runtime.</p>
+  </section>
+
+  <section class="lesson-section" id="defaults-post-init">
+    <h2>Mutable defaults, <code>default_factory</code>, and <code>__post_init__</code></h2>
+    <p>You learned the mutable-default trap with functions (M05) and class attributes (M10). Dataclasses protect you: a <code>list</code>, <code>dict</code>, or <code>set</code> default raises <code>ValueError</code> when the class is created. Use <code>field(default_factory=list)</code> to call a factory function for each new instance:</p>
+    <div class="runnable" data-title="default_factory gives each instance its own list">
+<textarea>
+from dataclasses import dataclass, field
+
+try:
+    @dataclass
+    class Broken:
+        tags: list = []
+except ValueError as exc:
+    print("ValueError:", exc)
+
+@dataclass
+class Article:
+    title: str
+    tags: list[str] = field(default_factory=list)
+    meta: dict[str, str] = field(default_factory=dict, repr=False)   # hide from repr
+
+a, b = Article("A"), Article("B")
+a.tags.append("python")
+print(a, b, a.tags is b.tags)
+</textarea>
+    </div>
+    <p><code>field()</code> customizes one field. Its most useful options:</p>
+    <table>
+      <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>default=</code></td><td>A plain default value (same as <code>= value</code>)</td></tr>
+        <tr><td><code>default_factory=</code></td><td>A zero-argument callable called for each new instance</td></tr>
+        <tr><td><code>init=False</code></td><td>Not an <code>__init__</code> parameter; set it in <code>__post_init__</code></td></tr>
+        <tr><td><code>repr=False</code></td><td>Hide from the repr (for secrets or huge values)</td></tr>
+        <tr><td><code>compare=False</code></td><td>Ignore in <code>__eq__</code> and ordering (and hashing)</td></tr>
+        <tr><td><code>kw_only=True</code></td><td>This field must be passed by keyword</td></tr>
+      </tbody>
+    </table>
+    <h3>Validation and derived fields with <code>__post_init__</code></h3>
+    <p>The generated <code>__init__</code> just assigns fields. If you define <code>__post_init__(self)</code>, it is called right after, which is the place to validate inputs, normalize values, and compute derived fields marked <code>init=False</code>:</p>
+    <div class="runnable" data-title="Validate and derive">
+<textarea>
+from dataclasses import dataclass, field
+
+@dataclass
+class OrderLine:
+    sku: str
+    quantity: int
+    unit_price: float
+    total: float = field(init=False)        # computed, not passed in
+
+    def __post_init__(self):
+        self.sku = self.sku.strip().upper()  # normalize
+        if self.quantity < 1:
+            raise ValueError(f"quantity must be >= 1, got {self.quantity}")
+        if self.unit_price < 0:
+            raise ValueError("unit_price must be non-negative")
+        self.total = round(self.quantity * self.unit_price, 2)
+
+print(OrderLine(" ab-1 ", 3, 2.5))
+try:
+    OrderLine("x", 0, 1)
+except ValueError as exc:
+    print("ValueError:", exc)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>A derived field like <code>total</code> can go stale if someone later mutates <code>quantity</code> on a mutable dataclass. Either make the class frozen (next section) or make <code>total</code> a <code>@property</code> computed on demand.</p></aside>
+    <p><strong>Remember:</strong> use <code>field(default_factory=...)</code> for mutable defaults and <code>__post_init__</code> to validate and compute.</p>
+  </section>
+
+  <section class="lesson-section" id="options">
+    <h2>Options: <code>frozen</code>, <code>order</code>, <code>slots</code>, <code>kw_only</code></h2>
+    <p>The decorator takes keyword arguments that switch on more generated behavior. You will combine them constantly.</p>
+    <h3><code>frozen=True</code>: immutable records</h3>
+    <p>A frozen dataclass raises <code>dataclasses.FrozenInstanceError</code> (a subclass of <code>AttributeError</code>) on any attempt to assign a field. Because its fields can't change, it also gets a generated <code>__hash__</code>, so instances work as dict keys and set members. Recall from M11: a regular (non-frozen) dataclass with <code>eq=True</code> has <code>__hash__ = None</code>, because a mutable object must not be hashed by value.</p>
+    <h3><code>order=True</code>: comparisons</h3>
+    <p>Generates <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, and <code>&gt;=</code> that compare fields <em>as a tuple, in definition order</em>. Field order therefore becomes part of your API: put the most significant field first, and use <code>field(compare=False)</code> to exclude the rest.</p>
+    <h3><code>slots=True</code>: compact, typo-proof instances</h3>
+    <p>Normally every instance carries a <code>__dict__</code>. With <code>slots=True</code> the decorator generates <code>__slots__</code>, storing fields in fixed positions. Instances use less memory, attribute access is slightly faster, and assigning a misspelled attribute raises <code>AttributeError</code> instead of silently creating it.</p>
+    <h3><code>kw_only=True</code>: keyword-only construction</h3>
+    <p>Every field must be passed by name. For records with many fields of the same type, this prevents mixing up positions (<code>Rect(3, 4)</code>: is that width, height?) and also lifts the "defaults last" rule. You can also make only <em>some</em> fields keyword-only: everything after a <code>_: KW_ONLY</code> pseudo-field is keyword-only.</p>
+    <div class="runnable" data-title="All four options together">
+<textarea>
+import sys
+from dataclasses import dataclass, field, FrozenInstanceError, KW_ONLY
+
+@dataclass(frozen=True, order=True, slots=True)
+class Version:
+    major: int
+    minor: int = 0
+    patch: int = 0
+    label: str = field(default="", compare=False)    # ignored by ==, <, hash
+
+v = Version(3, 14, 1, label="stable")
+print(sorted([Version(3, 9), v, Version(3, 14)]))
+print(Version(3, 14, 1) == v, {v: "current"}[Version(3, 14, 1)])
+try:
+    v.major = 4
+except FrozenInstanceError as exc:
+    print("FrozenInstanceError:", exc)
+print(hasattr(v, "__dict__"))
+
+@dataclass(kw_only=True)
+class Rect:
+    width: float = 1.0
+    height: float          # allowed: kw_only lifts the defaults-last rule
+
+@dataclass
+class Request:
+    url: str
+    _: KW_ONLY
+    timeout: float = 5.0
+    retries: int = 0
+
+print(Rect(height=2))
+print(Request("https://example.com", retries=3))
+try:
+    Request("https://example.com", 10.0)
+except TypeError as exc:
+    print("TypeError:", exc)
+
+@dataclass
+class Plain:
+    x: int
+@dataclass(slots=True)
+class Slotted:
+    x: int
+print(sys.getsizeof(Plain(1)) + sys.getsizeof(Plain(1).__dict__), "bytes vs", sys.getsizeof(Slotted(1)))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>A sensible default for value objects in modern code is <code>@dataclass(frozen=True, slots=True)</code>. Immutable records are easier to reason about, safe to share between functions and threads, and hashable. Reach for mutability only when an object genuinely changes over its lifetime.</p></aside>
+    <aside class="callout note"><p><code>frozen</code> is shallow. A frozen dataclass holding a <code>list</code> can't rebind the field, but the list itself can still be mutated, and such an instance is no longer hashable (<code>hash</code> raises <code>TypeError</code> because lists are unhashable). Use tuples and frozensets inside frozen records.</p></aside>
+    <p><strong>Remember:</strong> <code>frozen</code> for immutability and hashing, <code>order</code> for tuple-style comparison, <code>slots</code> for compact typo-proof instances, <code>kw_only</code> for clarity.</p>
+  </section>
+
+  <section class="lesson-section" id="replace-asdict">
+    <h2>Working with records: <code>replace</code>, <code>asdict</code>, <code>astuple</code></h2>
+    <p>Immutable records are "changed" by making a modified copy. <code>dataclasses.replace(obj, **changes)</code> builds a new instance with some fields replaced (it calls <code>__init__</code>, so <code>__post_init__</code> validation runs again). Since Python 3.13, the generic <code>copy.replace()</code> does the same for dataclasses, named tuples, and other types that support it.</p>
+    <p><code>asdict()</code> and <code>astuple()</code> convert a dataclass, <em>recursively</em>, into plain dicts and tuples, which is exactly what you need for JSON serialization.</p>
+    <div class="runnable" data-title="Copy-on-change and serialization">
+<textarea>
+import copy
+import json
+from dataclasses import dataclass, field, replace, asdict, astuple
+
+@dataclass(frozen=True)
+class Address:
+    city: str
+    country: str = "UK"
+
+@dataclass(frozen=True)
+class Customer:
+    name: str
+    address: Address
+    tags: tuple[str, ...] = ()
+
+ada = Customer("Ada", Address("London"))
+moved = replace(ada, address=replace(ada.address, city="Paris", country="FR"))
+print(ada.address.city, "->", moved.address.city)
+print(copy.replace(ada, tags=("vip",)))          # Python 3.13+
+
+print(asdict(moved))                              # nested dataclasses become dicts
+print(astuple(moved))
+print(json.dumps(asdict(moved)))
+restored = Customer(**{**asdict(moved), "address": Address(**asdict(moved)["address"])})
+print(restored == moved)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>asdict</code> deep-copies everything it touches, which is safe but slow for big object graphs. For hot paths, write a small <code>to_dict()</code> method. For serious validation and serialization of external data (JSON APIs, config), libraries like pydantic or msgspec (install with <code>pixi add pydantic</code>) build on the same ideas.</p></aside>
+    <p><strong>Remember:</strong> <code>replace</code> makes a modified copy (re-running validation); <code>asdict</code>/<code>astuple</code> convert recursively for serialization.</p>
+  </section>
+
+  <section class="lesson-section" id="enums">
+    <h2>Enums: a fixed set of named choices</h2>
+    <p>Programs are full of values drawn from a small, fixed set: order statuses, log levels, directions, card suits. Using raw strings (<code>"shipped"</code>) invites typos that fail silently (<code>"shiped"</code>), and using magic numbers (<code>status == 3</code>) is unreadable. An <dfn>enumeration</dfn> (<code>enum.Enum</code>) defines the set once; each <dfn>member</dfn> is a unique, named singleton with a <code>.name</code> and a <code>.value</code>.</p>
+    <div class="runnable" data-title="Enum essentials">
+<textarea>
+from enum import Enum, auto
+
+class Status(Enum):
+    PENDING = auto()     # auto() picks values for you: 1, 2, 3, ...
+    SHIPPED = auto()
+    DELIVERED = auto()
+    CANCELLED = auto()
+
+s = Status.SHIPPED
+print(s, repr(s), s.name, s.value)
+print(Status(3), Status["CANCELLED"])     # look up by value and by name
+print(list(Status))                        # iterate in definition order
+print(s is Status.SHIPPED, s == 2)        # identity works; not equal to plain ints
+try:
+    Status.SHPPED
+except AttributeError as exc:
+    print("AttributeError:", exc)          # typos fail loudly
+
+def label(status: Status) -> str:
+    match status:
+        case Status.PENDING | Status.SHIPPED:
+            return "in progress"
+        case Status.DELIVERED:
+            return "done"
+        case Status.CANCELLED:
+            return "cancelled"
+
+print([label(m) for m in Status])
+</textarea>
+    </div>
+    <p>Enums are classes, so they can have methods and properties. Members are compared by identity (<code>is</code> works), they are hashable, and you can't create new members or reassign them at runtime. The <code>@unique</code> decorator rejects accidental duplicate values (otherwise a duplicate becomes an <dfn>alias</dfn> for the first member).</p>
+    <h3><code>IntEnum</code>, <code>StrEnum</code>, and <code>Flag</code></h3>
+    <ul>
+      <li><code>IntEnum</code> members are also <code>int</code>s: they compare equal to and sort with integers. Useful for interoperating with code that expects numbers (HTTP status codes, <code>http.HTTPStatus</code> is one).</li>
+      <li><code>StrEnum</code> (Python 3.11+) members are also <code>str</code>s; with <code>auto()</code> the value is the lowercased member name. Great for values that appear in JSON, config files, or CLI arguments.</li>
+      <li><code>Flag</code> members can be combined with <code>|</code> into sets of options; <code>auto()</code> assigns powers of two (1, 2, 4, ...), so each member is one bit (see the bits visualizer below).</li>
+    </ul>
+    <div class="runnable" data-title="IntEnum, StrEnum, and Flag">
+<textarea>
+from enum import IntEnum, StrEnum, Flag, auto
+
+class Priority(IntEnum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+
+class Level(StrEnum):
+    DEBUG = auto()
+    INFO = auto()
+    ERROR = auto()
+
+class Perm(Flag):
+    READ = auto()
+    WRITE = auto()
+    EXECUTE = auto()
+
+print(Priority.HIGH > 2, sorted([3, Priority.LOW, 2]), Priority.HIGH + 1)
+print(Level.INFO == "info", Level("error"), f"level={Level.DEBUG}")
+rw = Perm.READ | Perm.WRITE
+print(rw, Perm.READ in rw, Perm.EXECUTE in rw, [p.name for p in rw])
+print([m.value for m in Perm], bool(Perm(0)))
+</textarea>
+    </div>
+    <div class="viz" data-viz="bits" data-config='{"value": 3, "width": 8, "mode": "int"}'></div>
+    <p>The bits view shows <code>READ | WRITE</code> = 0b011 = 3: each flag is one bit, and <code>|</code> sets bits, <code>&amp;</code> tests them.</p>
+    <aside class="callout warn"><p>Prefer plain <code>Enum</code> unless you <em>need</em> int or str behavior. The mixed-in types weaken the "typo-proof" guarantee: <code>Priority.HIGH == 3</code> is true, so code can drift back to magic numbers, and a <code>StrEnum</code> silently compares equal to any matching string.</p></aside>
+    <p><strong>Remember:</strong> an Enum is a closed set of unique, named members; use <code>auto()</code>, look up by <code>Cls(value)</code> or <code>Cls["NAME"]</code>, and pick <code>StrEnum</code>/<code>IntEnum</code>/<code>Flag</code> only for their extra behavior.</p>
+  </section>
+
+  <section class="lesson-section" id="namedtuple-typeddict">
+    <h2><code>NamedTuple</code> and <code>TypedDict</code></h2>
+    <h3><code>typing.NamedTuple</code>: a tuple with field names</h3>
+    <p>A named tuple <em>is</em> a tuple: immutable, indexable, unpackable, and compact, with readable field names on top. It's ideal for small fixed records returned from functions, especially where code already expects tuples (for example, <code>x, y = point</code>).</p>
+    <div class="runnable" data-title="NamedTuple">
+<textarea>
+from typing import NamedTuple
+
+class Coordinate(NamedTuple):
+    lat: float
+    lon: float
+    label: str = ""
+
+c = Coordinate(51.5, -0.12, "London")
+lat, lon, _ = c                      # tuple unpacking
+print(c, c.lat, c[1], len(c), isinstance(c, tuple))
+print(c._replace(label="LDN"), c._asdict())
+print(c == (51.5, -0.12, "London"))  # careful: equal to a plain tuple!
+try:
+    c.lat = 0
+except AttributeError as exc:
+    print("AttributeError:", exc)
+</textarea>
+    </div>
+    <h3><code>typing.TypedDict</code>: a typed shape for dicts</h3>
+    <p>Sometimes the data must stay a <code>dict</code>: JSON from an API, rows from a library, keyword arguments. <code>TypedDict</code> describes the expected keys and value types <em>for the type checker</em>. At runtime the object is a plain <code>dict</code>, and nothing is checked.</p>
+    <div class="runnable" data-title="TypedDict is only a description">
+<textarea>
+from typing import TypedDict, NotRequired
+
+class MovieJSON(TypedDict):
+    title: str
+    year: int
+    rating: NotRequired[float]    # key may be absent
+
+good: MovieJSON = {"title": "Dune", "year": 2021}
+bad: MovieJSON = {"title": "Oops", "year": "not a number"}   # mypy would flag this
+print(type(good), good["title"], good.get("rating", "n/a"))
+print(bad)                         # but at runtime: no error at all
+</textarea>
+    </div>
+    <aside class="callout note"><p>Python 3.15 extends TypedDict with PEP 728 (<code>closed=True</code> and <code>extra_items=</code>) to say whether extra keys are allowed. See <a href="m16-typing.html">M16</a> for typing in depth.</p></aside>
+    <p><strong>Remember:</strong> <code>NamedTuple</code> is an immutable tuple with names; <code>TypedDict</code> is a static description of a dict's keys, with no runtime checking.</p>
+  </section>
+
+  <section class="lesson-section" id="which">
+    <h2>When to use which</h2>
+    <p>You now have six ways to hold a record. They overlap, but each has a sweet spot.</p>
+    <table>
+      <thead><tr><th>Tool</th><th>Mutable?</th><th>Hashable?</th><th>Runtime type</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td><code>dict</code></td><td>Yes</td><td>No</td><td><code>dict</code></td><td>Dynamic keys, quick scripts, data you just pass through</td></tr>
+        <tr><td><code>TypedDict</code></td><td>Yes</td><td>No</td><td><code>dict</code></td><td>Typing JSON-like data that must stay a dict</td></tr>
+        <tr><td><code>NamedTuple</code></td><td>No</td><td>Yes (if fields are)</td><td><code>tuple</code> subclass</td><td>Small immutable records, function results, tuple compatibility</td></tr>
+        <tr><td><code>@dataclass</code></td><td>Yes</td><td>No (by default)</td><td>your class</td><td>Domain objects with behavior and state that changes</td></tr>
+        <tr><td><code>@dataclass(frozen=True)</code></td><td>No</td><td>Yes</td><td>your class</td><td>Value objects, dict keys, config, the safest default</td></tr>
+        <tr><td>Hand-written class</td><td>You decide</td><td>You decide</td><td>your class</td><td>Rich invariants, encapsulated state (M10's BankAccount)</td></tr>
+        <tr><td><code>Enum</code></td><td>No</td><td>Yes</td><td>your enum</td><td>A closed set of choices, not a record</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout think"><p>For each, pick a tool and say why: (1) a parsed row of a CSV that you only sort and print; (2) the current state of a game character that moves every frame; (3) the configuration loaded once at startup; (4) the HTTP method of a request; (5) the JSON body returned by a weather API.</p></aside>
+    <details class="reveal"><summary>One reasonable set of answers</summary>
+      <p>(1) <code>NamedTuple</code> or a frozen dataclass. (2) A mutable dataclass, or a class with methods that enforce movement rules. (3) <code>@dataclass(frozen=True, slots=True)</code>. (4) <code>StrEnum</code>, so it reads from and writes to text naturally. (5) <code>TypedDict</code> at the boundary, converted into a frozen dataclass for the rest of the program.</p>
+    </details>
+    <p><strong>Remember:</strong> default to a frozen dataclass for records, an Enum for choices, a NamedTuple when tuple behavior helps, and a TypedDict when it must stay a dict.</p>
+  </section>
+
+  <section class="lesson-section" id="py315">
+    <h2>Preview: <code>frozendict</code> and <code>sentinel</code> in Python 3.15</h2>
+    <aside class="callout py315"><p>Python 3.15 adds two built-ins that fit naturally with immutable records. They are previews: the code below runs only on 3.15. Try it locally with <code>pixi exec --spec "python=3.15" python file.py</code>.</p></aside>
+    <h3><code>frozendict</code> (PEP 814)</h3>
+    <p>A frozen dataclass is only as immutable as its fields. Until now, a mapping field forced a choice: store a <code>dict</code> (mutable, unhashable) or work around it with <code>types.MappingProxyType</code> (a read-only <em>view</em> of a dict that can still change underneath) or a tuple of pairs. PEP 814 adds <code>frozendict</code>, a built-in immutable mapping. It supports all of a dict's reading operations, can't be modified, and is hashable when its values are, so it can live inside frozen records and sets.</p>
+    <div class="runnable" data-python="3.15" data-title="frozendict inside a frozen record">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Theme:
+    name: str
+    colors: frozendict
+
+dark = Theme("dark", frozendict(bg="#111", fg="#eee"))
+print(dark.colors["bg"], len(dark.colors))
+print(hash(dark) == hash(Theme("dark", frozendict(bg="#111", fg="#eee"))))
+try:
+    dark.colors["bg"] = "#000"
+except TypeError as exc:
+    print("TypeError:", exc)
+</textarea>
+    </div>
+    <h3><code>sentinel</code> (PEP 661)</h3>
+    <p>A <dfn>sentinel</dfn> is a unique marker value meaning "nothing was given", for cases where <code>None</code> is itself a legitimate value. The traditional idiom is <code>_MISSING = object()</code>, which works but has an unhelpful repr (<code>&lt;object object at 0x...&gt;</code>) in error messages and signatures. PEP 661 adds a <code>sentinel</code> built-in for creating named sentinels with a clear repr:</p>
+    <div class="runnable" data-python="3.15" data-title="A named sentinel">
+<textarea>
+MISSING = sentinel("MISSING")
+
+def get_setting(settings, key, default=MISSING):
+    if key in settings:
+        return settings[key]
+    if default is MISSING:          # compare sentinels by identity
+        raise KeyError(key)
+    return default                  # None is a valid default here
+
+print(get_setting({"debug": None}, "debug"))
+print(get_setting({}, "color", None))
+print(repr(MISSING))
+</textarea>
+    </div>
+    <p>In 3.14, keep using the <code>object()</code> idiom (or a single-member Enum, which has a nice repr and works with type checkers):</p>
+    <div class="runnable" data-title="Sentinels in Python 3.14">
+<textarea>
+from enum import Enum
+
+class _Missing(Enum):
+    MISSING = "MISSING"
+
+    def __repr__(self):
+        return "MISSING"
+
+MISSING = _Missing.MISSING
+
+def get_setting(settings, key, default=MISSING):
+    if key in settings:
+        return settings[key]
+    if default is MISSING:
+        raise KeyError(key)
+    return default
+
+print(get_setting({"debug": None}, "debug"), get_setting({}, "color", None), repr(MISSING))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> 3.15's <code>frozendict</code> completes the immutable-record toolkit; <code>sentinel</code> standardizes "no value given" markers. Compare sentinels with <code>is</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m13-e1" data-title="A basic dataclass">
+      <div class="exercise-prompt">
+        <p>Convert this hand-written class into a <code>@dataclass</code> named <code>Book</code> with fields <code>title: str</code>, <code>author: str</code>, <code>pages: int = 0</code>. Keep the <code>is_long()</code> method (more than 400 pages).</p>
+      </div>
+<textarea class="starter">
+class Book:
+    def __init__(self, title, author, pages=0):
+        self.title = title
+        self.author = author
+        self.pages = pages
+
+    def is_long(self):
+        return self.pages > 400
+</textarea>
+      <script type="text/x-python" class="tests">
+import dataclasses
+
+def test_is_dataclass():
+    assert dataclasses.is_dataclass(Book), "decorate Book with @dataclass"
+    assert [f.name for f in dataclasses.fields(Book)] == ["title", "author", "pages"], "fields in order"
+
+def test_generated_methods():
+    b = Book("Dune", "Herbert", 412)
+    assert repr(b) == "Book(title='Dune', author='Herbert', pages=412)", "use the generated repr"
+    assert b == Book("Dune", "Herbert", 412), "generated __eq__"
+    assert Book("X", "Y").pages == 0, "pages defaults to 0"
+
+def test_method():
+    assert Book("A", "B", 500).is_long() and not Book("A", "B", 400).is_long(), "is_long() is > 400"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Replace <code>__init__</code> with three annotated lines under <code>@dataclass</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass
+
+
+@dataclass
+class Book:
+    title: str
+    author: str
+    pages: int = 0
+
+    def is_long(self):
+        return self.pages &gt; 400</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m13-e2" data-title="default_factory and __post_init__">
+      <div class="exercise-prompt">
+        <p>Write a dataclass <code>Team</code> with <code>name: str</code>, <code>members: list[str]</code> defaulting to a new empty list, and <code>size: int</code> that is <em>not</em> an initializer argument. In <code>__post_init__</code>: strip the name and raise <code>ValueError</code> if it is empty; remove duplicate members while keeping first-seen order; set <code>size</code> to the number of members.</p>
+      </div>
+<textarea class="starter">
+from dataclasses import dataclass, field
+
+@dataclass
+class Team:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import inspect
+
+def test_defaults_independent():
+    a, b = Team("a"), Team("b")
+    a.members.append("x")
+    assert b.members == [], "each team needs its own list (default_factory)"
+
+def test_post_init():
+    t = Team("  Core  ", ["ann", "bob", "ann", "cy"])
+    assert t.name == "Core", "name should be stripped"
+    assert t.members == ["ann", "bob", "cy"], "duplicates removed, order kept"
+    assert t.size == 3, "size computed in __post_init__"
+
+def test_size_not_init_param():
+    assert "size" not in inspect.signature(Team).parameters, "size should use field(init=False)"
+
+def test_empty_name():
+    try:
+        Team("   ")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("blank name must raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>members: list[str] = field(default_factory=list)</code> and <code>size: int = field(init=False)</code>. <code>list(dict.fromkeys(items))</code> de-duplicates while keeping order.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass, field
+
+
+@dataclass
+class Team:
+    name: str
+    members: list[str] = field(default_factory=list)
+    size: int = field(init=False)
+
+    def __post_init__(self):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError("team name must not be blank")
+        self.members = list(dict.fromkeys(self.members))
+        self.size = len(self.members)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m13-e3" data-title="A frozen, ordered Version">
+      <div class="exercise-prompt">
+        <p>Write <code>@dataclass(frozen=True, order=True, slots=True)</code> <code>Version</code> with <code>major</code>, <code>minor</code>, <code>patch</code> (ints, defaults 0 for minor and patch). Add a classmethod <code>parse("1.2.3")</code> (missing parts default to 0, so <code>"2"</code> is 2.0.0), <code>__str__</code> returning <code>"1.2.3"</code>, and <code>bump(part)</code> that returns a <em>new</em> Version using <code>dataclasses.replace</code>: bumping <code>"minor"</code> increments minor and resets patch to 0; <code>"major"</code> resets both; <code>"patch"</code> increments patch. Unknown parts raise <code>ValueError</code>.</p>
+      </div>
+<textarea class="starter">
+from dataclasses import dataclass, replace
+
+@dataclass(frozen=True, order=True, slots=True)
+class Version:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_parse_and_str():
+    assert Version.parse("1.2.3") == Version(1, 2, 3), "parse three parts"
+    assert Version.parse("2") == Version(2, 0, 0), "missing parts are 0"
+    assert str(Version(3, 14, 1)) == "3.14.1", "str is dotted"
+
+def test_order_and_hash():
+    vs = [Version.parse(s) for s in ["1.10.0", "1.2.0", "1.9.5"]]
+    assert [str(v) for v in sorted(vs)] == ["1.2.0", "1.9.5", "1.10.0"], "order=True compares numerically"
+    assert len({Version(1), Version(1, 0, 0)}) == 1, "frozen dataclasses are hashable"
+
+def test_frozen():
+    v = Version(1)
+    try:
+        v.major = 2
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("Version must be frozen")
+
+def test_bump():
+    v = Version(1, 4, 7)
+    assert v.bump("patch") == Version(1, 4, 8), "patch bump"
+    assert v.bump("minor") == Version(1, 5, 0), "minor bump resets patch"
+    assert v.bump("major") == Version(2, 0, 0), "major bump resets minor and patch"
+    assert v == Version(1, 4, 7), "bump returns a new object"
+    try:
+        v.bump("build")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown part must raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>parse</code>: <code>nums = [int(p) for p in text.split(".")]</code>, then <code>cls(*nums)</code>. In <code>bump</code>, branch on <code>part</code> and return <code>replace(self, ...)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass, replace
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class Version:
+    major: int
+    minor: int = 0
+    patch: int = 0
+
+    @classmethod
+    def parse(cls, text):
+        return cls(*(int(p) for p in text.split(".")))
+
+    def __str__(self):
+        return f"{self.major}.{self.minor}.{self.patch}"
+
+    def bump(self, part):
+        match part:
+            case "major":
+                return replace(self, major=self.major + 1, minor=0, patch=0)
+            case "minor":
+                return replace(self, minor=self.minor + 1, patch=0)
+            case "patch":
+                return replace(self, patch=self.patch + 1)
+            case _:
+                raise ValueError(f"unknown part: {part!r}")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m13-e4" data-title="An Enum with behavior">
+      <div class="exercise-prompt">
+        <p>Write an <code>Enum</code> <code>Light</code> with members <code>RED</code>, <code>GREEN</code>, <code>YELLOW</code> (in that order, values via <code>auto()</code>). Add a method <code>next()</code> returning the following light in the cycle RED → GREEN → YELLOW → RED, and a property <code>can_go</code> that is <code>True</code> only for GREEN. Also write a <code>StrEnum</code> <code>Mode</code> with <code>AUTO</code> and <code>MANUAL</code> (values <code>"auto"</code>, <code>"manual"</code> via <code>auto()</code>).</p>
+      </div>
+<textarea class="starter">
+from enum import Enum, StrEnum, auto
+</textarea>
+      <script type="text/x-python" class="tests">
+from enum import Enum, StrEnum
+
+def test_members():
+    assert [m.name for m in Light] == ["RED", "GREEN", "YELLOW"], "members in order"
+    assert issubclass(Light, Enum), "Light is an Enum"
+
+def test_next():
+    assert Light.RED.next() is Light.GREEN, "RED -> GREEN"
+    assert Light.GREEN.next() is Light.YELLOW, "GREEN -> YELLOW"
+    assert Light.YELLOW.next() is Light.RED, "YELLOW wraps to RED"
+
+def test_can_go():
+    assert Light.GREEN.can_go is True and Light.RED.can_go is False, "only GREEN can go"
+
+def test_mode():
+    assert issubclass(Mode, StrEnum), "Mode is a StrEnum"
+    assert Mode("manual") is Mode.MANUAL and Mode.AUTO == "auto", "auto() lowercases names in StrEnum"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>members = list(type(self))</code>, then use <code>members.index(self)</code> and modulo to wrap around.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from enum import Enum, StrEnum, auto
+
+
+class Light(Enum):
+    RED = auto()
+    GREEN = auto()
+    YELLOW = auto()
+
+    def next(self):
+        members = list(type(self))
+        return members[(members.index(self) + 1) % len(members)]
+
+    @property
+    def can_go(self):
+        return self is Light.GREEN
+
+
+class Mode(StrEnum):
+    AUTO = auto()
+    MANUAL = auto()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m13-e5" data-title="Permissions with Flag">
+      <div class="exercise-prompt">
+        <p>Write a <code>Flag</code> called <code>Perm</code> with <code>R</code>, <code>W</code>, <code>X</code> (using <code>auto()</code>). Then write <code>to_text(perm)</code> returning a Unix-style string such as <code>"rw-"</code> or <code>"r-x"</code>, and <code>from_text(text)</code> doing the reverse (<code>"---"</code> gives <code>Perm(0)</code>).</p>
+      </div>
+<textarea class="starter">
+from enum import Flag, auto
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_values():
+    assert [p.value for p in Perm] == [1, 2, 4], "auto() gives powers of two"
+
+def test_to_text():
+    assert to_text(Perm.R | Perm.W) == "rw-", "R|W is rw-"
+    assert to_text(Perm.R | Perm.X) == "r-x", "R|X is r-x"
+    assert to_text(Perm(0)) == "---", "no permissions"
+    assert to_text(Perm.R | Perm.W | Perm.X) == "rwx", "all permissions"
+
+def test_from_text():
+    assert from_text("rw-") == Perm.R | Perm.W, "parse rw-"
+    assert from_text("---") == Perm(0), "parse ---"
+    for text in ("r--", "-w-", "--x", "rwx", "r-x"):
+        assert to_text(from_text(text)) == text, f"round trip {text}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Pair letters with members: <code>zip("rwx", [Perm.R, Perm.W, Perm.X])</code>. Test with <code>flag in perm</code>; build with <code>perm |= flag</code> starting from <code>Perm(0)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from enum import Flag, auto
+
+
+class Perm(Flag):
+    R = auto()
+    W = auto()
+    X = auto()
+
+
+_LETTERS = list(zip("rwx", [Perm.R, Perm.W, Perm.X]))
+
+
+def to_text(perm):
+    return "".join(letter if flag in perm else "-" for letter, flag in _LETTERS)
+
+
+def from_text(text):
+    perm = Perm(0)
+    for (letter, flag), char in zip(_LETTERS, text):
+        if char == letter:
+            perm |= flag
+    return perm</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m13-e6" data-title="NamedTuple results and grouping">
+      <div class="exercise-prompt">
+        <p>Define a <code>NamedTuple</code> <code>Reading</code> with <code>sensor: str</code>, <code>value: float</code>, and <code>unit: str = "C"</code>. Write <code>parse_line(line)</code> that turns <code>"t1, 21.5"</code> or <code>"t1, 70.0, F"</code> into a <code>Reading</code> (strip spaces, convert the value to float), and <code>by_sensor(readings)</code> returning a dict mapping each sensor to the list of its values in input order.</p>
+      </div>
+<textarea class="starter">
+from typing import NamedTuple
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_parse():
+    r = parse_line("t1, 21.5")
+    assert r == Reading("t1", 21.5, "C"), "default unit is C"
+    assert parse_line(" t2 ,70.0 , F ") == Reading("t2", 70.0, "F"), "strip spaces and read the unit"
+    assert isinstance(r, tuple) and r.value == 21.5, "Reading is a NamedTuple"
+
+def test_immutable():
+    r = parse_line("a, 1")
+    try:
+        r.value = 2
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("NamedTuple fields are read-only")
+
+def test_by_sensor():
+    lines = ["a, 1", "b, 2", "a, 3"]
+    assert by_sensor([parse_line(l) for l in lines]) == {"a": [1.0, 3.0], "b": [2.0]}, "group values by sensor"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>parts = [p.strip() for p in line.split(",")]</code>, then <code>Reading(parts[0], float(parts[1]), *parts[2:])</code>. Use <code>dict.setdefault</code> for grouping.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from typing import NamedTuple
+
+
+class Reading(NamedTuple):
+    sensor: str
+    value: float
+    unit: str = "C"
+
+
+def parse_line(line):
+    parts = [p.strip() for p in line.split(",")]
+    return Reading(parts[0], float(parts[1]), *parts[2:3])
+
+
+def by_sensor(readings):
+    groups = {}
+    for r in readings:
+        groups.setdefault(r.sensor, []).append(r.value)
+    return groups</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an inventory model</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Inventory with dataclasses and enums</span></div>
+      <div class="widget-body">
+        <p>Model a small warehouse inventory using the right record type for each concept. This is a direct warm-up for <a href="../projects/p02-library-system.html">Project 2</a>.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init inventory
+cd inventory
+mkdir -p src
+pixi run python src/inventory.py</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>Category(StrEnum)</code>: <code>ELECTRONICS</code>, <code>GROCERY</code>, <code>CLOTHING</code>, ... (values usable in JSON).</li>
+          <li><code>StockStatus(Enum)</code>: <code>IN_STOCK</code>, <code>LOW</code>, <code>OUT</code>.</li>
+          <li><code>Product</code>: <code>@dataclass(frozen=True, slots=True)</code> with <code>sku</code>, <code>name</code>, <code>category: Category</code>, <code>unit_price</code> (validated non-negative in <code>__post_init__</code>), and <code>tags: tuple[str, ...] = ()</code>.</li>
+          <li><code>StockItem</code>: a mutable dataclass with <code>product</code>, <code>quantity</code>, <code>reorder_level: int = 5</code>, and a <code>status</code> property returning a <code>StockStatus</code>.</li>
+          <li><code>Inventory</code>: holds <code>dict[str, StockItem]</code> (composition) with <code>add_product</code>, <code>receive(sku, qty)</code>, <code>sell(sku, qty)</code> (raises if insufficient), <code>low_stock()</code>, <code>value_by_category() -&gt; dict[Category, float]</code>, and <code>reprice(sku, new_price)</code> using <code>dataclasses.replace</code>.</li>
+          <li><code>to_json()</code>/<code>from_json()</code> using <code>asdict</code> and the enums' values, with a <code>TypedDict</code> describing the JSON shape.</li>
+          <li>A <code>Movement</code> <code>NamedTuple</code> (<code>sku</code>, <code>delta</code>, <code>reason</code>) appended to a history list on every change.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m13-mini">
+          <li>Products are immutable and hashable; repricing produces a new <code>Product</code></li>
+          <li>No mutable default arguments or fields anywhere (use <code>default_factory</code>)</li>
+          <li>Status values come from <code>StockStatus</code>, never raw strings</li>
+          <li>Selling more than is in stock raises a clear error and changes nothing</li>
+          <li>JSON round-trips: <code>Inventory.from_json(inv.to_json())</code> equals the original data</li>
+          <li><code>value_by_category()</code> keys are <code>Category</code> members</li>
+          <li>The demo runs with <code>pixi run python src/inventory.py</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a <code>Flag</code> for product attributes (<code>FRAGILE | PERISHABLE | HAZARDOUS</code>) and a shipping-rule function that uses it.</li>
+          <li>Make <code>Inventory</code> iterable and sized (M11) and sortable by value.</li>
+          <li>If you have Python 3.15 available, store per-warehouse prices in a <code>frozendict</code> field (<code>pixi exec --spec "python=3.15" python src/inventory.py</code>).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m13-quiz">
+<script type="application/json">
+{"title": "Dataclasses, enums & records quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which methods does a plain <code>@dataclass</code> generate by default?", "options": ["<code>__init__</code>", "<code>__repr__</code>", "<code>__eq__</code>", "<code>__lt__</code>", "<code>__hash__</code> based on fields"], "answer": [0, 1, 2], "explanation": "<p>Ordering needs <code>order=True</code>. With <code>eq=True</code> and not frozen, <code>__hash__</code> is set to <code>None</code>.</p>"},
+  {"type": "single", "prompt": "What happens with <code>tags: list = []</code> in a dataclass?", "options": ["Every instance shares one list", "<code>ValueError</code> when the class is defined", "Each instance gets a copy", "<code>TypeError</code> when an instance is created"], "answer": 1, "explanation": "<p>Dataclasses refuse unhashable mutable defaults like lists, dicts, and sets. Use <code>field(default_factory=list)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from dataclasses import dataclass\n\n@dataclass\nclass P:\n    x: int\n    y = 5\n\nprint(P(1))", "answer": "P(x=1)", "explanation": "<p><code>y</code> has no annotation, so it is a class attribute, not a field.</p>"},
+  {"type": "single", "prompt": "When does <code>__post_init__</code> run?", "options": ["Before <code>__init__</code>", "Right after the generated <code>__init__</code> assigns the fields", "When the class is created", "Only for frozen dataclasses"], "answer": 1, "explanation": "<p>It's the hook for validation, normalization, and computing <code>init=False</code> fields.</p>"},
+  {"type": "single", "prompt": "Why can instances of <code>@dataclass(frozen=True)</code> be dict keys while regular dataclasses can't?", "options": ["Frozen dataclasses use slots", "Frozen dataclasses get a generated field-based <code>__hash__</code>, which is safe because fields can't change", "Regular dataclasses are not objects", "Dict keys must be tuples"], "answer": 1, "explanation": "<p>Hashing by value is only safe for immutable objects (the M11 hash contract).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from dataclasses import dataclass\n\n@dataclass(order=True)\nclass V:\n    a: int\n    b: int\n\nprint(V(1, 9) < V(2, 0))", "answer": "True", "explanation": "<p><code>order=True</code> compares fields as tuples in definition order: (1, 9) &lt; (2, 0).</p>"},
+  {"type": "single", "prompt": "What does <code>slots=True</code> change?", "options": ["Fields become read-only", "Instances have no <code>__dict__</code>; they use less memory and reject unknown attributes", "Fields become keyword-only", "Instances become hashable"], "answer": 1, "explanation": "<p>Slots store attributes in fixed positions. Assigning a misspelled attribute raises <code>AttributeError</code>.</p>"},
+  {"type": "text", "prompt": "Which function from <code>dataclasses</code> returns a modified copy of a (possibly frozen) instance?", "answer": ["replace", "dataclasses.replace", "replace()"], "explanation": "<p><code>replace(obj, field=new)</code> calls <code>__init__</code> again, so validation re-runs. Since 3.13, <code>copy.replace</code> works too.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from enum import Enum, auto\n\nclass Color(Enum):\n    RED = auto()\n    GREEN = auto()\n\nprint(Color(2).name, Color.RED == 1)", "answer": "GREEN False", "explanation": "<p><code>auto()</code> numbers members 1, 2, ...; plain Enum members are not equal to their raw values.</p>"},
+  {"type": "single", "prompt": "With <code>class Level(StrEnum)</code> and <code>INFO = auto()</code>, what is <code>Level.INFO.value</code>?", "options": ["<code>1</code>", "<code>'INFO'</code>", "<code>'info'</code>", "<code>'Level.INFO'</code>"], "answer": 2, "explanation": "<p>For <code>StrEnum</code>, <code>auto()</code> uses the lowercased member name.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from enum import Flag, auto\n\nclass P(Flag):\n    R = auto()\n    W = auto()\n    X = auto()\n\nprint((P.R | P.X).value)", "answer": "5", "explanation": "<p>Flag members are powers of two: R=1, W=2, X=4. R | X = 1 + 4 = 5.</p>"},
+  {"type": "single", "prompt": "What does a <code>TypedDict</code> check at runtime?", "options": ["Key names", "Value types", "Both", "Nothing; it's a plain dict described for type checkers"], "answer": 3, "explanation": "<p>TypedDict exists for static checkers such as mypy. Validate external data yourself (or with a library) at runtime.</p>"},
+  {"type": "multi", "prompt": "Which are true of <code>typing.NamedTuple</code> instances?", "options": ["They are tuples", "Fields can be reassigned", "They can be unpacked like <code>a, b = nt</code>", "They compare equal to a plain tuple with the same values"], "answer": [0, 2, 3], "explanation": "<p>Named tuples are immutable tuple subclasses, so equality with plain tuples holds, which can surprise you.</p>"},
+  {"type": "single", "prompt": "In Python 3.15, what problem does <code>frozendict</code> (PEP 814) solve for frozen dataclasses?", "options": ["Faster attribute access", "A mapping field that is genuinely immutable and hashable", "Automatic JSON serialization", "Validation of field types"], "answer": 1, "explanation": "<p>A <code>dict</code> field is mutable and unhashable; <code>frozendict</code> keeps the whole record immutable.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li><code>@dataclass</code> turns annotated class attributes into fields and generates <code>__init__</code>, <code>__repr__</code>, <code>__eq__</code>.</li>
+      <li>Mutable defaults need <code>field(default_factory=...)</code>; validate and derive in <code>__post_init__</code>.</li>
+      <li><code>frozen=True</code> (immutable, hashable), <code>order=True</code> (tuple comparison), <code>slots=True</code> (compact, typo-proof), <code>kw_only=True</code> (named arguments).</li>
+      <li><code>replace</code> copies with changes; <code>asdict</code>/<code>astuple</code> convert recursively.</li>
+      <li><code>Enum</code> defines a closed set of named members; <code>auto()</code>, <code>Cls(value)</code>, <code>Cls["NAME"]</code>; <code>IntEnum</code>, <code>StrEnum</code>, <code>Flag</code> add int, str, and bitwise behavior.</li>
+      <li><code>NamedTuple</code>: immutable tuple with names. <code>TypedDict</code>: static description of a dict.</li>
+      <li>Default to a frozen dataclass for records and an Enum for choices.</li>
+      <li>Python 3.15 previews: <code>frozendict</code> and <code>sentinel</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="Records & enums">
+<script type="application/json">
+[
+  {"front": "What makes a class attribute a dataclass field?", "back": "A type annotation (and not <code>ClassVar</code>)."},
+  {"front": "Mutable default in a dataclass", "back": "<code>field(default_factory=list)</code>; a bare <code>[]</code> raises ValueError."},
+  {"front": "<code>__post_init__</code>", "back": "Runs after the generated <code>__init__</code>: validate, normalize, compute <code>init=False</code> fields."},
+  {"front": "<code>frozen=True</code>", "back": "Assignment raises FrozenInstanceError; a field-based <code>__hash__</code> is generated."},
+  {"front": "<code>order=True</code>", "back": "Generates &lt; &lt;= &gt; &gt;= comparing fields as a tuple in definition order."},
+  {"front": "<code>slots=True</code>", "back": "No per-instance <code>__dict__</code>: less memory, unknown attributes rejected."},
+  {"front": "<code>KW_ONLY</code>", "back": "A pseudo-field <code>_: KW_ONLY</code>; fields after it are keyword-only."},
+  {"front": "<code>dataclasses.replace</code>", "back": "Returns a new instance with some fields changed; re-runs <code>__init__</code>/<code>__post_init__</code>."},
+  {"front": "Enum lookup", "back": "<code>Color(1)</code> by value, <code>Color['RED']</code> by name, <code>.name</code> and <code>.value</code> on members."},
+  {"front": "<code>Flag</code>", "back": "Members are bits combinable with <code>|</code>; test with <code>in</code>."},
+  {"front": "NamedTuple vs TypedDict", "back": "NamedTuple: real immutable tuple with names. TypedDict: a plain dict with a static type description."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/dataclasses.html"><code>dataclasses</code> documentation</a></li>
+      <li><a href="https://docs.python.org/3/howto/enum.html">Enum HOWTO</a> and <a href="https://docs.python.org/3/library/enum.html"><code>enum</code> reference</a></li>
+      <li><a href="https://docs.python.org/3/library/typing.html#typing.NamedTuple"><code>typing.NamedTuple</code></a> and <a href="https://docs.python.org/3/library/typing.html#typing.TypedDict"><code>typing.TypedDict</code></a></li>
+      <li><a href="https://peps.python.org/pep-0814/">PEP 814: frozendict</a> and <a href="https://peps.python.org/pep-0661/">PEP 661: Sentinel values</a></li>
+      <li><a href="../reference/python-315.html">Python 3.15 preview reference</a></li>
+      <li>Next: <a href="m14-iterators.html">M14 Iterators &amp; Generators</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

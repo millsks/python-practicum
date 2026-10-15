@@ -1,0 +1,4 @@
+id = "p01"
+title = "Project 1: Budget Ledger CLI"
+part = 1
+package = "ledger"

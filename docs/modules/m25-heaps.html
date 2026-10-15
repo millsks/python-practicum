@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M25 · Heaps &amp; Priority Queues · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m25">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 25</p>
+    <h1>Heaps &amp; Priority Queues</h1>
+    <p class="lede">An emergency room does not treat patients in arrival order, and an operating system does not run
+      processes first come, first served. When "what is most urgent right now?" is the only question you ask, a heap
+      answers it in O(log n) with nothing but a Python list.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m24-trees.html">M24</a>,
+      <a href="m20-arrays.html">M20</a></span></div>
+    <ul class="objectives">
+      <li>Describe the priority queue ADT and compare implementations by cost</li>
+      <li>Navigate a binary heap stored in an array with parent/child index arithmetic</li>
+      <li>Implement sift-up and sift-down, and explain why bottom-up heapify is O(n)</li>
+      <li>Use the full <code>heapq</code> API, including the Python 3.14 max-heap functions</li>
+      <li>Order entries with tuples and <code>dataclass(order=True)</code>, with stable tie-breakers</li>
+      <li>Apply heaps to top-k, k-way merge, running median, scheduling, and simulation</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="adt">
+    <h2>The priority queue ADT</h2>
+    <p>A <strong>priority queue</strong> is an abstract data type (a contract, not an implementation) holding items with
+      priorities. It supports <strong>insert</strong> (add an item), <strong>peek</strong> (look at the highest-priority
+      item), and <strong>pop</strong> (remove and return it). A <em>min</em>-priority queue treats the smallest key as
+      most urgent; a <em>max</em>-priority queue the largest. Unlike a queue from <a href="m22-stacks-queues.html">M22</a>,
+      arrival order does not matter, only priority.</p>
+    <p>Where they show up: operating-system and job schedulers, network routers (quality of service), Dijkstra's
+      shortest paths and A* search (<a href="m31-graph-algorithms.html">M31</a>), Huffman coding, event-driven
+      simulation, "the k largest" anything, and merging sorted files that do not fit in memory.</p>
+    <table>
+      <thead><tr><th>Implementation</th><th>insert</th><th>peek</th><th>pop</th><th>build from n items</th></tr></thead>
+      <tbody>
+        <tr><td>Unsorted list</td><td>O(1)</td><td>O(n)</td><td>O(n)</td><td>O(1)</td></tr>
+        <tr><td>Sorted list (keep sorted)</td><td>O(n)</td><td>O(1)</td><td>O(1) from the end</td><td>O(n log n)</td></tr>
+        <tr><td>Balanced BST</td><td>O(log n)</td><td>O(log n)</td><td>O(log n)</td><td>O(n log n)</td></tr>
+        <tr><td><strong>Binary heap</strong></td><td><strong>O(log n)</strong></td><td><strong>O(1)</strong></td><td><strong>O(log n)</strong></td><td><strong>O(n)</strong></td></tr>
+      </tbody>
+    </table>
+    <p>A heap wins because it maintains <em>less</em> order than a BST. It does not know the second-smallest item's
+      exact position or support sorted iteration; it only guarantees the minimum is on top. Doing less work is why it is
+      faster and why it fits in a flat array.</p>
+  </section>
+
+  <section class="lesson-section" id="layout">
+    <h2>The binary heap and its array layout</h2>
+    <p>A <strong>binary min-heap</strong> is a binary tree with two invariants:</p>
+    <ol>
+      <li><strong>Shape</strong>: it is a <em>complete</em> binary tree (every level full except the last, which fills
+        left to right).</li>
+      <li><strong>Heap order</strong>: every node is ≤ its children. So the root holds the minimum, and every path from
+        the root downward is non-decreasing. Siblings are in no particular order.</li>
+    </ol>
+    <p>Because the tree is complete, there are no gaps when you write it out level by level, so it lives in a plain
+      list with no pointers at all. With 0-based indexes:</p>
+    <pre><code class="language-python">parent(i) = (i - 1) // 2
+left(i)   = 2 * i + 1
+right(i)  = 2 * i + 2</code></pre>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 620 260" width="620" role="img" aria-label="Min-heap as a tree and as an array with index arrows">
+        <g stroke="var(--fg-muted)" stroke-width="1.5">
+          <line x1="310" y1="30" x2="190" y2="80"/><line x1="310" y1="30" x2="430" y2="80"/>
+          <line x1="190" y1="80" x2="130" y2="130"/><line x1="190" y1="80" x2="250" y2="130"/>
+          <line x1="430" y1="80" x2="370" y2="130"/><line x1="430" y1="80" x2="490" y2="130"/>
+          <line x1="130" y1="130" x2="100" y2="175"/>
+        </g>
+        <g stroke-width="2" fill="var(--bg-elev)" stroke="var(--viz-1)">
+          <circle cx="310" cy="30" r="16" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <circle cx="190" cy="80" r="16"/><circle cx="430" cy="80" r="16"/>
+          <circle cx="130" cy="130" r="16"/><circle cx="250" cy="130" r="16"/>
+          <circle cx="370" cy="130" r="16"/><circle cx="490" cy="130" r="16"/><circle cx="100" cy="175" r="16"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="310" y="35">1</text><text x="190" y="85">3</text><text x="430" y="85">2</text>
+          <text x="130" y="135">7</text><text x="250" y="135">4</text><text x="370" y="135">5</text>
+          <text x="490" y="135">9</text><text x="100" y="180">8</text>
+        </g>
+        <g font-size="10" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="310" y="58">i=0</text><text x="190" y="108">i=1</text><text x="430" y="108">i=2</text>
+          <text x="130" y="158">3</text><text x="250" y="158">4</text><text x="370" y="158">5</text><text x="490" y="158">6</text><text x="70" y="180">7</text>
+        </g>
+        <g stroke="var(--border-strong)" fill="var(--bg-sunk)">
+          <rect x="110" y="210" width="50" height="30"/><rect x="160" y="210" width="50" height="30"/><rect x="210" y="210" width="50" height="30"/>
+          <rect x="260" y="210" width="50" height="30"/><rect x="310" y="210" width="50" height="30"/><rect x="360" y="210" width="50" height="30"/>
+          <rect x="410" y="210" width="50" height="30"/><rect x="460" y="210" width="50" height="30"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="135" y="230">1</text><text x="185" y="230">3</text><text x="235" y="230">2</text><text x="285" y="230">7</text>
+          <text x="335" y="230">4</text><text x="385" y="230">5</text><text x="435" y="230">9</text><text x="485" y="230">8</text>
+        </g>
+        <g font-size="10" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="135" y="254">0</text><text x="185" y="254">1</text><text x="235" y="254">2</text><text x="285" y="254">3</text>
+          <text x="335" y="254">4</text><text x="385" y="254">5</text><text x="435" y="254">6</text><text x="485" y="254">7</text>
+        </g>
+        <path d="M185 208 C 220 190, 260 190, 285 208" fill="none" stroke="var(--viz-2)" stroke-width="1.5"/>
+        <path d="M185 208 C 230 180, 300 180, 335 208" fill="none" stroke="var(--viz-2)" stroke-width="1.5"/>
+        <text x="560" y="200" font-size="11" fill="var(--fg-muted)" text-anchor="middle">children of 1:</text>
+        <text x="560" y="214" font-size="11" fill="var(--fg-muted)" text-anchor="middle">2·1+1 = 3, 2·1+2 = 4</text>
+      </svg>
+      <figcaption>The same min-heap as a tree and as the list <code>[1, 3, 2, 7, 4, 5, 9, 8]</code>. Notice the list is
+        not sorted: 2 comes after 3. Only parent ≤ child is guaranteed.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Predict: index arithmetic" data-predict>
+<textarea>
+heap = [1, 3, 2, 7, 4, 5, 9, 8]
+
+def parent(i): return (i - 1) // 2
+def children(i): return [j for j in (2 * i + 1, 2 * i + 2) if j < len(heap)]
+
+print(heap[parent(7)], [heap[j] for j in children(1)], children(3), children(4))
+</textarea>
+    </div>
+    <p>A complete tree with n nodes has height ⌊log₂ n⌋, which is where every O(log n) below comes from. The array
+      layout also has excellent cache locality, and it is why <code>heapq</code> can operate on any ordinary
+      <code>list</code> you hand it.</p>
+    <aside class="callout think"><p>The leaves are exactly the indexes from <code>n // 2</code> to <code>n - 1</code>.
+      Why? (A node i has a left child only if <code>2i + 1 &lt; n</code>, that is, <code>i &lt; (n - 1) / 2</code>.) So
+      about half of any heap is leaves. Keep that in mind for heapify.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="sift">
+    <h2>Sift up and sift down</h2>
+    <p>Both operations temporarily break heap order in one place, then repair it along a single root-to-leaf path:</p>
+    <ul>
+      <li><strong>Push</strong>: append the item at the end (keeps the shape), then <strong>sift up</strong>: while the
+        item is smaller than its parent, swap them. At most height swaps.</li>
+      <li><strong>Pop</strong>: the minimum is at index 0. Move the <em>last</em> item to the root (keeps the shape),
+        then <strong>sift down</strong>: while it is larger than its smaller child, swap with that child. Always pick the
+        <em>smaller</em> child, or the new parent would be larger than its other child.</li>
+    </ul>
+    <p>Push and pop values in the visualizer and watch the tree and array views change together. Switch the heap
+      kind to see the max-heap mirror image.</p>
+    <div class="viz" data-viz="heap" data-config='{"kind": "min", "values": [5, 3, 8, 1, 9, 2, 7]}'></div>
+    <div class="runnable" data-title="A min-heap from scratch">
+<textarea>
+class MinHeap:
+    def __init__(self):
+        self._a = []
+
+    def __len__(self):
+        return len(self._a)
+
+    def peek(self):
+        return self._a[0]
+
+    def push(self, x):
+        a = self._a
+        a.append(x)
+        i = len(a) - 1
+        while i > 0:
+            p = (i - 1) // 2
+            if a[i] >= a[p]:
+                break
+            a[i], a[p] = a[p], a[i]          # sift up
+            i = p
+
+    def pop(self):
+        a = self._a
+        last = a.pop()                        # IndexError if empty, like list.pop
+        if not a:
+            return last
+        top, a[0] = a[0], last
+        i, n = 0, len(a)
+        while True:                           # sift down
+            smallest, l, r = i, 2 * i + 1, 2 * i + 2
+            if l < n and a[l] < a[smallest]: smallest = l
+            if r < n and a[r] < a[smallest]: smallest = r
+            if smallest == i:
+                break
+            a[i], a[smallest] = a[smallest], a[i]
+            i = smallest
+        return top
+
+h = MinHeap()
+for x in [5, 3, 8, 1, 9, 2, 7]:
+    h.push(x)
+print("array:", h._a)
+print("popped:", [h.pop() for _ in range(len(h))])
+</textarea>
+    </div>
+    <p>Step through a single pop. Watch <code>i</code> descend and <code>smallest</code> pick the smaller child each
+      round.</p>
+    <div class="tracer" data-title="Sift down after a pop">
+<textarea>
+a = [9, 3, 2, 7, 4, 5]     # 9 was just moved to the root
+i, n = 0, len(a)
+while True:
+    smallest, l, r = i, 2 * i + 1, 2 * i + 2
+    if l < n and a[l] < a[smallest]:
+        smallest = l
+    if r < n and a[r] < a[smallest]:
+        smallest = r
+    if smallest == i:
+        break
+    a[i], a[smallest] = a[smallest], a[i]
+    i = smallest
+</textarea>
+    </div>
+    <aside class="callout note" data-title="Naming confusion"><p>CPython's <code>heapq</code> source uses the names
+      backwards from most textbooks: its private <code>_siftdown</code> moves an item <em>toward the root</em> and
+      <code>_siftup</code> moves it toward the leaves. The algorithms are the same; only the names differ. Don't rely on
+      private functions anyway.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="heapify">
+    <h2>Heapify in O(n): why it is faster than n pushes</h2>
+    <p>Turning an arbitrary list into a heap by pushing items one at a time costs O(n log n). The bottom-up
+      <strong>heapify</strong> algorithm does better: leaves are already valid one-element heaps, so start at the last
+      internal node (<code>n // 2 - 1</code>) and sift each node <em>down</em>, moving toward the root.</p>
+    <p>The intuition for O(n): a node's sift-down costs at most its height. Half the nodes are leaves (height 0, cost 0),
+      a quarter have height 1, an eighth height 2, and only the root has height log n. The total work is
+      n · (0/2 + 1/4 + 2/8 + 3/16 + …), and that series converges to n. Most nodes are near the bottom, and the bottom is
+      cheap. Pushing one at a time is the opposite: most items are inserted when the heap is already large, and each
+      may sift <em>up</em> the full height.</p>
+    <div class="runnable" data-title="Count swaps: n pushes vs bottom-up heapify">
+<textarea>
+import random
+
+def sift_down(a, i, n, counter):
+    while True:
+        s, l, r = i, 2 * i + 1, 2 * i + 2
+        if l < n and a[l] < a[s]: s = l
+        if r < n and a[r] < a[s]: s = r
+        if s == i:
+            return
+        a[i], a[s] = a[s], a[i]
+        counter[0] += 1
+        i = s
+
+def heapify(a):
+    swaps = [0]
+    for i in range(len(a) // 2 - 1, -1, -1):
+        sift_down(a, i, len(a), swaps)
+    return swaps[0]
+
+def push_all(items):
+    a, swaps = [], 0
+    for x in items:
+        a.append(x)
+        i = len(a) - 1
+        while i > 0 and a[i] < a[(i - 1) // 2]:
+            p = (i - 1) // 2
+            a[i], a[p] = a[p], a[i]
+            swaps += 1
+            i = p
+    return swaps
+
+for n in [1_000, 10_000, 100_000]:
+    worst = list(range(n, 0, -1))        # descending: worst case for a min-heap
+    print(f"n={n:>7}  pushes: {push_all(worst):>9,} swaps   heapify: {heapify(worst[:]):>7,} swaps")
+</textarea>
+    </div>
+    <p>Heapify's swap count grows linearly (about n); the push-one-at-a-time count grows like n log n.</p>
+  </section>
+
+  <section class="lesson-section" id="heapq">
+    <h2>The <code>heapq</code> module</h2>
+    <p><code>heapq</code> implements a binary min-heap on top of a regular list. There is no heap class: you keep a list
+      and pass it to functions. The functions are written in C and are much faster than a Python implementation.</p>
+    <table>
+      <thead><tr><th>Function</th><th>What it does</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td><code>heapify(xs)</code></td><td>Rearrange a list into a heap, in place</td><td>O(n)</td></tr>
+        <tr><td><code>heappush(h, x)</code></td><td>Push x</td><td>O(log n)</td></tr>
+        <tr><td><code>heappop(h)</code></td><td>Pop and return the smallest; <code>IndexError</code> if empty</td><td>O(log n)</td></tr>
+        <tr><td><code>h[0]</code></td><td>Peek at the smallest</td><td>O(1)</td></tr>
+        <tr><td><code>heappushpop(h, x)</code></td><td>Push x, then pop the smallest (faster than the two calls)</td><td>O(log n)</td></tr>
+        <tr><td><code>heapreplace(h, x)</code></td><td>Pop the smallest, then push x (heap must be non-empty)</td><td>O(log n)</td></tr>
+        <tr><td><code>nsmallest(k, it, key=)</code> / <code>nlargest</code></td><td>The k smallest / largest, sorted</td><td>O(n log k)</td></tr>
+        <tr><td><code>merge(*iters, key=, reverse=)</code></td><td>Lazily merge already-sorted iterables</td><td>O(N log k)</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="heapq in action">
+<textarea>
+import heapq
+
+h = [5, 3, 8, 1, 9, 2]
+heapq.heapify(h)
+print("heap list:", h, "min:", h[0])
+
+heapq.heappush(h, 0)
+print("pop:", heapq.heappop(h), heapq.heappop(h))
+
+# pushpop: if x is <= the min, x comes straight back and the heap is untouched
+print("pushpop 0 ->", heapq.heappushpop(h, 0), h)
+# replace: always pops first, so it can return something larger than x
+print("replace 0 ->", heapq.heapreplace(h, 0), h)
+
+print(heapq.nsmallest(3, [7, 1, 9, 4, 6]), heapq.nlargest(2, ["pear", "fig", "banana"], key=len))
+</textarea>
+    </div>
+    <aside class="callout py314" data-title="New in Python 3.14: public max-heap functions"><p>Python 3.14 adds
+      <code>heapq.heapify_max</code>, <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>,
+      and <code>heapreplace_max</code>. They maintain a max-heap (largest at index 0) on a plain list. Before 3.14 the
+      only options were private underscore functions or the <strong>negate trick</strong>: push <code>-x</code> and
+      negate again on pop. Negation still works and you will see it in older code, but it only works for numbers, is easy
+      to forget on one side, and reads poorly.</p></aside>
+    <div class="tabs">
+      <div class="tab" data-label="Python 3.14 max-heap">
+        <div class="runnable" data-title="Max-heap with the 3.14 functions">
+<textarea>
+import heapq
+
+bids = [120, 95, 210, 180, 150]
+heapq.heapify_max(bids)
+print("highest bid:", bids[0])
+
+heapq.heappush_max(bids, 300)
+print("popped:", heapq.heappop_max(bids), heapq.heappop_max(bids))
+
+# replace the top with a new value; returns the old top
+print("replaced:", heapq.heapreplace_max(bids, 100), "now top:", bids[0])
+
+# works for any comparable values, not just numbers
+words = ["kiwi", "apple", "mango", "banana"]
+heapq.heapify_max(words)
+print("alphabetically last:", heapq.heappop_max(words))
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="The old negate trick">
+        <div class="runnable" data-title="Max-heap by negation (pre-3.14 style)">
+<textarea>
+import heapq
+
+bids = [120, 95, 210, 180, 150]
+neg = [-b for b in bids]
+heapq.heapify(neg)
+print("highest bid:", -neg[0])
+heapq.heappush(neg, -300)
+print("popped:", -heapq.heappop(neg), -heapq.heappop(neg))
+
+# Strings cannot be negated:
+try:
+    heapq.heappush([], -"kiwi")
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="entries">
+    <h2>Heap entries: tuples, tie-breakers, and dataclasses</h2>
+    <p>Real priority queues hold <em>things</em> with priorities: tasks, events, graph nodes. The standard trick is to
+      push tuples, because tuples compare element by element: <code>(priority, item)</code> sorts by priority first.
+      But when two priorities are equal, Python compares the items, which can fail or give surprising orders.</p>
+    <div class="runnable" data-title="Predict: what happens on a tie?" data-predict>
+<textarea>
+import heapq
+
+class Task:
+    def __init__(self, name):
+        self.name = name
+
+h = []
+heapq.heappush(h, (2, Task("write report")))
+heapq.heappush(h, (1, Task("fix bug")))
+try:
+    heapq.heappush(h, (1, Task("deploy")))
+    print("pushed")
+except TypeError as e:
+    print(type(e).__name__)
+</textarea>
+    </div>
+    <p>The fix is a <strong>tie-breaker</strong>: a monotonically increasing counter as the second element. Equal
+      priorities then come out in insertion order (FIFO, which makes the queue <em>stable</em>), and the item itself is
+      never compared.</p>
+    <div class="runnable" data-title="(priority, count, item) entries">
+<textarea>
+import heapq
+from itertools import count
+
+h, tiebreak = [], count()
+for priority, name in [(2, "write report"), (1, "fix bug"), (1, "deploy"), (3, "lunch"), (1, "review PR")]:
+    heapq.heappush(h, (priority, next(tiebreak), name))
+
+while h:
+    priority, _, name = heapq.heappop(h)
+    print(priority, name)
+</textarea>
+    </div>
+    <p>For richer entries use <code>@dataclass(order=True)</code>, which generates comparison methods from the fields in
+      order, and exclude the payload with <code>field(compare=False)</code>:</p>
+    <div class="runnable" data-title="dataclass(order=True) entries">
+<textarea>
+import heapq
+from dataclasses import dataclass, field
+from itertools import count
+
+_seq = count()
+
+@dataclass(order=True)
+class Job:
+    priority: int
+    name: str = field(compare=False)
+    seq: int = field(init=False, default_factory=lambda: next(_seq))   # tie-breaker
+    payload: dict = field(compare=False, default_factory=dict)
+
+jobs = [Job(2, "resize images"), Job(1, "send invoices"), Job(1, "backup db")]
+print(jobs[1] < jobs[2], jobs[1] == Job(1, "other name"))   # compares (priority, seq) only
+heapq.heapify(jobs)
+print([heapq.heappop(jobs).name for _ in range(3)])
+</textarea>
+    </div>
+    <aside class="callout tip" data-title="Changing a priority"><p><code>heapq</code> cannot find an item to change its
+      priority (that would be O(n)). The standard pattern is <strong>lazy deletion</strong>: keep a dict from item to its
+      current entry, mark the old entry as removed, push a new one, and skip removed entries when popping. The
+      <a href="https://docs.python.org/3/library/heapq.html#priority-queue-implementation-notes">heapq docs</a> show the
+      full recipe; Dijkstra's algorithm in M31 uses the simpler "skip stale distances" variant.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="patterns">
+    <h2>Heap patterns: top-k, k-way merge, running median</h2>
+    <h3>Top-k</h3>
+    <p>To keep the k <em>largest</em> items from a stream of n, maintain a <em>min</em>-heap of size k. Its root is the
+      smallest of the current top k, the "bar to beat". Each new item either loses to the bar (O(1) check) or replaces it
+      (O(log k)). Total O(n log k) time and O(k) memory, so it works on streams far larger than memory.
+      <code>heapq.nlargest</code> does exactly this; for k = 1 use <code>max()</code>, and when k is close to n just sort.</p>
+    <div class="runnable" data-title="Top-k from a stream with a bounded heap">
+<textarea>
+import heapq, random
+
+def top_k(stream, k):
+    heap = []
+    for x in stream:
+        if len(heap) < k:
+            heapq.heappush(heap, x)
+        elif x > heap[0]:
+            heapq.heapreplace(heap, x)       # pop the bar, push x
+    return sorted(heap, reverse=True)
+
+random.seed(4)
+data = (random.randint(0, 10**6) for _ in range(100_000))  # a generator: never all in memory
+print(top_k(data, 5))
+
+words = "the cat and the hat and the bat sat on the mat".split()
+from collections import Counter
+print(heapq.nlargest(2, Counter(words).items(), key=lambda kv: kv[1]))
+</textarea>
+    </div>
+    <h3>Merging k sorted lists</h3>
+    <p>Put the first element of each list in a heap together with which list it came from. Pop the smallest, output it,
+      and push the next element from the same list. Each of the N total elements is pushed and popped once in a heap of
+      size k: O(N log k). This is how databases and <code>sort</code> merge sorted runs that do not fit in memory, and
+      <code>heapq.merge</code> does it lazily.</p>
+    <div class="runnable" data-title="k-way merge by hand and with heapq.merge">
+<textarea>
+import heapq
+
+logs = [
+    [(1, "web: start"), (5, "web: request"), (9, "web: stop")],
+    [(2, "db: connect"), (3, "db: query")],
+    [(4, "cache: miss"), (6, "cache: fill"), (7, "cache: hit")],
+]
+
+def merge_k(lists):
+    heap = [(lst[0], i, 0) for i, lst in enumerate(lists) if lst]
+    heapq.heapify(heap)
+    while heap:
+        value, i, j = heapq.heappop(heap)
+        yield value
+        if j + 1 < len(lists[i]):
+            heapq.heappush(heap, (lists[i][j + 1], i, j + 1))
+
+print([t for t, _ in merge_k(logs)])
+print([msg for _, msg in heapq.merge(*logs)])
+</textarea>
+    </div>
+    <h3>Running median with two heaps</h3>
+    <p>Keep the smaller half of the numbers in a <em>max</em>-heap and the larger half in a <em>min</em>-heap, with sizes
+      differing by at most one. The median is then at one or both roots: O(log n) per insert, O(1) per query. With
+      Python 3.14 the lower half can use the <code>_max</code> functions directly.</p>
+    <div class="runnable" data-title="Running median">
+<textarea>
+import heapq
+
+class RunningMedian:
+    def __init__(self):
+        self.low = []    # max-heap (3.14 *_max functions): smaller half
+        self.high = []   # min-heap: larger half
+
+    def add(self, x):
+        if not self.low or x <= self.low[0]:
+            heapq.heappush_max(self.low, x)
+        else:
+            heapq.heappush(self.high, x)
+        # rebalance so len(low) == len(high) or len(high) + 1
+        if len(self.low) > len(self.high) + 1:
+            heapq.heappush(self.high, heapq.heappop_max(self.low))
+        elif len(self.high) > len(self.low):
+            heapq.heappush_max(self.low, heapq.heappop(self.high))
+
+    def median(self):
+        if len(self.low) > len(self.high):
+            return self.low[0]
+        return (self.low[0] + self.high[0]) / 2
+
+rm = RunningMedian()
+for x in [5, 15, 1, 3, 8, 7, 9, 10]:
+    rm.add(x)
+    print(f"after {x:>2}: median = {rm.median()}")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="scheduling">
+    <h2>Scheduling, event simulation, and a heapsort preview</h2>
+    <p>A <strong>discrete-event simulation</strong> keeps a priority queue of future events keyed by time. The loop pops
+      the earliest event, advances the clock to it, and handles it, which may schedule more events. Nothing happens
+      between events, so the simulation jumps straight from one to the next. Bank queues, network protocols, and
+      <code>asyncio</code>'s timer handling (<code>call_later</code>) all use a time-ordered heap.</p>
+    <div class="runnable" data-title="A coffee shop simulation">
+<textarea>
+import heapq
+import random
+from itertools import count
+
+random.seed(2)
+events, seq = [], count()
+def schedule(time, kind, customer):
+    heapq.heappush(events, (time, next(seq), kind, customer))
+
+for c in range(5):                       # five customers arrive at random times
+    schedule(round(random.uniform(0, 10), 1), "arrive", c)
+
+barista_free_at, waits = 0.0, []
+while events:
+    now, _, kind, c = heapq.heappop(events)
+    if kind == "arrive":
+        start = max(now, barista_free_at)
+        barista_free_at = start + 3.0     # each drink takes 3 minutes
+        waits.append(start - now)
+        schedule(barista_free_at, "leave", c)
+        print(f"t={now:5.1f}  customer {c} arrives, waits {start - now:.1f}")
+    else:
+        print(f"t={now:5.1f}  customer {c} leaves with coffee")
+print(f"average wait {sum(waits) / len(waits):.2f} min")
+</textarea>
+    </div>
+    <p><strong>Heapsort</strong> falls out immediately: heapify the array in O(n), then pop n times in O(n log n). Done in
+      place (swap the root with the last element of the shrinking heap), it sorts with O(1) extra memory and a guaranteed
+      O(n log n) worst case. It is not stable and has poor cache behavior, which is why Python's <code>sorted</code> uses
+      Powersort instead. You will study it properly in <a href="m29-sorting.html">M29</a>; watch it here:</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["heap", "merge"], "default": "heap", "size": 16}'></div>
+  </section>
+
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls</h2>
+    <ul>
+      <li><strong>A heap is not sorted.</strong> <code>h[1]</code> is not the second smallest; only <code>h[0]</code> is
+        meaningful. To see items in order, pop them or use <code>sorted(h)</code>.</li>
+      <li><strong>Forgetting to heapify.</strong> <code>heappop</code> on an arbitrary list returns <code>h[0]</code>, not the
+        minimum, and silently leaves garbage. Call <code>heapify</code> once first.</li>
+      <li><strong>Mutating items in place</strong> after pushing them breaks the invariant without any error. Push a new
+        entry instead (lazy deletion).</li>
+      <li><strong>Uncomparable payloads</strong> on ties raise <code>TypeError</code>. Use a counter tie-breaker or
+        <code>field(compare=False)</code>.</li>
+      <li><strong>Mixing min and max functions</strong> on the same list. <code>heappush</code> on a list maintained by
+        <code>heapify_max</code> corrupts it. One list, one ordering.</li>
+      <li><strong>Using a heap for membership tests.</strong> <code>x in h</code> is O(n). Pair the heap with a set or dict
+        if you need lookup.</li>
+      <li><strong><code>queue.PriorityQueue</code></strong> is a thread-safe wrapper around <code>heapq</code> with locking
+        overhead. Use it only to pass work between threads; otherwise use <code>heapq</code> directly.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m25-e1" data-title="Check the heap property">
+      <div class="exercise-prompt"><p>Write <code>is_min_heap(a)</code> returning <code>True</code> if the list satisfies
+        the min-heap property (every parent ≤ its children) and <code>children(i, n)</code> returning the list of valid
+        child indexes of index <code>i</code> in a heap of size <code>n</code>.</p></div>
+<textarea class="starter">
+def children(i, n):
+    ...
+
+def is_min_heap(a):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_children():
+    assert children(0, 7) == [1, 2]
+    assert children(2, 7) == [5, 6]
+    assert children(2, 6) == [5], "index 6 does not exist in a heap of size 6"
+    assert children(3, 7) == [], "index 3 is a leaf"
+
+def test_is_heap():
+    assert is_min_heap([]) is True and is_min_heap([4]) is True
+    assert is_min_heap([1, 3, 2, 7, 4, 5, 9, 8]) is True, "siblings may be in any order"
+    assert is_min_heap([1, 3, 2, 7, 4, 1]) is False, "index 5 (1) is smaller than its parent at index 2 (2)"
+    assert is_min_heap([2, 1]) is False
+
+def test_matches_heapq():
+    import heapq, random
+    rng = random.Random(0)
+    for _ in range(50):
+        xs = [rng.randint(0, 20) for _ in range(rng.randint(0, 15))]
+        heapq.heapify(xs)
+        assert is_min_heap(xs), f"heapq produced {xs}, which should be a heap"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Every non-root index i must satisfy <code>a[(i - 1) // 2] &lt;= a[i]</code>.
+        That single loop checks everything.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def children(i, n):
+    return [j for j in (2 * i + 1, 2 * i + 2) if j &lt; n]
+
+def is_min_heap(a):
+    return all(a[(i - 1) // 2] &lt;= a[i] for i in range(1, len(a)))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m25-e2" data-title="Build MinHeap from scratch">
+      <div class="exercise-prompt"><p>Implement <code>MinHeap</code> with <code>push</code>, <code>pop</code> (raise
+        <code>IndexError</code> when empty), <code>peek</code>, <code>__len__</code>, and a classmethod
+        <code>from_list(items)</code> that builds the heap with bottom-up heapify in O(n). Don't use <code>heapq</code>.
+        Store the array in <code>self.a</code>.</p></div>
+<textarea class="starter">
+class MinHeap:
+    def __init__(self):
+        self.a = []
+
+    @classmethod
+    def from_list(cls, items):
+        ...
+
+    def __len__(self):
+        ...
+
+    def peek(self):
+        ...
+
+    def push(self, x):
+        ...
+
+    def pop(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def _ok(a):
+    return all(a[(i - 1) // 2] <= a[i] for i in range(1, len(a)))
+
+def test_push_pop_sorted():
+    h = MinHeap()
+    xs = random.Random(1).sample(range(1000), 200)
+    for x in xs:
+        h.push(x)
+        assert _ok(h.a), "heap property broken after push"
+    assert len(h) == 200
+    out = [h.pop() for _ in range(200)]
+    assert out == sorted(xs), "popping everything should give sorted order"
+
+def test_peek_and_empty():
+    h = MinHeap()
+    h.push(5); h.push(2)
+    assert h.peek() == 2 and len(h) == 2, "peek does not remove"
+    h.pop(); h.pop()
+    try:
+        h.pop()
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("pop on an empty heap should raise IndexError")
+
+def test_from_list():
+    xs = [9, 4, 7, 1, 8, 2, 2, 6]
+    h = MinHeap.from_list(xs)
+    assert _ok(h.a), f"from_list did not produce a heap: {h.a}"
+    assert sorted(h.a) == sorted(xs) and len(h) == 8
+    assert [h.pop() for _ in range(8)] == sorted(xs)
+
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write a helper <code>_sift_down(i)</code>; <code>pop</code> and
+        <code>from_list</code> both use it. <code>from_list</code> calls it for <code>i</code> from
+        <code>len // 2 - 1</code> down to 0.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class MinHeap:
+    def __init__(self):
+        self.a = []
+
+    @classmethod
+    def from_list(cls, items):
+        h = cls()
+        h.a = list(items)
+        for i in range(len(h.a) // 2 - 1, -1, -1):
+            h._sift_down(i)
+        return h
+
+    def __len__(self):
+        return len(self.a)
+
+    def peek(self):
+        return self.a[0]
+
+    def push(self, x):
+        a = self.a
+        a.append(x)
+        i = len(a) - 1
+        while i &gt; 0 and a[i] &lt; a[(i - 1) // 2]:
+            p = (i - 1) // 2
+            a[i], a[p] = a[p], a[i]
+            i = p
+
+    def pop(self):
+        if not self.a:
+            raise IndexError("pop from empty heap")
+        last = self.a.pop()
+        if not self.a:
+            return last
+        top, self.a[0] = self.a[0], last
+        self._sift_down(0)
+        return top
+
+    def _sift_down(self, i):
+        a, n = self.a, len(self.a)
+        while True:
+            s, l, r = i, 2 * i + 1, 2 * i + 2
+            if l &lt; n and a[l] &lt; a[s]:
+                s = l
+            if r &lt; n and a[r] &lt; a[s]:
+                s = r
+            if s == i:
+                return
+            a[i], a[s] = a[s], a[i]
+            i = s</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m25-e3" data-title="Top-k frequent words">
+      <div class="exercise-prompt"><p>Write <code>top_k_words(words, k)</code> returning the k most frequent words, most
+        frequent first, ties broken alphabetically. Use <code>collections.Counter</code> and <code>heapq</code>.</p></div>
+<textarea class="starter">
+import heapq
+from collections import Counter
+
+def top_k_words(words, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    words = "the cat and the hat and the bat".split()
+    assert top_k_words(words, 2) == ["the", "and"], "the (3), and (2)"
+
+def test_ties_alphabetical():
+    words = ["b", "a", "c", "b", "a", "c", "d"]
+    assert top_k_words(words, 3) == ["a", "b", "c"], "a, b, c all appear twice; alphabetical order"
+
+def test_k_larger_than_vocab():
+    assert top_k_words(["x", "y", "x"], 10) == ["x", "y"]
+    assert top_k_words([], 3) == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The key <code>(-count, word)</code> is smallest for the best item, so
+        <code>heapq.nsmallest(k, counts.items(), key=...)</code> does it in one line.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+from collections import Counter
+
+def top_k_words(words, k):
+    counts = Counter(words)
+    best = heapq.nsmallest(k, counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [word for word, _ in best]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m25-e4" data-title="Merge k sorted lists">
+      <div class="exercise-prompt"><p>Write <code>merge_sorted(lists)</code> returning one sorted list from a list of
+        sorted lists, in O(N log k), using a heap of <code>(value, list_index, element_index)</code> entries. Don't use
+        <code>heapq.merge</code> or <code>sorted</code>.</p></div>
+<textarea class="starter">
+import heapq
+
+def merge_sorted(lists):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_merge():
+    assert merge_sorted([[1, 4, 7], [2, 5, 8], [3, 6, 9]]) == list(range(1, 10))
+
+def test_uneven_and_empty():
+    assert merge_sorted([[], [1], [], [0, 2, 2, 3]]) == [0, 1, 2, 2, 3]
+    assert merge_sorted([]) == []
+
+def test_random_against_sorted():
+    import random
+    rng = random.Random(5)
+    lists = [sorted(rng.randint(0, 99) for _ in range(rng.randint(0, 20))) for _ in range(12)]
+    assert merge_sorted(lists) == sorted(x for l in lists for x in l)
+
+def test_no_shortcuts():
+    import builtins, heapq
+    real_sorted, real_merge = builtins.sorted, heapq.merge
+    def banned(*args, **kwargs):
+        raise AssertionError("use your own heap loop, not sorted() or heapq.merge")
+    builtins.sorted, heapq.merge = banned, banned
+    try:
+        result = merge_sorted([[3, 4], [1, 5], [2]])
+    finally:
+        builtins.sorted, heapq.merge = real_sorted, real_merge
+    assert result == [1, 2, 3, 4, 5]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Seed the heap with the head of every non-empty list. After popping
+        <code>(value, i, j)</code>, push <code>lists[i][j + 1]</code> if it exists.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+
+def merge_sorted(lists):
+    heap = [(lst[0], i, 0) for i, lst in enumerate(lists) if lst]
+    heapq.heapify(heap)
+    out = []
+    while heap:
+        value, i, j = heapq.heappop(heap)
+        out.append(value)
+        if j + 1 &lt; len(lists[i]):
+            heapq.heappush(heap, (lists[i][j + 1], i, j + 1))
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m25-e5" data-title="Running median with two heaps">
+      <div class="exercise-prompt"><p>Implement <code>RunningMedian</code> with <code>add(x)</code> and
+        <code>median()</code> (a float for an even count, the middle value for an odd count; raise
+        <code>ValueError</code> when empty). Use two heaps; Python 3.14's <code>heappush_max</code>/<code>heappop_max</code>
+        are available.</p></div>
+<textarea class="starter">
+import heapq
+
+class RunningMedian:
+    def __init__(self):
+        self.low = []    # max-heap of the smaller half
+        self.high = []   # min-heap of the larger half
+
+    def add(self, x):
+        ...
+
+    def median(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import statistics, random
+
+def test_sequence():
+    rm = RunningMedian()
+    expected = []
+    seen = []
+    for x in [5, 15, 1, 3, 8, 7, 9, 10]:
+        rm.add(x)
+        seen.append(x)
+        assert rm.median() == statistics.median(seen), f"after adding {seen}, median should be {statistics.median(seen)}"
+
+def test_random():
+    rng = random.Random(9)
+    rm, seen = RunningMedian(), []
+    for _ in range(300):
+        x = rng.randint(-50, 50)
+        rm.add(x); seen.append(x)
+        assert rm.median() == statistics.median(seen)
+    assert abs(len(rm.low) - len(rm.high)) <= 1, "the two halves must stay balanced"
+
+def test_empty():
+    try:
+        RunningMedian().median()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("median of nothing should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Add to <code>low</code> if x ≤ its max, else to <code>high</code>.
+        Then move one root across if the sizes differ by more than one (keep <code>low</code> the same size or one
+        larger).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+
+class RunningMedian:
+    def __init__(self):
+        self.low = []
+        self.high = []
+
+    def add(self, x):
+        if not self.low or x &lt;= self.low[0]:
+            heapq.heappush_max(self.low, x)
+        else:
+            heapq.heappush(self.high, x)
+        if len(self.low) &gt; len(self.high) + 1:
+            heapq.heappush(self.high, heapq.heappop_max(self.low))
+        elif len(self.high) &gt; len(self.low):
+            heapq.heappush_max(self.low, heapq.heappop(self.high))
+
+    def median(self):
+        if not self.low:
+            raise ValueError("no data")
+        if len(self.low) &gt; len(self.high):
+            return self.low[0]
+        return (self.low[0] + self.high[0]) / 2</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a task scheduler with priorities and aging</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Priority scheduler with aging</span></div>
+      <div class="widget-body">
+        <p>Strict priority scheduling has a famous failure: <strong>starvation</strong>. If high-priority tasks keep
+          arriving, a low-priority task waits forever. <strong>Aging</strong> fixes it by improving a task's effective
+          priority the longer it waits. Build <code>scheduler.py</code>:</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init scheduler &amp;&amp; cd scheduler
+pixi add python=3.14 pytest
+pixi run python -m pytest -q</code></pre>
+        <ul>
+          <li><code>Scheduler(aging_rate=0.1)</code> with <code>submit(name, priority)</code> (lower number = more urgent),
+            <code>tick()</code> to advance a logical clock, <code>next_task()</code>, <code>cancel(name)</code>,
+            <code>change_priority(name, p)</code>, and <code>__len__</code>.</li>
+          <li>Effective priority is <code>priority - aging_rate * (now - submitted_at)</code>. Key the heap so this works
+            without re-heapifying: note that <code>priority - r·(now - t) = (priority + r·t) - r·now</code>, and the
+            <code>- r·now</code> term is the same for every task.</li>
+          <li>Equal effective priorities come out in submission order (a counter tie-breaker).</li>
+          <li><code>cancel</code> and <code>change_priority</code> use lazy deletion: O(log n), never O(n).</li>
+        </ul>
+        <ul class="checklist" data-id="m25-mini">
+          <li>Tasks with distinct priorities come out most urgent first; ties come out FIFO</li>
+          <li>A low-priority task submitted early eventually beats a stream of newer high-priority tasks (test it with a loop)</li>
+          <li><code>cancel</code> and <code>change_priority</code> work, and cancelled tasks are never returned</li>
+          <li><code>next_task()</code> on an empty scheduler raises a clear exception, and <code>len</code> excludes cancelled tasks</li>
+          <li>Entries are a <code>dataclass(order=True)</code> with <code>field(compare=False)</code> for the payload</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add a <code>run(until)</code> loop that simulates tasks with durations using an
+          event heap; compare average and worst waiting time with and without aging; expose a max-priority mode using the
+          3.14 <code>heappush_max</code> family.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m25-quiz">
+<script type="application/json">
+{"title": "Heaps and priority queues quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "In a 0-based array heap, what are the children of index 4?", "options": ["8 and 9", "9 and 10", "5 and 6", "2 and 3"], "answer": 1, "explanation": "<p>Children are <code>2i + 1</code> and <code>2i + 2</code>: 9 and 10. The parent of 4 is <code>(4 - 1) // 2 = 1</code>.</p>"},
+  {"type": "single", "prompt": "Which statement about a min-heap list is true?", "options": ["It is sorted ascending", "h[1] is the second-smallest item", "h[0] is the smallest item; the rest is only partially ordered", "The largest item is at the last index"], "answer": 2, "explanation": "<p>Only parent ≤ child is guaranteed. The second smallest is at index 1 <em>or</em> 2, and the largest is somewhere among the leaves.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import heapq\nh = [5, 1, 4]\nheapq.heapify(h)\nheapq.heappush(h, 0)\nprint(heapq.heappop(h), h[0])", "answer": "0 1", "explanation": "<p>After heapify the minimum is 1; pushing 0 makes 0 the minimum. Popping returns 0 and leaves 1 on top.</p>"},
+  {"type": "single", "prompt": "Why is bottom-up heapify O(n) rather than O(n log n)?", "options": ["It uses binary search", "Most nodes are near the bottom and can sift down only a short distance", "It skips half of the elements", "It only works on sorted input"], "answer": 1, "explanation": "<p>A node's cost is its height. Half the nodes have height 0, a quarter height 1, and so on; the sum n·Σ h/2^(h+1) converges to about n.</p>"},
+  {"type": "multi", "prompt": "Which functions are new public <code>heapq</code> functions in Python 3.14?", "options": ["<code>heapify_max</code>", "<code>heappop_max</code>", "<code>heapreplace_max</code>", "<code>nlargest_max</code>", "<code>heappushpop_max</code>"], "answer": [0, 1, 2, 4], "explanation": "<p>3.14 adds <code>heapify_max</code>, <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>, and <code>heapreplace_max</code>. <code>nlargest</code> already existed and needs no <code>_max</code> variant.</p>"},
+  {"type": "single", "prompt": "You push <code>(1, Task('a'))</code> and <code>(1, Task('b'))</code> where Task defines no ordering. What happens?", "options": ["The first one pushed wins", "TypeError, because the tuples compare the Task objects on a tie", "Python compares the objects' ids", "The second push is ignored"], "answer": 1, "explanation": "<p>Tuples compare element by element; equal priorities force a comparison of the Tasks, which raises <code>TypeError</code>. Add a counter: <code>(priority, next(counter), task)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print? (Python 3.14)", "code": "import heapq\nh = [3, 9, 4]\nheapq.heapify_max(h)\nprint(heapq.heappop_max(h), h[0])", "answer": "9 4", "explanation": "<p><code>heapify_max</code> puts the largest (9) at index 0. Popping it leaves 4 as the new maximum.</p>"},
+  {"type": "single", "prompt": "To find the 10 largest values in a stream of a billion numbers, which uses the least memory?", "options": ["Sort everything and take the last 10", "A max-heap of all values", "A min-heap of size 10, replacing the root when a bigger value arrives", "A dict of counts"], "answer": 2, "explanation": "<p>The size-10 min-heap's root is the smallest of the current top ten; anything smaller can be discarded immediately. O(n log k) time and O(k) memory.</p>"},
+  {"type": "single", "prompt": "What is the cost of merging k sorted lists with N total elements using a heap?", "options": ["O(N)", "O(N log k)", "O(N log N)", "O(k log N)"], "answer": 1, "explanation": "<p>The heap never holds more than k entries (one per list), and each of the N elements is pushed and popped once.</p>"},
+  {"type": "text", "prompt": "In the two-heap running median, what kind of heap holds the smaller half of the numbers? (min or max)", "answer": ["max", "max-heap", "a max-heap", "max heap"], "explanation": "<p>The smaller half needs fast access to its <em>largest</em> element, which sits next to the median, so it is a max-heap. The larger half is a min-heap.</p>"},
+  {"type": "single", "prompt": "What is the difference between <code>heappushpop(h, x)</code> and <code>heapreplace(h, x)</code>?", "options": ["None; they are aliases", "pushpop pushes first, so it can return x itself; replace pops first, so it may return something larger than x", "replace works on max-heaps only", "pushpop is O(n)"], "answer": 1, "explanation": "<p>If x is smaller than the root, <code>heappushpop</code> returns x immediately without touching the heap. <code>heapreplace</code> always removes the current root first.</p>"},
+  {"type": "multi", "prompt": "Which are good reasons to use a heap?", "options": ["Repeatedly extracting the minimum while inserting", "Fast membership tests (<code>x in h</code>)", "Event-driven simulation ordered by time", "Iterating all items in sorted order many times"], "answer": [0, 2], "explanation": "<p>Heaps excel at 'give me the next most urgent'. Membership is O(n), and repeated sorted iteration is better served by a sorted list or tree.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A priority queue supports insert, peek, and pop-most-urgent; a binary heap does them in O(log n), O(1), O(log n), and builds in O(n).</li>
+      <li>A heap is a complete tree stored in a list: children at <code>2i + 1</code>, <code>2i + 2</code>; parent at <code>(i - 1) // 2</code>.</li>
+      <li>Push sifts up from the end; pop moves the last item to the root and sifts down toward the smaller child.</li>
+      <li><code>heapq</code> is a min-heap over a list. Python 3.14 adds <code>heapify_max</code>, <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>, and <code>heapreplace_max</code>.</li>
+      <li>Use <code>(priority, counter, item)</code> or <code>dataclass(order=True)</code> with <code>field(compare=False)</code> for stable, safe entries.</li>
+      <li>Patterns: size-k min-heap for top-k, k-way merge, two heaps for medians, time-ordered heaps for simulation.</li>
+    </ul>
+    <div class="flashcards" data-title="Heaps and priority queues">
+<script type="application/json">
+[{"front": "Heap order property (min-heap)", "back": "Every node is ≤ its children, so the root is the minimum. Siblings are unordered."},
+ {"front": "Parent and children of index i", "back": "parent (i - 1) // 2; children 2i + 1 and 2i + 2."},
+ {"front": "Push algorithm", "back": "Append at the end, then sift up while smaller than the parent. O(log n)."},
+ {"front": "Pop algorithm", "back": "Save the root, move the last item to the root, sift down toward the smaller child. O(log n)."},
+ {"front": "Why heapify is O(n)", "back": "Sift-down cost equals node height, and most nodes are near the bottom: the sum converges to about n."},
+ {"front": "Python 3.14 max-heap functions", "back": "heapify_max, heappush_max, heappop_max, heappushpop_max, heapreplace_max."},
+ {"front": "The negate trick", "back": "Pre-3.14 max-heap: push -x, negate on pop. Only works for numbers."},
+ {"front": "Tie-breaker for heap entries", "back": "(priority, next(counter), item): stable FIFO ties and the item is never compared."},
+ {"front": "Top-k largest from a stream", "back": "Min-heap of size k; replace the root when a larger item arrives. O(n log k) time, O(k) space."},
+ {"front": "Running median", "back": "Max-heap for the lower half, min-heap for the upper half, sizes within one."},
+ {"front": "heapq.merge", "back": "Lazily merges already-sorted iterables in O(N log k)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/heapq.html">heapq: heap queue algorithm</a>, including the priority-queue implementation notes</li>
+      <li><a href="https://docs.python.org/3/whatsnew/3.14.html">What's new in Python 3.14</a></li>
+      <li><a href="https://docs.python.org/3/library/queue.html#queue.PriorityQueue">queue.PriorityQueue</a> for threads</li>
+      <li><a href="https://docs.python.org/3/library/dataclasses.html">dataclasses</a>: <code>order=True</code> and <code>field(compare=False)</code></li>
+      <li>Next: <a href="m26-graphs.html">M26 Graphs</a>, where heaps power Dijkstra's algorithm later in <a href="m31-graph-algorithms.html">M31</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

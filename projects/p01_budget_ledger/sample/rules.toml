@@ -1,0 +1,14 @@
+# Keyword rules are checked top to bottom; the first match wins.
+[rules]
+rent = ["city rent"]
+groceries = ["whole foods", "trader joe"]
+dining = ["pizza", "trattoria", "cafe"]
+transport = ["metro transit"]
+subscriptions = ["streamflix"]
+income = ["payroll"]
+
+# Monthly limits (positive numbers). Categories without a limit are not checked.
+[budgets]
+groceries = 250
+dining = 80
+subscriptions = 20

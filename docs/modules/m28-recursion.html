@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M28 · Recursion &amp; Divide and Conquer · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m28">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 28</p>
+    <h1>Recursion &amp; Divide and Conquer</h1>
+    <p class="lede">Recursion lets you solve a big problem by trusting a smaller copy of the same problem to solve itself.
+      It is the native language of trees, nested data, and the fastest sorting and multiplication algorithms ever
+      invented, and learning to think this way changes how you see problems.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m05-functions.html">M05</a>,
+      <a href="m19-complexity.html">M19</a>, <a href="m24-trees.html">M24</a></span></div>
+    <ul class="objectives">
+      <li>Write recursive functions by identifying a base case and a recursive case that shrinks toward it</li>
+      <li>Read the call stack, predict <code>RecursionError</code>, and explain why Python has no tail-call optimization</li>
+      <li>Draw recursion trees and use them to count work, then cut that work with <code>functools.cache</code></li>
+      <li>Convert any recursive function to an iterative one with an explicit stack</li>
+      <li>Design divide-and-conquer algorithms (merge sort, fast exponentiation, Karatsuba) and analyze them with the master theorem</li>
+      <li>Walk arbitrarily nested data such as JSON documents and directory trees</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="thinking-recursively">
+    <h2>Thinking recursively: the leap of faith</h2>
+    <p>Picture yourself in a dark cinema. You want to know which row you are sitting in, but it is too dark to count. So you
+      tap the person in front of you and ask, "Which row are you in?" You do not know how they will find out; you just
+      <em>trust</em> that they will answer. When they say "row 11," you add one: you are in row 12. The person in front of
+      them did the same thing, and so on, until someone in the very front row says "row 1" without asking anyone.</p>
+    <p>That is the whole of recursion. A <strong>recursive function</strong> is a function that calls itself on a smaller
+      version of its input. Two parts make it work:</p>
+    <ul>
+      <li>The <strong>base case</strong>: an input so small the answer is known directly (the front row says "1").</li>
+      <li>The <strong>recursive case</strong>: an answer built from the answer to a <em>smaller</em> problem (my row is
+        their row plus one).</li>
+    </ul>
+    <p>The hardest mental step for beginners is the <strong>recursive leap of faith</strong>: when you write the
+      recursive call, you assume it already works for the smaller input, and you only think about how to use its result.
+      You do not trace all the way down in your head. This is not wishful thinking; it is mathematical induction. If the
+      base case is correct, and if "smaller answer is correct" implies "my answer is correct," then every answer is
+      correct.</p>
+    <pre><code class="language-python">def row_number(people_in_front: int) -&gt; int:
+    if people_in_front == 0:                      # base case: front row
+        return 1
+    return row_number(people_in_front - 1) + 1    # recursive case: trust, then add one</code></pre>
+    <p>Here is the recipe you will use for every recursive function in this module:</p>
+    <ol>
+      <li><strong>Define the function in words.</strong> "<code>total(xs)</code> returns the sum of the list
+        <code>xs</code>." Be exact about input and output.</li>
+      <li><strong>Find the smallest input.</strong> The empty list sums to 0.</li>
+      <li><strong>Shrink the problem.</strong> A non-empty list is its first item plus the rest.</li>
+      <li><strong>Take the leap.</strong> Assume <code>total(rest)</code> is correct and combine:
+        <code>xs[0] + total(xs[1:])</code>.</li>
+    </ol>
+    <div class="runnable" data-title="Your first recursive functions">
+<textarea>
+def total(xs):
+    if not xs:                 # base case: the empty list
+        return 0
+    return xs[0] + total(xs[1:])   # first item + sum of the rest
+
+def count_down(n):
+    if n == 0:
+        print("liftoff!")
+        return
+    print(n)
+    count_down(n - 1)
+
+def reverse(s):
+    if len(s) <= 1:
+        return s
+    return reverse(s[1:]) + s[0]
+
+print(total([3, 1, 4, 1, 5]))
+count_down(3)
+print(reverse("recursion"))
+</textarea>
+    </div>
+    <aside class="callout think"><p>Before running anything: what does <code>reverse("ab")</code> return? Apply the
+      leap of faith. <code>reverse("b")</code> is <code>"b"</code> (base case), then we add <code>"a"</code> on the
+      end. You never had to imagine more than one level.</p></aside>
+    <p><strong>Remember:</strong> define the function precisely, handle the smallest case, and trust the recursive call
+      on a strictly smaller input.</p>
+  </section>
+
+  <section class="lesson-section" id="base-cases">
+    <h2>Base cases, recursive cases, and the classic bugs</h2>
+    <p>Every recursive function must <em>make progress</em>: each call's input must be closer to a base case than the
+      call that made it. "Closer" needs a measure that is a non-negative integer and strictly decreases, such as the
+      length of a list, the value of <code>n</code>, or the height of a tree. If you can name that measure, the
+      recursion terminates.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Bug 1: no base case</h4><p>The function calls itself forever until Python raises
+        <code>RecursionError</code>.</p></div>
+      <div class="card"><h4>Bug 2: the input does not shrink</h4><p><code>f(n)</code> calls <code>f(n)</code> or
+        <code>f(n + 1)</code>. Same crash, harder to spot.</p></div>
+      <div class="card"><h4>Bug 3: base case is skipped</h4><p><code>if n == 0</code> with <code>n</code> going
+        2, 0, -2 is fine, but 3, 1, -1, -3 never hits it. Prefer <code>n &lt;= 0</code>.</p></div>
+      <div class="card"><h4>Bug 4: result is thrown away</h4><p>Writing <code>f(n - 1)</code> instead of
+        <code>return f(n - 1)</code> makes the function return <code>None</code>.</p></div>
+    </div>
+    <div class="runnable" data-title="Predict: what does this print?" data-predict>
+<textarea>
+def depth(xs):
+    if not isinstance(xs, list):
+        return 0
+    if not xs:
+        return 1
+    return 1 + max(depth(x) for x in xs)
+
+print(depth([1, [2, [3, []]], 4]))
+</textarea>
+    </div>
+    <p>Some functions need <strong>more than one base case</strong> (Fibonacci needs <code>fib(0)</code> and
+      <code>fib(1)</code>) or <strong>more than one recursive call</strong> (a binary tree's size is
+      <code>1 + size(left) + size(right)</code>). Functions with one recursive call are <em>linear</em> recursion; with
+      two or more they are <em>tree</em> recursion, which can be explosively expensive, as you will soon see.</p>
+    <aside class="callout danger"><p>A slice like <code>xs[1:]</code> copies the list. <code>total</code> above is
+      therefore O(n²) time and O(n²) total memory allocated for an n-item list. Professional recursive code passes an
+      index instead: <code>total(xs, i=0)</code> with base case <code>i == len(xs)</code>. Keep the slice version for
+      clarity while learning, then rewrite.</p></aside>
+    <p><strong>Remember:</strong> name the shrinking measure, test the smallest inputs first, and always
+      <code>return</code> the recursive result.</p>
+  </section>
+
+  <section class="lesson-section" id="call-stack">
+    <h2>The call stack, step by step</h2>
+    <p>How does Python keep track of six unfinished copies of the same function? Every call creates a <strong>frame</strong>:
+      a small record holding that call's local variables and the line it will resume at. Frames are kept on the
+      <strong>call stack</strong>, a last-in-first-out stack (you met stacks in <a href="m22-stacks-queues.html">M22</a>).
+      Calling pushes a frame; returning pops it and hands the value to the frame below.</p>
+    <p>Step through <code>fact(4)</code> below. Watch the frames pile up while <code>n</code> counts down (the
+      <em>winding</em> phase), then disappear while the multiplications happen (the <em>unwinding</em> phase). Each frame
+      has its own <code>n</code>: they are different variables that happen to share a name.</p>
+    <div class="tracer" data-title="Watch the call stack grow and shrink">
+<textarea>
+def fact(n):
+    if n == 0:
+        return 1
+    smaller = fact(n - 1)
+    return n * smaller
+
+result = fact(4)
+</textarea>
+    </div>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 190" role="img" aria-label="Call stack for fact(3): frames for n=3, 2, 1, 0 stacked, then returning 1, 1, 2, 6">
+        <g font-family="var(--font-mono)" font-size="13">
+          <rect x="20" y="140" width="150" height="34" rx="6" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <text x="95" y="162" text-anchor="middle" fill="var(--fg)">fact(3)  n=3</text>
+          <rect x="20" y="102" width="150" height="34" rx="6" fill="var(--viz-2)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <text x="95" y="124" text-anchor="middle" fill="var(--fg)">fact(2)  n=2</text>
+          <rect x="20" y="64" width="150" height="34" rx="6" fill="var(--viz-3)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <text x="95" y="86" text-anchor="middle" fill="var(--fg)">fact(1)  n=1</text>
+          <rect x="20" y="26" width="150" height="34" rx="6" fill="var(--viz-4)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <text x="95" y="48" text-anchor="middle" fill="var(--fg)">fact(0) → 1</text>
+          <text x="95" y="16" text-anchor="middle" fill="var(--fg-muted)">top of stack</text>
+          <text x="200" y="48" fill="var(--fg)">returns 1</text>
+          <text x="200" y="86" fill="var(--fg)">returns 1 × 1 = 1</text>
+          <text x="200" y="124" fill="var(--fg)">returns 2 × 1 = 2</text>
+          <text x="200" y="162" fill="var(--fg)">returns 3 × 2 = 6</text>
+          <path d="M420 40 L420 165" stroke="var(--fg-muted)" stroke-width="2" marker-end="url(#m28arrow)"/>
+          <text x="432" y="105" fill="var(--fg-muted)">unwinding</text>
+          <defs><marker id="m28arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--fg-muted)"/></marker></defs>
+        </g>
+      </svg>
+      <figcaption>Winding pushes one frame per call; unwinding pops them and combines results on the way back down.</figcaption>
+    </figure>
+    <p>The stack is also why a traceback from a deep recursion is long: each line of the traceback is one frame that
+      was still waiting when the error happened. Python collapses repeated identical lines into
+      <code>[Previous line repeated 996 more times]</code>.</p>
+    <p><strong>Remember:</strong> every active call is a frame on the stack with its own locals; memory use of a
+      recursion is proportional to its maximum depth, not the total number of calls.</p>
+  </section>
+
+  <section class="lesson-section" id="recursion-limit">
+    <h2>The recursion limit and why Python has no tail-call optimization</h2>
+    <p>Frames cost memory, and an infinite recursion would eat it all. CPython therefore caps the depth of Python
+      calls. <code>sys.getrecursionlimit()</code> reports the cap (1000 by default) and exceeding it raises
+      <code>RecursionError</code>, a subclass of <code>RuntimeError</code>.</p>
+    <div class="runnable" data-title="Hitting the limit on purpose">
+<textarea>
+import sys
+
+print("limit:", sys.getrecursionlimit())
+
+def depth_probe(n):
+    return depth_probe(n + 1)
+
+try:
+    depth_probe(0)
+except RecursionError as err:
+    print("RecursionError:", err)
+
+def count(n):
+    return 0 if n == 0 else 1 + count(n - 1)
+
+print(count(500))          # fine: 500 frames
+try:
+    print(count(50_000))   # far past the limit
+except RecursionError:
+    print("count(50_000) is too deep for the default limit")
+</textarea>
+    </div>
+    <p>You can raise the cap with <code>sys.setrecursionlimit(10_000)</code>, but treat it as a code smell. The limit
+      exists to protect the interpreter's own C stack; raise it too far and the process can crash outright instead of
+      raising a polite exception. If your recursion depth grows with the <em>size</em> of the input (a linked list of a
+      million nodes), the right fix is an iterative algorithm, which you will write later in this module.</p>
+    <h3>Tail calls</h3>
+    <p>A <strong>tail call</strong> is a call whose result is returned directly, with no work left to do afterward:
+      <code>return helper(n - 1, acc * n)</code>. Some languages (Scheme, Haskell, and many C compilers) perform
+      <strong>tail-call optimization</strong> (TCO): they reuse the current frame for the tail call, so a tail-recursive
+      loop runs in constant stack space. Python deliberately does not. Guido van Rossum's reasons are still the official
+      position:</p>
+    <ul>
+      <li>TCO deletes frames, which destroys tracebacks. Debugging a crash 5,000 calls deep with only one frame visible
+        is miserable.</li>
+      <li>Python names can be rebound at runtime, so the compiler cannot know a call is really "to itself."</li>
+      <li>Python already has a clear, idiomatic way to write loops: the loop.</li>
+    </ul>
+    <div class="runnable" data-title="Tail recursion does not save you in Python">
+<textarea>
+def fact_tail(n, acc=1):
+    if n == 0:
+        return acc
+    return fact_tail(n - 1, acc * n)   # a tail call, but Python still pushes a frame
+
+def fact_loop(n):
+    acc = 1
+    while n > 0:                       # the loop is what TCO would have produced
+        acc, n = acc * n, n - 1
+    return acc
+
+print(fact_tail(20) == fact_loop(20))
+try:
+    fact_tail(5000)
+except RecursionError:
+    print("tail recursion still overflows")
+print(fact_loop(5000).bit_length(), "bits in 5000! from the loop version")
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14 ships a new <em>tail-call interpreter</em> in some builds. Despite the
+      name, it is about how CPython's C code jumps between bytecode handlers (it makes the interpreter faster). It does
+      <strong>not</strong> eliminate tail calls in your Python code: the recursion limit and the frames are unchanged.</p></aside>
+    <p><strong>Remember:</strong> the default limit is about 1000 frames; recursion is great when depth is logarithmic
+      or bounded by the data's nesting, and the wrong tool when depth grows linearly with input size.</p>
+  </section>
+
+  <section class="lesson-section" id="recursion-trees">
+    <h2>Recursion trees: seeing the work</h2>
+    <p>When a function makes more than one recursive call, the calls form a <strong>recursion tree</strong>: each node is
+      one call, its children are the calls it makes, and leaves are base cases. The tree's <em>depth</em> is the stack
+      space you need. Its <em>number of nodes</em> (times the work per node) is the running time. Drawing the tree is the
+      single most useful habit for analyzing a recursive algorithm.</p>
+    <h3>Fibonacci: the cautionary tale</h3>
+    <p>The Fibonacci numbers are 0, 1, 1, 2, 3, 5, 8, ...: each is the sum of the two before. The definition translates
+      directly into code:</p>
+    <pre><code class="language-python">def fib(n: int) -&gt; int:
+    if n &lt; 2:
+        return n
+    return fib(n - 1) + fib(n - 2)</code></pre>
+    <p>Correct, and catastrophically slow. Open the tree below and count how many times <code>fib(2)</code> appears.
+      Every subtree is recomputed from scratch. The number of calls grows like φⁿ (φ ≈ 1.618), so
+      <code>fib(40)</code> makes over 300 million calls.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 5, "memo": false}'></div>
+    <h3>Towers of Hanoi</h3>
+    <p>Move a stack of <em>n</em> disks from peg A to peg C, one disk at a time, never putting a larger disk on a smaller
+      one. It looks impossible until you take the leap of faith: <em>assume you can move n − 1 disks</em>. Then move the
+      top n − 1 disks to B (trusting recursion), move the biggest disk to C, and move the n − 1 disks from B onto C
+      (trusting recursion again).</p>
+    <pre data-label="Pseudo-code"><code class="language-python">hanoi(n, source, target, spare):
+    if n == 0: do nothing
+    hanoi(n - 1, source, spare, target)
+    move disk n from source to target
+    hanoi(n - 1, spare, target, source)</code></pre>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "hanoi", "n": 3}'></div>
+    <div class="runnable" data-title="Hanoi in Python">
+<textarea>
+def hanoi(n, source="A", target="C", spare="B", moves=None):
+    if moves is None:
+        moves = []
+    if n > 0:
+        hanoi(n - 1, source, spare, target, moves)
+        moves.append((n, source, target))
+        hanoi(n - 1, spare, target, source, moves)
+    return moves
+
+for disk, a, b in hanoi(3):
+    print(f"move disk {disk}: {a} -> {b}")
+print("moves for 10 disks:", len(hanoi(10)))
+</textarea>
+    </div>
+    <p><strong>Correctness (induction):</strong> moving n − 1 disks never touches disk n, and disk n is the largest, so
+      it never sits on a smaller disk. <strong>Complexity:</strong> M(n) = 2M(n − 1) + 1 with M(0) = 0, which solves to
+      2ⁿ − 1 moves. The tree has 2ⁿ − 1 nodes but only depth n, so the stack use is O(n).</p>
+    <h3>Permutations and the power set</h3>
+    <p>Generating all arrangements (permutations) or all subsets (the power set) is the same pattern: make one
+      <em>choice</em>, recurse on what is left, then undo or move on. The recursion tree <em>is</em> the decision tree of
+      choices.</p>
+    <div class="two-col">
+      <div class="viz" data-viz="recursion-tree" data-config='{"fn": "permutations", "n": 3}'></div>
+      <div class="viz" data-viz="recursion-tree" data-config='{"fn": "power-set", "n": 3}'></div>
+    </div>
+    <div class="runnable" data-title="Choose, recurse, combine">
+<textarea>
+def permutations(items):
+    if len(items) <= 1:
+        return [list(items)]
+    result = []
+    for i, first in enumerate(items):
+        rest = items[:i] + items[i + 1:]
+        for perm in permutations(rest):     # leap of faith: all perms of the rest
+            result.append([first] + perm)
+    return result
+
+def power_set(items):
+    if not items:
+        return [[]]
+    without_first = power_set(items[1:])    # every subset that skips items[0]
+    with_first = [[items[0]] + s for s in without_first]
+    return without_first + with_first
+
+print(permutations([1, 2, 3]))
+print(power_set(["a", "b", "c"]))
+print(len(permutations(list(range(6)))), "== 6! =", 720)
+</textarea>
+    </div>
+    <p>Permutations of n items: n! leaves, so Θ(n · n!) time to build them. Power set: 2ⁿ subsets, Θ(n · 2ⁿ). No
+      cleverness can beat the size of the output. In real code use <code>itertools.permutations</code> and
+      <code>itertools.combinations</code>, which generate lazily in C.</p>
+    <p><strong>Remember:</strong> depth = stack space, node count × work per node = time. Branching factor b and depth d
+      give up to bᵈ nodes.</p>
+  </section>
+
+  <section class="lesson-section" id="memoization">
+    <h2>Memoization with <code>functools.cache</code></h2>
+    <p>Fibonacci's tree is huge because it contains the same subproblems over and over. <strong>Memoization</strong>
+      ("writing a memo to yourself") stores each answer the first time it is computed, keyed by the arguments, and
+      returns the stored answer on every later call. Repeated subtrees collapse into a single lookup. Compare the tree
+      below with the one you saw earlier: it is now a single spine with n + 1 distinct calls.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 6, "memo": true}'></div>
+    <div class="tabs">
+      <div class="tab" data-label="By hand"><pre><code class="language-python">def fib(n: int, memo: dict[int, int] | None = None) -&gt; int:
+    if memo is None:
+        memo = {}
+    if n &lt; 2:
+        return n
+    if n not in memo:
+        memo[n] = fib(n - 1, memo) + fib(n - 2, memo)
+    return memo[n]</code></pre></div>
+      <div class="tab" data-label="functools.cache"><pre><code class="language-python">from functools import cache
+
+@cache
+def fib(n: int) -&gt; int:
+    return n if n &lt; 2 else fib(n - 1) + fib(n - 2)</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Count the calls with and without a cache">
+<textarea>
+from functools import cache
+import time
+
+calls = 0
+def slow_fib(n):
+    global calls
+    calls += 1
+    return n if n < 2 else slow_fib(n - 1) + slow_fib(n - 2)
+
+@cache
+def fast_fib(n):
+    return n if n < 2 else fast_fib(n - 1) + fast_fib(n - 2)
+
+start = time.perf_counter()
+print(slow_fib(25), "with", calls, "calls in", round(time.perf_counter() - start, 3), "s")
+
+start = time.perf_counter()
+print(fast_fib(25), "in", round(time.perf_counter() - start, 6), "s")
+print(fast_fib.cache_info())
+print("fib(300) has", len(str(fast_fib(300))), "digits")
+</textarea>
+    </div>
+    <p><code>functools.cache</code> (Python 3.9+) is an unbounded dictionary-backed cache.
+      <code>functools.lru_cache(maxsize=128)</code> keeps only the most recently used entries, which is what you want
+      for long-running services where unbounded memory is dangerous. Both require <strong>hashable</strong> arguments
+      (no lists or dicts) and are only correct for <strong>pure</strong> functions: same inputs, same output, no side
+      effects.</p>
+    <aside class="callout warn"><p>Memoization does not raise the recursion limit. <code>fast_fib(5000)</code> on a cold
+      cache still needs 5000 nested frames. A common trick is to warm the cache bottom-up:
+      <code>for i in range(0, 5001, 500): fast_fib(i)</code>. The cleaner fix is a bottom-up loop, which is exactly what
+      <a href="m32-dynamic-programming.html">M32 Dynamic Programming</a> calls <em>tabulation</em>.</p></aside>
+    <p><strong>Remember:</strong> if a recursion tree repeats subproblems, cache them. Exponential time often becomes
+      polynomial: fib goes from Θ(φⁿ) to Θ(n).</p>
+  </section>
+
+  <section class="lesson-section" id="recursion-to-iteration">
+    <h2>Converting recursion to iteration with an explicit stack</h2>
+    <p>Recursion uses the call stack implicitly. Any recursive function can be rewritten to manage its own stack, a
+      plain Python list, which has no 1000-entry limit. The conversion is mechanical:</p>
+    <ol>
+      <li>Create a list holding the initial "call" (its arguments).</li>
+      <li>Loop while the list is non-empty: pop a work item, handle base cases, and push the smaller subproblems that the
+        recursive version would have called.</li>
+      <li>Accumulate results in a variable instead of returning them up the chain.</li>
+    </ol>
+    <div class="tabs">
+      <div class="tab" data-label="Recursive"><pre><code class="language-python">def tree_sum(node: dict | None) -&gt; int:
+    if node is None:
+        return 0
+    return node["value"] + tree_sum(node["left"]) + tree_sum(node["right"])</code></pre></div>
+      <div class="tab" data-label="Explicit stack"><pre><code class="language-python">def tree_sum(node: dict | None) -&gt; int:
+    total = 0
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        total += current["value"]
+        stack.append(current["left"])
+        stack.append(current["right"])
+    return total</code></pre></div>
+    </div>
+    <div class="runnable" data-title="A list 100,000 levels deep">
+<textarea>
+def make_deep(depth):
+    node = None
+    for i in range(depth):
+        node = {"value": i, "left": node, "right": None}
+    return node
+
+def tree_sum_recursive(node):
+    if node is None:
+        return 0
+    return node["value"] + tree_sum_recursive(node["left"]) + tree_sum_recursive(node["right"])
+
+def tree_sum_iterative(node):
+    total, stack = 0, [node]
+    while stack:
+        current = stack.pop()
+        if current is not None:
+            total += current["value"]
+            stack.extend((current["left"], current["right"]))
+    return total
+
+deep = make_deep(100_000)
+try:
+    tree_sum_recursive(deep)
+except RecursionError:
+    print("recursive version: RecursionError")
+print("iterative version:", tree_sum_iterative(deep))
+</textarea>
+    </div>
+    <p>Things get trickier when work happens <em>after</em> the recursive call returns (post-order work, like
+      <code>n * fact(n - 1)</code>). The standard technique pushes a marker meaning "come back to me later," for example
+      <code>(node, "exit")</code> after <code>(child, "enter")</code>. You saw this in depth-first traversal in
+      <a href="m26-graphs.html">M26</a>.</p>
+    <aside class="callout pro"><p>Library code that walks user-supplied data (JSON, file trees, ASTs, graphs) should
+      usually be iterative or have an explicit depth limit, because an attacker or an unlucky input can make it
+      arbitrarily deep. <code>json.loads</code> itself raises <code>RecursionError</code> on deeply nested input.</p></aside>
+    <p><strong>Remember:</strong> recursion is a stack; when depth may be large, own the stack yourself.</p>
+  </section>
+
+  <section class="lesson-section" id="divide-and-conquer">
+    <h2>Divide and conquer</h2>
+    <p><strong>Divide and conquer</strong> is recursion with a strategy: <em>divide</em> the input into smaller pieces
+      of the same kind (usually halves), <em>conquer</em> each piece recursively, and <em>combine</em> the partial
+      answers. The power comes from halving: a problem of size n is only log₂ n halvings away from size 1.</p>
+    <h3>Merge sort (a preview)</h3>
+    <p>Intuition: sorting a deck of cards with a friend. Split the deck in half, each of you sorts a half (by doing the
+      same thing recursively), then you merge two sorted piles by repeatedly taking the smaller top card. Merging two
+      sorted piles is easy and linear. You will study it fully in <a href="m29-sorting.html">M29 Sorting</a>.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "merge-sort", "n": 8}'></div>
+    <pre data-label="Pseudo-code"><code class="language-python">merge_sort(xs):
+    if len(xs) &lt;= 1: return xs
+    left  = merge_sort(first half of xs)
+    right = merge_sort(second half of xs)
+    return merge(left, right)        # walk both, always take the smaller head</code></pre>
+    <p>Each level of the tree does O(n) merging in total, and there are log₂ n levels, so the time is O(n log n).</p>
+    <h3>Fast exponentiation</h3>
+    <p>Computing xⁿ with n − 1 multiplications is slow for big n. Notice that x¹⁰⁰ = (x⁵⁰)², and x⁵⁰ = (x²⁵)², and
+      x²⁵ = x · (x¹²)². Each step halves the exponent, so only about 2 log₂ n multiplications are needed.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">power(x, n):
+    if n == 0: return 1
+    half = power(x, n // 2)
+    if n is even: return half * half
+    else:         return half * half * x</code></pre>
+    <div class="runnable" data-title="Fast power with a multiplication counter">
+<textarea>
+mults = 0
+
+def power(x, n):
+    global mults
+    if n == 0:
+        return 1
+    half = power(x, n // 2)
+    mults += 1
+    result = half * half
+    if n % 2 == 1:
+        mults += 1
+        result *= x
+    return result
+
+value = power(3, 1000)
+print("3**1000 correct:", value == 3 ** 1000)
+print("multiplications:", mults, "instead of 999")
+print("built-in modular power:", pow(3, 1000, 1_000_000_007))
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> <code>power(x, n)</code> returns xⁿ because x^(2k) = (x^k)² and x^(2k+1) = (x^k)²·x,
+      and the exponent strictly decreases to 0. <strong>Complexity:</strong> O(log n) multiplications and O(log n)
+      stack depth. Python's built-in <code>pow(x, n, m)</code> uses this idea (iteratively, over the bits of n) for
+      modular exponentiation, the workhorse of cryptography.</p>
+    <h3>Closest pair of points (overview)</h3>
+    <p>Given n points in the plane, find the two closest. Checking every pair is O(n²). Divide and conquer sorts the
+      points by x, splits them with a vertical line, solves each half recursively to get a best distance d, and then only
+      needs to check points within d of the dividing line. A geometric argument shows each such point needs comparing
+      to at most a handful of neighbors (sorted by y), so the combine step is O(n) and the whole algorithm runs in
+      O(n log n).</p>
+    <h3>Karatsuba multiplication (the idea)</h3>
+    <p>School multiplication of two n-digit numbers is O(n²). In 1960 Anatoly Karatsuba noticed that splitting each
+      number in half, x = a·10ᵐ + b and y = c·10ᵐ + d, needs only <em>three</em> half-size products, not four:
+      ac, bd, and (a + b)(c + d), because ad + bc = (a + b)(c + d) − ac − bd. Three recursive calls on half-size inputs
+      give O(n^log₂3) ≈ O(n^1.585). CPython's own big-integer multiplication switches to Karatsuba for large numbers.</p>
+    <div class="runnable" data-title="Karatsuba in a dozen lines">
+<textarea>
+def karatsuba(x, y):
+    if x < 10 or y < 10:
+        return x * y
+    m = max(len(str(x)), len(str(y))) // 2
+    a, b = divmod(x, 10 ** m)
+    c, d = divmod(y, 10 ** m)
+    ac = karatsuba(a, c)
+    bd = karatsuba(b, d)
+    middle = karatsuba(a + b, c + d) - ac - bd     # ad + bc with one multiplication
+    return ac * 10 ** (2 * m) + middle * 10 ** m + bd
+
+x, y = 31415926535897932384, 27182818284590452353
+print(karatsuba(x, y) == x * y)
+</textarea>
+    </div>
+    <p><strong>When to use divide and conquer:</strong> the problem splits into independent subproblems of the same
+      shape, and the combine step is cheaper than solving the whole thing directly. If the subproblems overlap, you want
+      memoization or dynamic programming instead.</p>
+  </section>
+
+  <section class="lesson-section" id="master-theorem">
+    <h2>The master theorem, made friendly</h2>
+    <p>Divide-and-conquer running times satisfy a <strong>recurrence</strong>:</p>
+    <p style="text-align:center"><strong>T(n) = a · T(n / b) + f(n)</strong></p>
+    <ul>
+      <li><strong>a</strong>: how many recursive calls each call makes (the branching factor).</li>
+      <li><strong>b</strong>: how much smaller each subproblem is (b = 2 for halving).</li>
+      <li><strong>f(n)</strong>: the work done outside the recursive calls (dividing and combining).</li>
+    </ul>
+    <p>Picture the recursion tree. Level k has aᵏ nodes, each working on a problem of size n/bᵏ. The leaves sit at depth
+      log_b n, and there are a^(log_b n) = n^(log_b a) of them. The critical exponent is
+      <strong>c* = log_b a</strong>. Compare f(n) with n^c*, and whichever is bigger wins:</p>
+    <table>
+      <thead><tr><th>Case</th><th>Condition</th><th>Intuition</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>1. Leaves dominate</td><td>f(n) = O(n^(c*−ε))</td><td>Work grows down the tree; the bottom level is the most expensive.</td><td>T(n) = Θ(n^c*)</td></tr>
+        <tr><td>2. Balanced</td><td>f(n) = Θ(n^c*)</td><td>Every level costs the same; multiply by the number of levels.</td><td>T(n) = Θ(n^c* log n)</td></tr>
+        <tr><td>3. Root dominates</td><td>f(n) = Ω(n^(c*+ε)) (plus a regularity condition)</td><td>Work shrinks down the tree; the top call is the expensive one.</td><td>T(n) = Θ(f(n))</td></tr>
+      </tbody>
+    </table>
+    <h3>Worked examples</h3>
+    <table>
+      <thead><tr><th>Algorithm</th><th>Recurrence</th><th>c* = log_b a</th><th>Case</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>Binary search</td><td>T(n) = T(n/2) + O(1)</td><td>log₂1 = 0</td><td>2 (f = n⁰)</td><td>Θ(log n)</td></tr>
+        <tr><td>Merge sort</td><td>T(n) = 2T(n/2) + O(n)</td><td>log₂2 = 1</td><td>2 (f = n¹)</td><td>Θ(n log n)</td></tr>
+        <tr><td>Karatsuba</td><td>T(n) = 3T(n/2) + O(n)</td><td>log₂3 ≈ 1.585</td><td>1</td><td>Θ(n^1.585)</td></tr>
+        <tr><td>Naive split multiply</td><td>T(n) = 4T(n/2) + O(n)</td><td>log₂4 = 2</td><td>1</td><td>Θ(n²), no gain</td></tr>
+        <tr><td>Tree sum (balanced)</td><td>T(n) = 2T(n/2) + O(1)</td><td>1</td><td>1</td><td>Θ(n)</td></tr>
+        <tr><td>Strange combine</td><td>T(n) = 2T(n/2) + O(n²)</td><td>1</td><td>3</td><td>Θ(n²)</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout warn"><p>The master theorem only covers subproblems of equal size n/b. Hanoi's
+      T(n) = 2T(n − 1) + 1 shrinks by <em>subtraction</em>, not division, so it does not apply; draw the tree instead
+      (2ⁿ − 1 nodes). Quicksort's uneven splits also need a different argument.</p></aside>
+    <p>See how the cases feel by comparing the growth curves:</p>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["log n", "n", "n log n", "n^2", "2^n"], "maxN": 32}'></div>
+    <div class="runnable" data-title="Check a recurrence numerically">
+<textarea>
+from functools import cache
+import math
+
+@cache
+def T(n, a, b, f_exp):
+    if n <= 1:
+        return 1
+    return a * T(n // b, a, b, f_exp) + n ** f_exp
+
+for label, a, b, k in [("merge sort", 2, 2, 1), ("karatsuba", 3, 2, 1), ("binary search", 1, 2, 0)]:
+    n = 2 ** 16
+    ratio_nlogn = T(n, a, b, k) / (n * math.log2(n))
+    ratio_power = T(n, a, b, k) / n ** math.log(a, b) if a > 1 else T(n, a, b, k) / math.log2(n)
+    print(f"{label:14} T/n·log n = {ratio_nlogn:8.3f}   T/n^c* (or /log n) = {ratio_power:6.3f}")
+</textarea>
+    </div>
+    <p>A ratio that settles to a constant tells you the growth rate is right. For merge sort, T / (n log n) is about
+      constant; for Karatsuba, T / n^1.585 is.</p>
+    <p><strong>Remember:</strong> compute c* = log_b a, compare it with the exponent of f(n), and the bigger one wins;
+      a tie adds a log factor.</p>
+  </section>
+
+  <section class="lesson-section" id="nested-data">
+    <h2>Recursion over nested data</h2>
+    <p>Recursion shines brightest when the <em>data</em> is recursive. A JSON value is either a scalar (string, number,
+      boolean, null) or a container (list or object) of JSON values. The definition refers to itself, so the natural
+      function does too: one branch per kind of value.</p>
+    <pre><code class="language-python">type JSON = dict[str, JSON] | list[JSON] | str | int | float | bool | None
+
+def count_leaves(value: JSON) -&gt; int:
+    if isinstance(value, dict):
+        return sum(count_leaves(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(count_leaves(v) for v in value)
+    return 1                      # a scalar is one leaf</code></pre>
+    <p>The same shape walks directory trees (a directory contains files and directories), HTML documents, abstract
+      syntax trees, organization charts, and comment threads. <code>match</code> statements make the branches
+      especially readable:</p>
+    <div class="runnable" data-title="Searching and transforming JSON">
+<textarea>
+import json
+
+doc = json.loads("""
+{"name": "shop", "owner": {"name": "Ada", "email": "ada@example.com"},
+ "items": [{"name": "pen", "price": 2.5, "tags": ["office"]},
+           {"name": "lamp", "price": 30, "supplier": {"email": "lamps@example.com"}}]}
+""")
+
+def find_key(value, key):
+    """Yield every value stored under `key`, at any depth."""
+    match value:
+        case dict():
+            for k, v in value.items():
+                if k == key:
+                    yield v
+                yield from find_key(v, key)
+        case list():
+            for item in value:
+                yield from find_key(item, key)
+        case _:
+            return
+
+def redact(value, secret_keys):
+    """Return a copy with secret fields replaced."""
+    match value:
+        case dict():
+            return {k: "***" if k in secret_keys else redact(v, secret_keys) for k, v in value.items()}
+        case list():
+            return [redact(v, secret_keys) for v in value]
+        case _:
+            return value
+
+print(list(find_key(doc, "email")))
+print(json.dumps(redact(doc, {"email"}), indent=1)[:200])
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>yield from</code> turns a recursive search into a lazy generator: the caller can
+      stop after the first match without the function exploring the rest of the document.</p></aside>
+    <p><strong>Remember:</strong> when the data's definition mentions itself, write one branch per kind of value and let
+      the recursion mirror the shape of the data.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise is graded in your browser. Start each with the base case.</p>
+
+    <div class="exercise" data-id="m28-e1" data-title="Sum the digits recursively">
+      <div class="exercise-prompt">
+        <p>Write <code>digit_sum(n)</code> that returns the sum of the decimal digits of a non-negative integer
+          <code>n</code>, using recursion and no strings. <code>digit_sum(9045)</code> is 18 and
+          <code>digit_sum(0)</code> is 0.</p>
+      </div>
+<textarea class="starter">
+def digit_sum(n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert digit_sum(9045) == 18, "digit_sum(9045) should be 18"
+    assert digit_sum(0) == 0, "digit_sum(0) should be 0"
+    assert digit_sum(7) == 7, "a single digit is its own sum"
+
+def test_large():
+    n = 123456789 * 10 ** 20
+    assert digit_sum(n) == 45, "trailing zeros add nothing"
+
+def test_no_strings():
+    assert "str" not in digit_sum.__code__.co_names, "solve it with // and % instead of str()"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The last digit is <code>n % 10</code>, and the rest of the number
+        is <code>n // 10</code>. The base case is a single digit (<code>n &lt; 10</code>).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def digit_sum(n):
+    if n &lt; 10:
+        return n
+    return n % 10 + digit_sum(n // 10)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m28-e2" data-title="Fast exponentiation">
+      <div class="exercise-prompt">
+        <p>Write <code>fast_pow(x, n)</code> returning <code>x ** n</code> for an integer <code>n &gt;= 0</code> without
+          using <code>**</code> or <code>pow</code>. It must use O(log n) recursion depth: the tests call it with
+          <code>n = 100_000</code>, which would overflow the recursion limit if you recursed on <code>n - 1</code>.</p>
+      </div>
+<textarea class="starter">
+def fast_pow(x, n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_small():
+    assert fast_pow(2, 10) == 1024, "2**10 is 1024"
+    assert fast_pow(5, 0) == 1, "anything to the 0 is 1"
+    assert fast_pow(7, 1) == 7, "x**1 is x"
+    assert fast_pow(3, 13) == 1594323, "3**13 is 1594323"
+
+def test_huge_exponent():
+    assert fast_pow(1, 100_000) == 1, "should handle n=100_000 without RecursionError"
+    assert fast_pow(2, 100_000) == 2 ** 100_000, "2**100000 should be exact"
+
+def test_floats():
+    assert abs(fast_pow(1.5, 4) - 5.0625) < 1e-12, "works for floats too"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute <code>half = fast_pow(x, n // 2)</code> once, square it,
+        and multiply by one extra <code>x</code> when <code>n</code> is odd.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def fast_pow(x, n):
+    if n == 0:
+        return 1
+    half = fast_pow(x, n // 2)
+    result = half * half
+    if n % 2:
+        result *= x
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m28-e3" data-title="Count grid paths with memoization">
+      <div class="exercise-prompt">
+        <p>A robot starts at the top-left of a grid with <code>rows</code> rows and <code>cols</code> columns and may only
+          move right or down. Write <code>grid_paths(rows, cols)</code> returning the number of distinct paths to the
+          bottom-right corner. A 1 × n or n × 1 grid has exactly one path. The tests call
+          <code>grid_paths(18, 18)</code>, so plain tree recursion is too slow: use <code>functools.cache</code>.</p>
+      </div>
+<textarea class="starter">
+from functools import cache
+
+def grid_paths(rows, cols):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_small_grids():
+    assert grid_paths(1, 1) == 1, "a single cell has one (empty) path"
+    assert grid_paths(2, 2) == 2, "2x2 has two paths"
+    assert grid_paths(3, 3) == 6, "3x3 has six paths"
+    assert grid_paths(1, 7) == 1, "a single row has one path"
+
+def test_large_grid_fast():
+    import time
+    start = time.perf_counter()
+    value = grid_paths(18, 18)
+    assert value == math.comb(34, 17), f"18x18 should be C(34, 17), got {value}"
+    assert time.perf_counter() - start < 2, "too slow: memoize the subproblems"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The last move into the corner came from above or from the left, so
+        <code>paths(r, c) = paths(r - 1, c) + paths(r, c - 1)</code>. Decorate the function with
+        <code>@cache</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import cache
+
+@cache
+def grid_paths(rows, cols):
+    if rows == 1 or cols == 1:
+        return 1
+    return grid_paths(rows - 1, cols) + grid_paths(rows, cols - 1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m28-e4" data-title="Flatten nested JSON keys">
+      <div class="exercise-prompt">
+        <p>Write <code>flatten(value)</code> that turns nested dicts and lists into a flat dict whose keys are dotted
+          paths. List items use their index. Scalars at the top level map from the empty string <code>""</code>.</p>
+        <pre><code class="language-python">flatten({"a": {"b": 1}, "c": [10, {"d": 2}]})
+# {"a.b": 1, "c.0": 10, "c.1.d": 2}</code></pre>
+        <p>Empty dicts and lists contribute no keys.</p>
+      </div>
+<textarea class="starter">
+def flatten(value, prefix=""):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_example():
+    got = flatten({"a": {"b": 1}, "c": [10, {"d": 2}]})
+    assert got == {"a.b": 1, "c.0": 10, "c.1.d": 2}, f"got {got}"
+
+def test_flat_dict():
+    assert flatten({"x": 1, "y": None}) == {"x": 1, "y": None}, "flat dicts stay the same"
+
+def test_scalar():
+    assert flatten(42) == {"": 42}, "a scalar maps from the empty key"
+
+def test_empty_containers():
+    assert flatten({"a": {}, "b": [], "c": 3}) == {"c": 3}, "empty containers add nothing"
+
+def test_deep():
+    assert flatten({"a": [[{"b": [True]}]]}) == {"a.0.0.b.0": True}, "lists inside lists"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build the child prefix as <code>f"{prefix}.{key}"</code>, or just
+        <code>str(key)</code> when <code>prefix</code> is empty. Merge the dicts returned by recursive calls with
+        <code>update</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def flatten(value, prefix=""):
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list):
+        items = enumerate(value)
+    else:
+        return {prefix: value}
+    result = {}
+    for key, child in items:
+        child_prefix = f"{prefix}.{key}" if prefix else str(key)
+        result.update(flatten(child, child_prefix))
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m28-e5" data-title="Deep nesting with an explicit stack">
+      <div class="exercise-prompt">
+        <p>Write <code>max_depth(value)</code> returning the nesting depth of a structure of lists: a non-list has depth
+          0, an empty list has depth 1, and a list has depth 1 + the deepest of its items. It must work for lists nested
+          <strong>50,000</strong> levels deep, so do not use recursion: use an explicit stack of
+          <code>(item, depth)</code> pairs.</p>
+      </div>
+<textarea class="starter">
+def max_depth(value):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basics():
+    assert max_depth(5) == 0, "a scalar has depth 0"
+    assert max_depth([]) == 1, "an empty list has depth 1"
+    assert max_depth([1, 2]) == 1, "a flat list has depth 1"
+    assert max_depth([1, [2, [3]], []]) == 3, "[1, [2, [3]], []] has depth 3"
+
+def test_very_deep():
+    deep = []
+    for _ in range(50_000):
+        deep = [deep]
+    assert max_depth(deep) == 50_001, "should handle 50,000 levels without RecursionError"
+
+def test_wide():
+    assert max_depth([[1]] * 10_000) == 2, "many shallow lists"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>stack = [(value, 0)]</code>. When you pop a list
+        at depth <code>d</code>, record <code>d + 1</code> as a candidate and push each item at depth
+        <code>d + 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def max_depth(value):
+    best = 0
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, list):
+            best = max(best, depth + 1)
+            for child in item:
+                stack.append((child, depth + 1))
+    return best</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m28-e6" data-title="Generate all subsets (power set)">
+      <div class="exercise-prompt">
+        <p>Write a recursive <em>generator</em> <code>subsets(items)</code> that yields every subset of the list
+          <code>items</code> as a list, preserving the original order within each subset. Do not use
+          <code>itertools</code>. The order in which subsets are yielded does not matter.</p>
+      </div>
+<textarea class="starter">
+def subsets(items):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import inspect
+
+def test_is_generator():
+    assert inspect.isgeneratorfunction(subsets), "use yield to make subsets a generator"
+
+def test_three():
+    got = sorted(subsets([1, 2, 3]))
+    want = sorted([[], [1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]])
+    assert got == want, f"got {got}"
+
+def test_empty():
+    assert list(subsets([])) == [[]], "the empty list has exactly one subset: []"
+
+def test_count_and_order():
+    got = list(subsets(list("abcdefgh")))
+    assert len(got) == 256, "8 items have 2**8 subsets"
+    assert all(s == sorted(s) for s in got), "keep items in their original order"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For each subset of <code>items[1:]</code>, yield it once without
+        <code>items[0]</code> and once with <code>items[0]</code> in front.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def subsets(items):
+    if not items:
+        yield []
+        return
+    first, rest = items[0], items[1:]
+    for subset in subsets(rest):
+        yield subset
+        yield [first] + subset</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: recursive file-tree size analyzer</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">treesize: where did my disk go?</span></div>
+      <div class="widget-body">
+        <p>Build a command-line tool that walks a directory tree recursively and reports the total size of each
+          directory, like a tiny <code>du</code>. A directory's size is the sum of its files plus the sizes of its
+          subdirectories: a recursive definition, so a recursive function is the natural first version.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init treesize &amp;&amp; cd treesize
+pixi run python treesize.py ~/Downloads --top 5</code></pre>
+        <pre data-label="Starting point (treesize.py)"><code class="language-python">from dataclasses import dataclass, field
+from pathlib import Path
+
+@dataclass
+class Node:
+    path: Path
+    size: int = 0
+    children: list["Node"] = field(default_factory=list)
+
+def scan(path: Path) -&gt; Node:
+    """Return a Node whose size includes everything beneath path."""
+    node = Node(path)
+    for entry in path.iterdir():
+        if entry.is_symlink():
+            continue
+        if entry.is_dir():
+            child = scan(entry)          # leap of faith
+            node.children.append(child)
+            node.size += child.size
+        else:
+            node.size += entry.stat().st_size
+    return node</code></pre>
+        <p>Steps:</p>
+        <ol>
+          <li>Finish <code>scan</code> and a recursive <code>render(node, depth, max_depth)</code> that prints an indented
+            tree with human-readable sizes (<code>1.2 MiB</code>), children sorted largest first.</li>
+          <li>Add <code>argparse</code> options: the root path, <code>--depth</code> to limit printed levels, and
+            <code>--top N</code> to list the N largest directories anywhere (use <code>heapq.nlargest</code>).</li>
+          <li>Handle <code>PermissionError</code> by recording the directory as unreadable rather than crashing.</li>
+          <li>Write <code>scan_iterative</code> using an explicit stack and a post-order pass so sizes still roll up, and
+            show it handles a generated tree 5,000 directories deep (create it under a pytest <code>tmp_path</code>).</li>
+          <li>Write pytest tests with <code>tmp_path</code> that build a small known tree and assert exact totals for both
+            versions. Run them with <code>pixi run pytest</code> after <code>pixi add pytest</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m28-mini">
+          <li>The recursive <code>scan</code> returns correct totals for a known test tree</li>
+          <li>The rendered tree is indented, sorted by size, and respects <code>--depth</code></li>
+          <li><code>--top N</code> lists the N largest directories with their sizes</li>
+          <li>Symlinks are skipped and unreadable directories are reported, not fatal</li>
+          <li><code>scan_iterative</code> matches <code>scan</code> and survives 5,000 levels of nesting</li>
+          <li>Tests pass under <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> group sizes by file extension recursively; output JSON (a recursive
+          <code>to_dict</code>); cache results keyed by directory modification time; compare speed with
+          <code>os.scandir</code>, which avoids an extra <code>stat</code> call per entry.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m28-quiz">
+<script type="application/json">
+{"title": "Recursion and divide and conquer", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What are the two essential parts of every recursive function?", "options": ["A loop and a counter", "A base case and a recursive case that moves toward it", "A global variable and a return statement", "A decorator and a cache"], "answer": 1, "explanation": "<p>The base case answers the smallest inputs directly; the recursive case reduces the problem so that it eventually reaches a base case.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def f(n):\n    if n <= 0:\n        return 0\n    return n + f(n - 2)\n\nprint(f(7))", "answer": "16", "explanation": "<p>7 + 5 + 3 + 1 + f(-1) = 16 + 0. Using <code>n &lt;= 0</code> instead of <code>n == 0</code> is what stops the odd sequence.</p>"},
+  {"type": "single", "prompt": "What does this function return for <code>g(3)</code>?", "code": "def g(n):\n    if n == 0:\n        return 1\n    g(n - 1) * n", "options": ["6", "0", "None", "It raises RecursionError"], "answer": 2, "explanation": "<p>The recursive case computes a value but never returns it, so <code>g(3)</code> falls off the end and returns <code>None</code>. Always <code>return</code> the recursive result.</p>"},
+  {"type": "text", "prompt": "Which exception does CPython raise when the maximum recursion depth is exceeded?", "answer": ["RecursionError"], "explanation": "<p><code>RecursionError</code>, a subclass of <code>RuntimeError</code>, raised when the depth passes <code>sys.getrecursionlimit()</code>.</p>"},
+  {"type": "single", "prompt": "Why does Python not perform tail-call optimization?", "options": ["Python is interpreted, so it is impossible", "It would destroy traceback information and Python prefers explicit loops", "Python 3.14 added it, so the question is outdated", "Tail calls are a syntax error in Python"], "answer": 1, "explanation": "<p>Eliminating frames loses debugging information, and Python's dynamic name binding makes it unreliable. The 3.14 tail-call <em>interpreter</em> is an internal C-level change and does not eliminate Python tail calls.</p>"},
+  {"type": "single", "prompt": "Naive recursive <code>fib(n)</code> takes exponential time. Why?", "options": ["Addition of big integers is slow", "The recursion tree recomputes the same subproblems many times", "The recursion depth is exponential", "Python function calls are exponential"], "answer": 1, "explanation": "<p>The depth is only n, but the tree has roughly φⁿ nodes because <code>fib(n-2)</code>, <code>fib(n-3)</code>, ... are recomputed over and over. Memoization removes the repeats.</p>"},
+  {"type": "multi", "prompt": "Which functions can safely be decorated with <code>functools.cache</code>?", "options": ["A pure function of two ints", "A function taking a list argument", "A function that returns the current time", "A pure function of a string and a tuple of ints"], "answer": [0, 3], "explanation": "<p>Cached arguments must be hashable (lists are not), and the function must be pure: a function that depends on the clock would return stale answers.</p>"},
+  {"type": "single", "prompt": "Towers of Hanoi with n disks needs how many moves?", "options": ["n²", "2n − 1", "2ⁿ − 1", "n!"], "answer": 2, "explanation": "<p>M(n) = 2M(n − 1) + 1 with M(0) = 0 gives 1, 3, 7, 15, ... = 2ⁿ − 1.</p>"},
+  {"type": "single", "prompt": "Using the master theorem, what is T(n) = 2T(n/2) + O(n)?", "options": ["Θ(n)", "Θ(n log n)", "Θ(n²)", "Θ(log n)"], "answer": 1, "explanation": "<p>c* = log₂2 = 1 and f(n) = n¹: the balanced case, so every level costs n and there are log n levels. This is merge sort.</p>"},
+  {"type": "single", "prompt": "Karatsuba replaces four half-size multiplications with three. What is its running time?", "options": ["Θ(n²)", "Θ(n^log₂3) ≈ Θ(n^1.585)", "Θ(n log n)", "Θ(3n)"], "answer": 1, "explanation": "<p>T(n) = 3T(n/2) + O(n) has c* = log₂3 ≈ 1.585 &gt; 1, so the leaves dominate: Θ(n^1.585).</p>"},
+  {"type": "single", "prompt": "How many multiplications does fast exponentiation use to compute xⁿ?", "options": ["O(n)", "O(log n)", "O(√n)", "O(1)"], "answer": 1, "explanation": "<p>Each call halves the exponent and does one or two multiplications, so about 2 log₂ n in total.</p>"},
+  {"type": "multi", "prompt": "Which statements about converting recursion to iteration are true?", "options": ["Any recursive function can be rewritten with an explicit stack", "An explicit Python list stack is not limited by sys.getrecursionlimit()", "The iterative version is always shorter", "Post-order work needs extra bookkeeping such as an 'exit' marker"], "answer": [0, 1, 3], "explanation": "<p>The call stack is just a stack, so you can manage one yourself; it is limited only by memory. The result is often longer, especially when work happens after child calls return.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def count(value):\n    if isinstance(value, list):\n        return sum(count(v) for v in value)\n    return 1\n\nprint(count([1, [2, 3], [[4]], []]))", "answer": "4", "explanation": "<p>Only non-list values count as 1; the empty list sums to 0. Leaves are 1, 2, 3, 4.</p>"},
+  {"type": "single", "prompt": "The memory used by a recursive computation is proportional to:", "options": ["The total number of calls", "The maximum depth of the recursion tree", "The number of base cases", "The branching factor"], "answer": 1, "explanation": "<p>Only the frames on the current path from the root are alive at once, so stack memory is O(depth), even when the tree has exponentially many nodes.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A recursive function has a base case and a recursive case on a strictly smaller input; correctness is
+        induction, and the leap of faith is trusting the smaller call.</li>
+      <li>Each call is a frame on the call stack. Stack space is O(depth); the default limit is about 1000 frames and
+        Python never eliminates tail calls.</li>
+      <li>Recursion trees show the work: depth is space, nodes × work per node is time.</li>
+      <li><code>functools.cache</code> turns repeated subproblems into lookups, often turning exponential into
+        polynomial time.</li>
+      <li>Any recursion can be rewritten with an explicit stack, which is the right choice when depth grows with input
+        size.</li>
+      <li>Divide and conquer splits, recurses, and combines; the master theorem compares f(n) with n^(log_b a).</li>
+      <li>Recursive data (JSON, file trees, ASTs) is best processed by functions with one branch per kind of value.</li>
+    </ul>
+    <div class="flashcards" data-title="Recursion essentials">
+<script type="application/json">
+[{"front": "Base case", "back": "An input small enough to answer directly, without another recursive call."},
+ {"front": "Recursive leap of faith", "back": "Assume the recursive call is correct for the smaller input and focus only on combining its result."},
+ {"front": "Default recursion limit", "back": "sys.getrecursionlimit() returns 1000 by default; exceeding it raises RecursionError."},
+ {"front": "Tail call", "back": "A call whose result is returned immediately. Python does not optimize tail calls."},
+ {"front": "Stack space of a recursion", "back": "O(maximum depth), not O(number of calls)."},
+ {"front": "functools.cache", "back": "Unbounded memoization decorator for pure functions with hashable arguments (3.9+)."},
+ {"front": "Hanoi move count", "back": "2ⁿ − 1, from M(n) = 2M(n − 1) + 1."},
+ {"front": "Master theorem critical exponent", "back": "c* = log_b a. Compare f(n) with n^c*: bigger wins; a tie adds log n."},
+ {"front": "Fast exponentiation", "back": "x^(2k) = (x^k)², x^(2k+1) = (x^k)²·x; O(log n) multiplications."},
+ {"front": "Karatsuba trick", "back": "ad + bc = (a + b)(c + d) − ac − bd: three half-size products, Θ(n^1.585)."},
+ {"front": "Recursion to iteration", "back": "Replace the call stack with a list: push subproblems, pop and process in a loop."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/sys.html#sys.setrecursionlimit">sys.setrecursionlimit</a> and
+        <a href="https://docs.python.org/3/library/functools.html#functools.cache">functools.cache</a> in the Python docs</li>
+      <li><a href="https://docs.python.org/3/library/itertools.html#itertools.permutations">itertools.permutations, combinations, and product</a></li>
+      <li>Guido van Rossum, <a href="https://neopythonic.blogspot.com/2009/04/tail-recursion-elimination.html">"Tail Recursion Elimination"</a> (2009)</li>
+      <li>Next: <a href="m29-sorting.html">M29 Sorting</a> puts merge sort and quicksort under the microscope.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

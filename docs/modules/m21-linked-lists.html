@@ -1,0 +1,1396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M21 · Linked Lists · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m21">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 21</p>
+    <h1>Linked Lists</h1>
+    <p class="lede">An array keeps items side by side. A linked list lets them live anywhere, each one holding a pointer to
+      the next. That one change makes inserting and deleting at a known position O(1), costs you fast indexing, and
+      gives you the pointer-manipulation skills behind half of all interview questions.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m20-arrays.html">M20</a>,
+      <a href="m10-classes.html">M10</a>, <a href="m11-data-model.html">M11</a></span></div>
+    <ul class="objectives">
+      <li>Draw and explain nodes, pointers, head, and tail, and trace pointer updates step by step</li>
+      <li>Implement a singly linked list with push-front, append with a tail pointer, find, delete, and in-place reverse</li>
+      <li>Implement a doubly linked list with sentinel nodes, and explain why sentinels remove edge cases</li>
+      <li>Make a container Pythonic with <code>__iter__</code>, <code>__len__</code>, <code>__repr__</code>, and save memory with <code>__slots__</code></li>
+      <li>Solve the classic problems: middle node, cycle detection (Floyd), merging sorted lists, removing the nth from the end</li>
+      <li>Compare arrays and linked lists, including cache locality, and know where linked lists are used in practice</li>
+    </ul>
+  </header>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="motivation">
+    <h2>The problem: inserting at the front</h2>
+    <p>A music player keeps a queue of upcoming songs. Users constantly add songs to the <em>front</em> ("play next"),
+      remove songs from the middle, and reorder. With a Python list, every front insert shifts every other song one slot
+      right: O(n). For a queue of 100,000 songs that is noticeable; for a server handling thousands of queues, it is a
+      problem.</p>
+    <p>A <strong>linked list</strong> avoids shifting entirely. Items are not stored next to each other; instead each item
+      sits in its own small object, a <strong>node</strong>, which records where the next node is. Inserting at the front
+      means creating a node and updating one pointer, regardless of how long the list is.</p>
+    <div class="runnable" data-title="Front inserts: list vs a tiny linked list">
+<textarea>
+import time
+
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+for n in [20_000, 40_000, 80_000]:
+    t0 = time.perf_counter()
+    arr = []
+    for i in range(n):
+        arr.insert(0, i)          # shifts everything: O(n) each
+    t1 = time.perf_counter()
+    head = None
+    for i in range(n):
+        head = Node(i, head)      # one new node, one pointer: O(1) each
+    t2 = time.perf_counter()
+    print(f"n={n:6}: list.insert(0) {t1 - t0:.3f}s   linked push_front {t2 - t1:.3f}s")
+</textarea>
+    </div>
+    <p>The list column roughly quadruples per doubling (O(n²) total); the linked column roughly doubles (O(n) total). The
+      rest of this module is about how to get that benefit safely, and what it costs.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="nodes">
+    <h2>Nodes and pointers</h2>
+    <p>A <strong>node</strong> holds two things: a <strong>value</strong> and a <strong>reference</strong> (pointer) to the
+      next node. The last node's <code>next</code> is <code>None</code>, marking the end. The list itself only needs to
+      remember the first node, the <strong>head</strong>; it often also remembers the last node, the <strong>tail</strong>,
+      to make appending fast.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 150" role="img" aria-label="Three nodes linked by next pointers, with head and tail references">
+        <g font-size="13" text-anchor="middle">
+          <g fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)" stroke-width="1.5">
+            <rect x="60" y="50" width="70" height="40"/><rect x="130" y="50" width="40" height="40"/>
+            <rect x="240" y="50" width="70" height="40"/><rect x="310" y="50" width="40" height="40"/>
+            <rect x="420" y="50" width="70" height="40"/><rect x="490" y="50" width="40" height="40"/>
+          </g>
+          <g fill="var(--fg)"><text x="95" y="75">"A"</text><text x="275" y="75">"B"</text><text x="455" y="75">"C"</text></g>
+          <g fill="var(--fg-muted)" font-size="11"><text x="95" y="105">value</text><text x="150" y="105">next</text>
+            <text x="510" y="75">None</text></g>
+          <g stroke="var(--fg)" stroke-width="1.5" fill="none">
+            <line x1="150" y1="70" x2="236" y2="70"/><polyline points="228,65 236,70 228,75"/>
+            <line x1="330" y1="70" x2="416" y2="70"/><polyline points="408,65 416,70 408,75"/>
+          </g>
+          <text x="95" y="25" fill="var(--viz-2)">head</text>
+          <line x1="95" y1="30" x2="95" y2="48" stroke="var(--viz-2)" stroke-width="1.5"/>
+          <text x="455" y="25" fill="var(--viz-3)">tail</text>
+          <line x1="455" y1="30" x2="455" y2="48" stroke="var(--viz-3)" stroke-width="1.5"/>
+          <text x="290" y="140" fill="var(--fg-muted)" font-size="12">nodes can live anywhere in memory; only the pointers order them</text>
+        </g>
+      </svg>
+      <figcaption>A singly linked list A → B → C. Each box pair is one node object.</figcaption>
+    </figure>
+    <pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")      # explained later: saves memory per node
+
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+c = Node("C")
+b = Node("B", c)
+a = Node("A", b)       # a is the head: A -&gt; B -&gt; C -&gt; None</code></pre>
+    <p>In Python, a "pointer" is simply a reference: <code>a.next</code> is a name bound to the <code>b</code> object, just
+      like any variable (<a href="m06-collections.html">M06</a>). Following a pointer means reading an attribute. Changing a
+      pointer means assigning one.</p>
+    <div class="tracer" data-title="Walk the list (watch cur follow the pointers)">
+<textarea>
+class Node:
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+head = Node("A", Node("B", Node("C")))
+cur = head
+seen = []
+while cur is not None:
+    seen.append(cur.value)
+    cur = cur.next
+</textarea>
+    </div>
+    <p>That loop, <code>cur = head; while cur: ...; cur = cur.next</code>, is the heartbeat of every linked-list algorithm.
+      Notice what you cannot do: jump to item 2 directly. There is no address formula, so reaching index <em>i</em> costs
+      <em>i</em> steps.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> a node is a value plus a <code>next</code> reference. The list
+      keeps the head (and usually the tail). Traversal is <code>cur = cur.next</code> until <code>None</code>.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="singly">
+    <h2>Singly linked list operations</h2>
+    <p>Each operation below is a short sequence of pointer changes. The order of those changes matters: update a pointer too
+      early and you lose the rest of the list. Use the visualizer to watch each one, then read the code.</p>
+    <div class="viz" data-viz="linked-list" data-config='{"values": [3, 8, 1, 6]}'></div>
+
+    <h3>Push front: O(1)</h3>
+    <pre><code class="language-python">def push_front(self, value):
+    self.head = Node(value, self.head)   # new node points at the old head
+    if self.tail is None:                # list was empty: new node is also the tail
+        self.tail = self.head
+    self.size += 1</code></pre>
+
+    <h3>Append with a tail pointer: O(1)</h3>
+    <p>Without a tail pointer, appending means walking to the end: O(n). Keeping a <code>tail</code> reference makes it O(1),
+      at the cost of keeping it correct in every other operation.</p>
+    <pre><code class="language-python">def append(self, value):
+    node = Node(value)
+    if self.tail is None:        # empty list
+        self.head = self.tail = node
+    else:
+        self.tail.next = node    # old last node points to the new one
+        self.tail = node
+    self.size += 1</code></pre>
+
+    <h3>Find: O(n)</h3>
+    <pre><code class="language-python">def find(self, value):
+    cur = self.head
+    while cur is not None:
+        if cur.value == value:
+            return cur
+        cur = cur.next
+    return None</code></pre>
+
+    <h3>Delete by value: O(n) to find, O(1) to unlink</h3>
+    <p>To remove a node from a singly linked list you must change the <em>previous</em> node's <code>next</code>, so you walk
+      with two pointers: <code>prev</code> and <code>cur</code>. Then handle the edge cases: deleting the head, and deleting
+      the tail.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 120" role="img" aria-label="Deleting B: A's next is redirected to C">
+        <g font-size="13" text-anchor="middle">
+          <g fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)">
+            <rect x="40" y="40" width="80" height="36" rx="4"/><rect x="420" y="40" width="80" height="36" rx="4"/>
+          </g>
+          <rect x="230" y="40" width="80" height="36" rx="4" fill="var(--viz-4)" fill-opacity="0.12" stroke="var(--viz-4)" stroke-dasharray="4 3"/>
+          <g fill="var(--fg)"><text x="80" y="63">A (prev)</text><text x="270" y="63">B (cur)</text><text x="460" y="63">C</text></g>
+          <g stroke="var(--fg-muted)" stroke-width="1.2" stroke-dasharray="4 3" fill="none">
+            <line x1="120" y1="58" x2="228" y2="58"/><line x1="310" y1="58" x2="418" y2="58"/>
+          </g>
+          <path d="M80,40 C140,0 400,0 460,38" fill="none" stroke="var(--viz-2)" stroke-width="2"/>
+          <polyline points="452,34 460,38 456,30" fill="none" stroke="var(--viz-2)" stroke-width="2"/>
+          <text x="270" y="105" fill="var(--viz-2)">prev.next = cur.next</text>
+        </g>
+      </svg>
+      <figcaption>Unlinking is one assignment once you are standing on the previous node.</figcaption>
+    </figure>
+    <pre><code class="language-python">def remove(self, value):
+    prev, cur = None, self.head
+    while cur is not None and cur.value != value:
+        prev, cur = cur, cur.next
+    if cur is None:
+        raise ValueError(f"{value!r} not in list")
+    if prev is None:              # removing the head
+        self.head = cur.next
+    else:
+        prev.next = cur.next
+    if cur is self.tail:          # removing the tail
+        self.tail = prev
+    self.size -= 1</code></pre>
+
+    <h3>Reverse in place: O(n) time, O(1) space</h3>
+    <p>Reversal is the most important pointer exercise there is. Walk the list once, turning each <code>next</code> pointer
+      around. You need three references: <code>prev</code> (the already-reversed part), <code>cur</code> (the node being
+      flipped), and <code>nxt</code> (saved so you don't lose the rest).</p>
+    <pre><code class="language-python">def reverse(head):
+    prev = None
+    cur = head
+    while cur is not None:
+        nxt = cur.next      # 1. save the rest
+        cur.next = prev     # 2. flip this pointer
+        prev = cur          # 3. advance prev
+        cur = nxt           # 4. advance cur
+    return prev             # prev is the new head</code></pre>
+    <div class="tracer" data-title="Trace the reversal pointer by pointer">
+<textarea>
+class Node:
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+head = Node(1, Node(2, Node(3)))
+prev = None
+cur = head
+while cur is not None:
+    nxt = cur.next
+    cur.next = prev
+    prev = cur
+    cur = nxt
+head = prev
+values = []
+node = head
+while node:
+    values.append(node.value)
+    node = node.next
+</textarea>
+    </div>
+    <aside class="callout danger"><p>The most common reversal bug is flipping before saving: writing
+      <code>cur.next = prev</code> first destroys your only reference to the rest of the list. Always save
+      <code>nxt = cur.next</code> first.</p></aside>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+class Node:
+    def __init__(self, value, next=None):
+        self.value, self.next = value, next
+
+head = Node("x", Node("y", Node("z")))
+head.next = head.next.next
+cur, out = head, []
+while cur:
+    out.append(cur.value)
+    cur = cur.next
+print(out)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> draw boxes and arrows before writing pointer code. Save before
+      you overwrite. Check the empty list, the one-node list, the head, and the tail every time.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="pythonic">
+    <h2>Making it Pythonic: dunder methods and <code>__slots__</code></h2>
+    <p>A linked list class should feel like a built-in container. The data model from <a href="m11-data-model.html">M11</a>
+      gives us the hooks:</p>
+    <ul>
+      <li><code>__iter__</code>: write it as a generator so <code>for</code> loops, <code>list()</code>, and unpacking work.</li>
+      <li><code>__len__</code>: keep a <code>size</code> counter so <code>len()</code> is O(1) instead of a walk.</li>
+      <li><code>__repr__</code>: show the contents for debugging, e.g. <code>LinkedList([1, 2, 3])</code>.</li>
+      <li><code>__contains__</code>: optional, since Python falls back to <code>__iter__</code> for <code>in</code>.</li>
+      <li><code>__bool__</code>: unnecessary when <code>__len__</code> exists; an empty list is falsy automatically.</li>
+    </ul>
+    <div class="runnable" data-title="A small but complete LinkedList">
+<textarea>
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class LinkedList:
+    def __init__(self, iterable=()):
+        self.head = self.tail = None
+        self.size = 0
+        for x in iterable:
+            self.append(x)
+
+    def append(self, value):
+        node = Node(value)
+        if self.tail is None:
+            self.head = self.tail = node
+        else:
+            self.tail.next = node
+            self.tail = node
+        self.size += 1
+
+    def push_front(self, value):
+        self.head = Node(value, self.head)
+        if self.tail is None:
+            self.tail = self.head
+        self.size += 1
+
+    def __iter__(self):
+        cur = self.head
+        while cur is not None:
+            yield cur.value
+            cur = cur.next
+
+    def __len__(self):
+        return self.size
+
+    def __repr__(self):
+        return f"{type(self).__name__}({list(self)!r})"
+
+ll = LinkedList([2, 3])
+ll.push_front(1)
+ll.append(4)
+print(ll, len(ll), 3 in ll, bool(LinkedList()))
+print([x * 10 for x in ll])
+</textarea>
+    </div>
+
+    <h3><code>__slots__</code>: smaller nodes</h3>
+    <p>A linked list of a million items is a million node objects, so per-node overhead matters. By default each instance
+      can grow arbitrary attributes, which needs space for an attribute dictionary (or, in modern CPython, inline value
+      storage plus the ability to create a dict). Declaring <code>__slots__ = ("value", "next")</code> tells Python the
+      complete attribute list, so each instance stores exactly two fixed reference slots and nothing else. It also makes
+      typos like <code>node.nxt = ...</code> raise <code>AttributeError</code> instead of silently creating a new attribute.</p>
+    <div class="runnable" data-title="Measure the saving with tracemalloc">
+<textarea>
+import tracemalloc
+
+class Plain:
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class Slotted:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+for cls in (Plain, Slotted):
+    tracemalloc.start()
+    head = None
+    for i in range(50_000):
+        head = cls(i, head)
+    current, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    print(f"{cls.__name__:8}: ~{current / 50_000:.0f} bytes per node (including the int)")
+    del head
+
+s = Slotted(1)
+try:
+    s.nxt = None
+except AttributeError as e:
+    print("AttributeError:", e)
+</textarea>
+    </div>
+    <aside class="callout note"><p><code>@dataclass(slots=True)</code> from <a href="m13-dataclasses.html">M13</a> generates
+      <code>__slots__</code> for you. Slots are a per-class choice; subclasses need their own <code>__slots__</code> to keep
+      the benefit.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> implement <code>__iter__</code> as a generator, keep a size
+      counter for O(1) <code>__len__</code>, and use <code>__slots__</code> for small, numerous objects like nodes.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="doubly">
+    <h2>Doubly linked lists and sentinels</h2>
+    <p>A singly linked list can only move forwards, so deleting a node requires its predecessor, and removing the tail is
+      O(n) (you must walk to find the new tail). A <strong>doubly linked list</strong> gives each node a <code>prev</code>
+      pointer too. Given a reference to any node, you can unlink it in O(1), and you can walk in both directions.</p>
+    <h3>Sentinels: the trick that deletes your edge cases</h3>
+    <p>Most bugs in linked-list code live in the edge cases: empty list, inserting before the head, deleting the tail. A
+      <strong>sentinel</strong> (dummy) node is a node that holds no real value and is always present. With one sentinel
+      whose <code>next</code> is the first real node and whose <code>prev</code> is the last, the list becomes a circle and
+      every real node always has a real neighbour on both sides. Every insertion and deletion becomes the same four-line
+      pointer dance, with no <code>if</code> statements.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 170" role="img" aria-label="A circular doubly linked list with a sentinel node connecting both ends">
+        <g font-size="13" text-anchor="middle">
+          <rect x="20" y="50" width="90" height="44" rx="6" fill="var(--viz-4)" fill-opacity="0.15" stroke="var(--viz-4)" stroke-dasharray="5 3"/>
+          <text x="65" y="77" fill="var(--fg)">sentinel</text>
+          <g fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)">
+            <rect x="170" y="50" width="80" height="44" rx="6"/><rect x="310" y="50" width="80" height="44" rx="6"/>
+            <rect x="450" y="50" width="80" height="44" rx="6"/>
+          </g>
+          <g fill="var(--fg)"><text x="210" y="77">A</text><text x="350" y="77">B</text><text x="490" y="77">C</text></g>
+          <g stroke="var(--viz-2)" stroke-width="1.5" fill="none">
+            <line x1="110" y1="62" x2="168" y2="62"/><line x1="250" y1="62" x2="308" y2="62"/><line x1="390" y1="62" x2="448" y2="62"/>
+          </g>
+          <g stroke="var(--viz-3)" stroke-width="1.5" fill="none">
+            <line x1="168" y1="84" x2="110" y2="84"/><line x1="308" y1="84" x2="250" y2="84"/><line x1="448" y1="84" x2="390" y2="84"/>
+          </g>
+          <path d="M490,94 C490,150 65,150 65,96" fill="none" stroke="var(--viz-2)" stroke-width="1.5"/>
+          <path d="M65,50 C65,10 490,10 490,48" fill="none" stroke="var(--viz-3)" stroke-width="1.5"/>
+          <text x="280" y="20" fill="var(--viz-3)" font-size="12">sentinel.prev = last (C)</text>
+          <text x="280" y="160" fill="var(--viz-2)" font-size="12">C.next = sentinel</text>
+          <text x="140" y="56" fill="var(--viz-2)" font-size="11">next</text>
+          <text x="140" y="100" fill="var(--viz-3)" font-size="11">prev</text>
+        </g>
+      </svg>
+      <figcaption>An empty list is just the sentinel pointing at itself both ways. No <code>None</code> checks needed.</figcaption>
+    </figure>
+    <pre><code class="language-python">class DNode:
+    __slots__ = ("value", "prev", "next")
+    def __init__(self, value=None):
+        self.value = value
+        self.prev = self.next = self
+
+class DoublyLinkedList:
+    def __init__(self):
+        self._sentinel = DNode()            # prev and next point to itself: empty
+        self._size = 0
+
+    def _insert_after(self, node, value):   # the only insertion routine you need
+        new = DNode(value)
+        new.prev, new.next = node, node.next
+        node.next.prev = new
+        node.next = new
+        self._size += 1
+        return new
+
+    def _unlink(self, node):                # the only deletion routine you need
+        node.prev.next = node.next
+        node.next.prev = node.prev
+        self._size -= 1
+        return node.value
+
+    def push_front(self, value): return self._insert_after(self._sentinel, value)
+    def append(self, value):     return self._insert_after(self._sentinel.prev, value)
+    def pop_front(self):         return self._unlink(self._sentinel.next)   # check emptiness first!
+    def pop_back(self):          return self._unlink(self._sentinel.prev)</code></pre>
+    <div class="viz" data-viz="linked-list" data-config='{"values": [4, 9, 2], "doubly": true}'></div>
+    <div class="runnable" data-title="Sentinels in action">
+<textarea>
+class DNode:
+    __slots__ = ("value", "prev", "next")
+    def __init__(self, value=None):
+        self.value = value
+        self.prev = self.next = self
+
+class DoublyLinkedList:
+    def __init__(self, iterable=()):
+        self._s = DNode()
+        self._size = 0
+        for x in iterable:
+            self.append(x)
+
+    def _insert_after(self, node, value):
+        new = DNode(value)
+        new.prev, new.next = node, node.next
+        node.next.prev = new
+        node.next = new
+        self._size += 1
+        return new
+
+    def _unlink(self, node):
+        if node is self._s:
+            raise IndexError("pop from empty list")
+        node.prev.next = node.next
+        node.next.prev = node.prev
+        self._size -= 1
+        return node.value
+
+    def append(self, v): return self._insert_after(self._s.prev, v)
+    def push_front(self, v): return self._insert_after(self._s, v)
+    def pop_front(self): return self._unlink(self._s.next)
+    def pop_back(self): return self._unlink(self._s.prev)
+    def __len__(self): return self._size
+
+    def __iter__(self):
+        cur = self._s.next
+        while cur is not self._s:
+            yield cur.value
+            cur = cur.next
+
+    def __reversed__(self):
+        cur = self._s.prev
+        while cur is not self._s:
+            yield cur.value
+            cur = cur.prev
+
+d = DoublyLinkedList("bcd")
+d.push_front("a")
+node_c = d._s.next.next.next
+d._unlink(node_c)                 # O(1) removal given the node
+print(list(d), list(reversed(d)), d.pop_back(), d.pop_front(), list(d))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> doubly linked lists unlink any known node in O(1). A circular
+      sentinel turns every special case into the general case.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="classic">
+    <h2>Classic linked-list problems</h2>
+    <p>These five problems appear in interviews constantly because they test whether you can reason about pointers
+      precisely. Each has a short, elegant solution.</p>
+
+    <h3>1. Reverse a list</h3>
+    <p>You did this above: three pointers, O(n) time, O(1) space. A recursive version exists but uses O(n) stack space.</p>
+
+    <h3>2. Find the middle: slow and fast pointers</h3>
+    <p>Move <code>slow</code> one step and <code>fast</code> two steps at a time. When <code>fast</code> reaches the end,
+      <code>slow</code> has gone half as far: it is in the middle. One pass, no counting.</p>
+    <pre><code class="language-python">def middle(head):
+    slow = fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next
+        fast = fast.next.next
+    return slow     # for even lengths, the second of the two middle nodes</code></pre>
+
+    <h3>3. Detect a cycle: Floyd's tortoise and hare</h3>
+    <p>If some node's <code>next</code> points back to an earlier node, a naive traversal loops forever. You could store
+      every visited node in a set (O(n) space), but Floyd's algorithm uses O(1) space: run slow and fast pointers. If there
+      is no cycle, fast reaches <code>None</code>. If there is a cycle, both pointers end up circling it, and since fast gains
+      one node per step on slow, the gap shrinks by one each step until they meet.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 170" role="img" aria-label="A list whose tail points back into the middle, forming a cycle">
+        <g font-size="13" text-anchor="middle">
+          <g fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)">
+            <circle cx="50" cy="85" r="22"/><circle cx="130" cy="85" r="22"/><circle cx="210" cy="85" r="22"/>
+            <circle cx="300" cy="40" r="22"/><circle cx="390" cy="85" r="22"/><circle cx="300" cy="130" r="22"/>
+          </g>
+          <g fill="var(--fg)"><text x="50" y="90">1</text><text x="130" y="90">2</text><text x="210" y="90">3</text>
+            <text x="300" y="45">4</text><text x="390" y="90">5</text><text x="300" y="135">6</text></g>
+          <g stroke="var(--fg-muted)" stroke-width="1.5" fill="none">
+            <line x1="72" y1="85" x2="108" y2="85"/><line x1="152" y1="85" x2="188" y2="85"/>
+            <line x1="228" y1="72" x2="280" y2="50"/><line x1="320" y1="50" x2="372" y2="72"/>
+            <line x1="372" y1="98" x2="320" y2="122"/><line x1="280" y1="122" x2="228" y2="98"/>
+          </g>
+          <text x="440" y="40" fill="var(--viz-2)" font-size="12">slow: +1 per step</text>
+          <text x="440" y="60" fill="var(--viz-3)" font-size="12">fast: +2 per step</text>
+          <text x="300" y="90" fill="var(--fg-muted)" font-size="11">cycle</text>
+        </g>
+      </svg>
+      <figcaption>Node 6 points back to node 3. Inside the loop, fast closes the gap on slow by one node per step.</figcaption>
+    </figure>
+    <pre><code class="language-python">def has_cycle(head):
+    slow = fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next
+        fast = fast.next.next
+        if slow is fast:          # identity, not equality!
+            return True
+    return False</code></pre>
+    <p>Bonus: to find where the cycle starts, once they meet, reset one pointer to the head and advance both one step at a
+      time; they meet again at the cycle's entrance. (If the tail before the loop has length μ and the loop has length λ,
+      the meeting point is μ steps before the entrance, going around the loop.)</p>
+
+    <h3>4. Merge two sorted lists</h3>
+    <p>Use a dummy head node so you never special-case "the result is empty". Repeatedly take the smaller front node, attach
+      it, and advance. When one list runs out, attach the rest of the other. O(n + m) time, O(1) extra space: you re-link
+      existing nodes rather than creating new ones. This is the merge step of merge sort.</p>
+    <pre><code class="language-python">def merge(a, b):
+    dummy = tail = Node(None)
+    while a and b:
+        if a.value &lt;= b.value:        # &lt;= keeps the merge stable
+            tail.next, a = a, a.next
+        else:
+            tail.next, b = b, b.next
+        tail = tail.next
+    tail.next = a or b
+    return dummy.next</code></pre>
+
+    <h3>5. Remove the nth node from the end</h3>
+    <p>Move a <code>lead</code> pointer <em>n</em> steps ahead, then move <code>lead</code> and <code>trail</code> together until
+      <code>lead</code> hits the end. <code>trail</code> is now just before the node to remove. A dummy node in front of the
+      head handles "remove the first node" without special cases. One pass.</p>
+    <div class="runnable" data-title="Try slow/fast and Floyd">
+<textarea>
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value, self.next = value, next
+
+def build(values):
+    head = None
+    for v in reversed(values):
+        head = Node(v, head)
+    return head
+
+def middle(head):
+    slow = fast = head
+    while fast and fast.next:
+        slow, fast = slow.next, fast.next.next
+    return slow
+
+def has_cycle(head):
+    slow = fast = head
+    while fast and fast.next:
+        slow, fast = slow.next, fast.next.next
+        if slow is fast:
+            return True
+    return False
+
+print(middle(build([1, 2, 3, 4, 5])).value)      # 3
+print(middle(build([1, 2, 3, 4])).value)         # 3 (second middle)
+
+head = build([1, 2, 3, 4, 5, 6])
+print(has_cycle(head))
+last = head
+while last.next:
+    last = last.next
+last.next = head.next.next        # 6 -> 3: make a cycle
+print(has_cycle(head))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> slow/fast pointers find middles and cycles. Dummy heads remove
+      empty-result special cases. Leading pointers solve "from the end" problems in one pass.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="vs-arrays">
+    <h2>Arrays vs linked lists</h2>
+    <table>
+      <thead><tr><th>Operation</th><th>Dynamic array (<code>list</code>)</th><th>Singly linked</th><th>Doubly linked</th></tr></thead>
+      <tbody>
+        <tr><td>Index <code>i</code></td><td>O(1)</td><td>O(i)</td><td>O(min(i, n−i))</td></tr>
+        <tr><td>Push / pop front</td><td>O(n)</td><td>O(1)</td><td>O(1)</td></tr>
+        <tr><td>Append</td><td>O(1) amortized</td><td>O(1) with tail</td><td>O(1)</td></tr>
+        <tr><td>Pop back</td><td>O(1)</td><td>O(n)</td><td>O(1)</td></tr>
+        <tr><td>Insert / delete at a known node</td><td>O(n) (shift)</td><td>O(1) after the node; delete needs prev</td><td>O(1)</td></tr>
+        <tr><td>Search by value</td><td>O(n)</td><td>O(n)</td><td>O(n)</td></tr>
+        <tr><td>Memory per item</td><td>8-byte pointer (+ spare capacity)</td><td>node object (~50+ bytes)</td><td>node object (~60+ bytes)</td></tr>
+        <tr><td>Cache behaviour</td><td>excellent (contiguous)</td><td>poor (pointer chasing)</td><td>poor</td></tr>
+      </tbody>
+    </table>
+    <p>The memory and cache rows are why, in practice, arrays win far more often than the Big-O table suggests. Every hop
+      along a linked list is a dependent memory load: the CPU cannot fetch node 5 until it has read node 4's
+      <code>next</code>. With an array, the hardware streams consecutive memory and prefetches ahead. Python adds its own
+      overhead on top, since each <code>cur.next</code> is an attribute lookup executed by the interpreter.</p>
+    <div class="runnable" data-title="Same O(n) traversal, very different speed">
+<textarea>
+import time
+
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value, self.next = value, next
+
+n = 300_000
+arr = list(range(n))
+head = None
+for v in reversed(arr):
+    head = Node(v, head)
+
+t0 = time.perf_counter()
+total = 0
+for v in arr:
+    total += v
+t1 = time.perf_counter()
+total2 = 0
+cur = head
+while cur is not None:
+    total2 += cur.value
+    cur = cur.next
+t2 = time.perf_counter()
+print(f"array scan  {t1 - t0:.4f}s")
+print(f"linked scan {t2 - t1:.4f}s   (same sum: {total == total2})")
+print(f"sum() on the list: built-in C loop is faster still")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Rule of thumb: in Python, reach for a <code>list</code> by default, a
+      <code>collections.deque</code> when you need fast operations at both ends, and a hand-built linked list only when you
+      must splice or unlink nodes you already hold references to (as an LRU cache does). Writing your own linked list is
+      mainly a learning tool and an interview skill.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="in-the-wild">
+    <h2>Where linked lists are used</h2>
+    <ul>
+      <li><strong>LRU caches.</strong> A hash map from key to node, plus a doubly linked list ordered by recency. A hit
+        unlinks the node and moves it to the front in O(1); eviction pops the back in O(1). This is the classic design, and
+        the pure-Python fallback of <code>functools.lru_cache</code> uses exactly this idea with a circular doubly linked
+        list.</li>
+      <li><strong>OrderedDict.</strong> Before regular dicts preserved insertion order (3.7), <code>collections.OrderedDict</code>
+        was the way to get ordering. Its pure-Python implementation in <code>Lib/collections/__init__.py</code> is a dict
+        plus a circular doubly linked list with a sentinel root, which is still why <code>move_to_end</code> is O(1).</li>
+      <li><strong>collections.deque.</strong> A doubly linked list of fixed-size <em>blocks</em> (64 slots each in CPython).
+        This hybrid gets O(1) operations at both ends like a linked list while keeping most items contiguous like an array,
+        and wastes far less memory than one node per item. See <a href="m22-stacks-queues.html">M22</a>.</li>
+      <li><strong>Operating systems and allocators.</strong> Free lists of memory blocks, process scheduler queues, and the
+        Linux kernel's intrusive <code>list_head</code>.</li>
+      <li><strong>Hash table chaining.</strong> Each bucket can be a short linked list (<a href="m23-hash-tables.html">M23</a>).</li>
+    </ul>
+    <div class="viz" data-viz="lru-cache" data-config='{"capacity": 3}'></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls</h2>
+    <ul>
+      <li><strong>Losing the rest of the list</strong> by overwriting <code>next</code> before saving it.</li>
+      <li><strong>Forgetting the tail</strong>: removing the last node or reversing without updating <code>tail</code> leaves it
+        pointing at a node that is no longer last.</li>
+      <li><strong>Off-by-one at the ends</strong>: always test empty, one node, two nodes, head, and tail.</li>
+      <li><strong>Using <code>==</code> instead of <code>is</code></strong> to compare nodes. Two different nodes may hold equal
+        values; cycle detection and "is this the tail?" need identity.</li>
+      <li><strong>Infinite loops</strong> from accidental cycles. A <code>__repr__</code> that walks a cyclic list never
+        returns; guard it with a step limit while debugging.</li>
+      <li><strong>Recursion depth</strong>: recursive algorithms on long lists hit the recursion limit around 1000 nodes. Prefer
+        iteration.</li>
+      <li><strong>Exposing nodes</strong>: if callers can reach your nodes, they can corrupt your size counter and invariants.
+        Keep nodes private (leading underscore) unless handing them out is the point.</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m21-e1" data-title="A singly linked list with a tail">
+      <div class="exercise-prompt">
+        <p>Complete <code>LinkedList</code> with <code>push_front</code>, <code>append</code> (O(1) using
+          <code>tail</code>), <code>__iter__</code> (a generator), <code>__len__</code> (O(1) using <code>size</code>), and
+          <code>__repr__</code> returning exactly <code>LinkedList([1, 2, 3])</code>.</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class LinkedList:
+    def __init__(self, iterable=()):
+        self.head = None
+        self.tail = None
+        self.size = 0
+        for x in iterable:
+            self.append(x)
+
+    def push_front(self, value):
+        ...
+
+    def append(self, value):
+        ...
+
+    def __iter__(self):
+        ...
+
+    def __len__(self):
+        ...
+
+    def __repr__(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_append_and_iter():
+    ll = LinkedList([1, 2, 3])
+    assert list(ll) == [1, 2, 3], f"expected [1, 2, 3], got {list(ll)}"
+    assert len(ll) == 3, "len should be 3"
+
+def test_push_front():
+    ll = LinkedList()
+    ll.push_front(2)
+    ll.push_front(1)
+    ll.append(3)
+    assert list(ll) == [1, 2, 3], "push_front then append should give [1, 2, 3]"
+
+def test_head_and_tail():
+    ll = LinkedList()
+    ll.push_front("only")
+    assert ll.head is ll.tail, "a single node is both head and tail"
+    ll.append("last")
+    assert ll.tail.value == "last" and ll.tail.next is None, "tail must be the last node"
+
+def test_repr_and_empty():
+    assert repr(LinkedList([1, 2, 3])) == "LinkedList([1, 2, 3])", "repr should look like LinkedList([1, 2, 3])"
+    assert repr(LinkedList()) == "LinkedList([])", "empty repr should be LinkedList([])"
+    assert not LinkedList(), "an empty list should be falsy via __len__"
+
+def test_iter_is_generator():
+    import types
+    assert isinstance(iter(LinkedList([1])), types.GeneratorType), "write __iter__ as a generator (use yield)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>__iter__</code>: <code>cur = self.head; while cur is not None:
+        yield cur.value; cur = cur.next</code>. <code>__repr__</code>: <code>f"LinkedList({list(self)!r})"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class LinkedList:
+    def __init__(self, iterable=()):
+        self.head = None
+        self.tail = None
+        self.size = 0
+        for x in iterable:
+            self.append(x)
+
+    def push_front(self, value):
+        self.head = Node(value, self.head)
+        if self.tail is None:
+            self.tail = self.head
+        self.size += 1
+
+    def append(self, value):
+        node = Node(value)
+        if self.tail is None:
+            self.head = self.tail = node
+        else:
+            self.tail.next = node
+            self.tail = node
+        self.size += 1
+
+    def __iter__(self):
+        cur = self.head
+        while cur is not None:
+            yield cur.value
+            cur = cur.next
+
+    def __len__(self):
+        return self.size
+
+    def __repr__(self):
+        return f"LinkedList({list(self)!r})"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m21-e2" data-title="find and remove (keep tail correct!)">
+      <div class="exercise-prompt">
+        <p>Add <code>find(value)</code> (return the first node with that value, or <code>None</code>) and
+          <code>remove(value)</code> (unlink the first match; raise <code>ValueError</code> if absent). <code>head</code>,
+          <code>tail</code>, and <code>size</code> must stay correct in every case, including removing the only node.</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class LinkedList:
+    def __init__(self, iterable=()):
+        self.head = self.tail = None
+        self.size = 0
+        for x in iterable:
+            self.append(x)
+
+    def append(self, value):
+        node = Node(value)
+        if self.tail is None:
+            self.head = self.tail = node
+        else:
+            self.tail.next = node
+            self.tail = node
+        self.size += 1
+
+    def __iter__(self):
+        cur = self.head
+        while cur is not None:
+            yield cur.value
+            cur = cur.next
+
+    def __len__(self):
+        return self.size
+
+    def find(self, value):
+        ...
+
+    def remove(self, value):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_find():
+    ll = LinkedList(["a", "b", "c"])
+    assert ll.find("b").value == "b", "find should return the node holding the value"
+    assert ll.find("zzz") is None, "find should return None when absent"
+
+def test_remove_middle():
+    ll = LinkedList([1, 2, 3])
+    ll.remove(2)
+    assert list(ll) == [1, 3] and len(ll) == 2, "removing the middle should leave [1, 3]"
+
+def test_remove_head_and_tail():
+    ll = LinkedList([1, 2, 3])
+    ll.remove(1)
+    assert ll.head.value == 2, "removing the head should make 2 the new head"
+    ll.remove(3)
+    assert ll.tail.value == 2 and ll.tail.next is None, "removing the tail should make 2 the new tail"
+    ll.append(9)
+    assert list(ll) == [2, 9], "append after removing the tail must still work (tail updated)"
+
+def test_remove_only_node():
+    ll = LinkedList(["x"])
+    ll.remove("x")
+    assert ll.head is None and ll.tail is None and len(ll) == 0, "removing the only node empties the list"
+    ll.append("y")
+    assert list(ll) == ["y"], "list should be usable after becoming empty"
+
+def test_remove_missing():
+    ll = LinkedList([1])
+    try:
+        ll.remove(5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("remove of a missing value should raise ValueError")
+    assert list(ll) == [1] and len(ll) == 1, "a failed remove must not change the list"
+
+def test_removes_first_match_only():
+    ll = LinkedList([7, 8, 7])
+    ll.remove(7)
+    assert list(ll) == [8, 7], "only the first 7 should be removed"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Walk with <code>prev, cur</code>. After finding the node: if
+        <code>prev is None</code> set <code>head = cur.next</code>, else <code>prev.next = cur.next</code>; then if
+        <code>cur is self.tail</code> set <code>tail = prev</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+class LinkedList:
+    def __init__(self, iterable=()):
+        self.head = self.tail = None
+        self.size = 0
+        for x in iterable:
+            self.append(x)
+
+    def append(self, value):
+        node = Node(value)
+        if self.tail is None:
+            self.head = self.tail = node
+        else:
+            self.tail.next = node
+            self.tail = node
+        self.size += 1
+
+    def __iter__(self):
+        cur = self.head
+        while cur is not None:
+            yield cur.value
+            cur = cur.next
+
+    def __len__(self):
+        return self.size
+
+    def find(self, value):
+        cur = self.head
+        while cur is not None:
+            if cur.value == value:
+                return cur
+            cur = cur.next
+        return None
+
+    def remove(self, value):
+        prev, cur = None, self.head
+        while cur is not None and cur.value != value:
+            prev, cur = cur, cur.next
+        if cur is None:
+            raise ValueError(f"{value!r} not in list")
+        if prev is None:
+            self.head = cur.next
+        else:
+            prev.next = cur.next
+        if cur is self.tail:
+            self.tail = prev
+        self.size -= 1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m21-e3" data-title="Reverse in place">
+      <div class="exercise-prompt">
+        <p>Write <code>reverse(head)</code> that reverses a singly linked list <strong>in place</strong> (re-link the existing
+          nodes; do not create new ones) and returns the new head. It must handle <code>None</code> and a single node, use
+          O(1) extra space, and work on a 100,000-node list (so no recursion).</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def reverse(head):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def build(values):
+    head = None
+    for v in reversed(values):
+        head = Node(v, head)
+    return head
+
+def to_list(head):
+    out = []
+    while head is not None:
+        out.append(head.value)
+        head = head.next
+    return out
+
+def test_reverse_values():
+    assert to_list(reverse(build([1, 2, 3, 4]))) == [4, 3, 2, 1], "should reverse [1, 2, 3, 4]"
+
+def test_edge_cases():
+    assert reverse(None) is None, "reversing an empty list returns None"
+    single = build([7])
+    assert reverse(single) is single and single.next is None, "a single node reverses to itself"
+
+def test_in_place():
+    head = build([1, 2, 3])
+    nodes = [head, head.next, head.next.next]
+    new_head = reverse(head)
+    assert new_head is nodes[2], "the old tail node should be the new head (no new nodes)"
+    assert nodes[0].next is None, "the old head must now end the list"
+
+def test_long_list_no_recursion():
+    head = build(list(range(100_000)))
+    out = to_list(reverse(head))
+    assert out[0] == 99_999 and out[-1] == 0 and len(out) == 100_000, "must handle 100k nodes iteratively"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Three pointers. Save <code>nxt = cur.next</code> before flipping
+        <code>cur.next = prev</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def reverse(head):
+    prev = None
+    cur = head
+    while cur is not None:
+        nxt = cur.next
+        cur.next = prev
+        prev = cur
+        cur = nxt
+    return prev</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m21-e4" data-title="Middle node and Floyd's cycle detection">
+      <div class="exercise-prompt">
+        <p>Write <code>middle(head)</code> (return the middle node; the second middle for even lengths; <code>None</code> for
+          an empty list) and <code>cycle_start(head)</code>, which returns the node where a cycle begins, or
+          <code>None</code> if there is no cycle. Use O(1) extra space: no sets or lists of nodes.</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def middle(head):
+    ...
+
+def cycle_start(head):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def build(values):
+    head = None
+    for v in reversed(values):
+        head = Node(v, head)
+    return head
+
+def nth(head, i):
+    for _ in range(i):
+        head = head.next
+    return head
+
+def test_middle_odd_even():
+    assert middle(build([1, 2, 3, 4, 5])).value == 3, "middle of 1..5 is 3"
+    assert middle(build([1, 2, 3, 4])).value == 3, "for even lengths return the second middle"
+    assert middle(build([9])).value == 9, "middle of one node is that node"
+    assert middle(None) is None, "middle of an empty list is None"
+
+def test_no_cycle():
+    assert cycle_start(build([1, 2, 3])) is None, "a normal list has no cycle"
+    assert cycle_start(None) is None, "an empty list has no cycle"
+
+def test_cycle_found():
+    head = build(list(range(10)))
+    nth(head, 9).next = nth(head, 4)
+    start = cycle_start(head)
+    assert start is nth(head, 4), "cycle_start should return the node at index 4 (identity)"
+
+def test_self_loop_and_full_loop():
+    one = Node("a")
+    one.next = one
+    assert cycle_start(one) is one, "a node pointing to itself is a cycle starting there"
+    head = build([1, 2, 3])
+    nth(head, 2).next = head
+    assert cycle_start(head) is head, "a fully circular list's cycle starts at the head"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Run slow and fast until <code>slow is fast</code> (or fast hits the
+        end). Then put one pointer back at the head and step both by one until they meet: that is the start.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def middle(head):
+    slow = fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next
+        fast = fast.next.next
+    return slow
+
+def cycle_start(head):
+    slow = fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next
+        fast = fast.next.next
+        if slow is fast:
+            slow = head
+            while slow is not fast:
+                slow = slow.next
+                fast = fast.next
+            return slow
+    return None</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m21-e5" data-title="Merge two sorted lists">
+      <div class="exercise-prompt">
+        <p>Write <code>merge(a, b)</code> that merges two sorted linked lists into one sorted list by <strong>re-linking the
+          existing nodes</strong> (no new value nodes; a dummy head is fine). Ties take the node from <code>a</code> first
+          (stability).</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def merge(a, b):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def build(values):
+    head = None
+    for v in reversed(values):
+        head = Node(v, head)
+    return head
+
+def nodes(head):
+    out = []
+    while head is not None:
+        out.append(head)
+        head = head.next
+    return out
+
+def test_basic_merge():
+    merged = merge(build([1, 4, 6]), build([2, 3, 7, 8]))
+    assert [n.value for n in nodes(merged)] == [1, 2, 3, 4, 6, 7, 8], "values should come out sorted"
+
+def test_empty_inputs():
+    assert merge(None, None) is None, "merging two empty lists gives None"
+    b = build([1, 2])
+    assert merge(None, b) is b, "merging empty with b returns b itself"
+
+def test_reuses_nodes():
+    a, b = build([1, 3]), build([2])
+    original = {id(n) for n in nodes(a) + nodes(b)}
+    merged = {id(n) for n in nodes(merge(a, b))}
+    assert merged == original, "the merged list must consist of exactly the original nodes"
+
+def test_stable_ties():
+    a, b = build([1, 2]), build([2, 3])
+    a_two = a.next
+    merged = nodes(merge(a, b))
+    assert merged[1] is a_two, "on ties, take the node from a first"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>dummy = tail = Node(None)</code>. While both lists
+        are non-empty, attach the smaller head (use <code>&lt;=</code> for <code>a</code>), advance. Finally
+        <code>tail.next = a or b</code> and return <code>dummy.next</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def merge(a, b):
+    dummy = tail = Node(None)
+    while a is not None and b is not None:
+        if a.value &lt;= b.value:
+            tail.next, a = a, a.next
+        else:
+            tail.next, b = b, b.next
+        tail = tail.next
+    tail.next = a if a is not None else b
+    return dummy.next</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m21-e6" data-title="Remove the nth node from the end">
+      <div class="exercise-prompt">
+        <p>Write <code>remove_nth_from_end(head, n)</code> that removes the <code>n</code>th node from the end
+          (<code>n=1</code> is the last node) in <strong>one pass</strong> and returns the (possibly new) head. Raise
+          <code>ValueError</code> if <code>n</code> is less than 1 or greater than the length.</p>
+      </div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def remove_nth_from_end(head, n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def build(values):
+    head = None
+    for v in reversed(values):
+        head = Node(v, head)
+    return head
+
+def to_list(head):
+    out = []
+    while head is not None:
+        out.append(head.value)
+        head = head.next
+    return out
+
+def test_remove_middle_and_last():
+    assert to_list(remove_nth_from_end(build([1, 2, 3, 4, 5]), 2)) == [1, 2, 3, 5], "n=2 removes the 4"
+    assert to_list(remove_nth_from_end(build([1, 2, 3]), 1)) == [1, 2], "n=1 removes the last node"
+
+def test_remove_head():
+    assert to_list(remove_nth_from_end(build([1, 2, 3]), 3)) == [2, 3], "n=len removes the head"
+    assert remove_nth_from_end(build([1]), 1) is None, "removing the only node returns None"
+
+def test_bad_n():
+    for bad in [0, 4]:
+        try:
+            remove_nth_from_end(build([1, 2, 3]), bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"n={bad} should raise ValueError for a 3-node list")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Put a dummy node before the head. Advance <code>lead</code> n steps
+        from the dummy (if it falls off, n is too big). Then advance <code>lead</code> and <code>trail</code> together until
+        <code>lead.next is None</code>; unlink <code>trail.next</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("value", "next")
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+def remove_nth_from_end(head, n):
+    if n &lt; 1:
+        raise ValueError("n must be at least 1")
+    dummy = Node(None, head)
+    lead = trail = dummy
+    for _ in range(n):
+        lead = lead.next
+        if lead is None:
+            raise ValueError("n is larger than the list length")
+    while lead.next is not None:
+        lead = lead.next
+        trail = trail.next
+    trail.next = trail.next.next
+    return dummy.next</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a playlist manager</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Playlist on a doubly linked list</span></div>
+      <div class="widget-body">
+        <p>Build the music queue from the start of this module. A playlist has a <em>current</em> song and supports "play
+          next", "add to end", skipping forwards and backwards, removing any song, and moving songs up and down. A doubly
+          linked list with a sentinel makes every one of these O(1) once you have the node, and a dict from song id to node
+          gives you the node in O(1) too.</p>
+        <h4>Set up</h4>
+        <pre data-label="Terminal"><code class="language-bash">pixi init playlist
+cd playlist
+pixi add python=3.14 pytest
+pixi run python -m pytest -q</code></pre>
+        <h4>Spec: <code>playlist.py</code></h4>
+        <ul>
+          <li><code>Song</code>: a frozen dataclass with <code>id</code>, <code>title</code>, <code>artist</code>, <code>seconds</code>.</li>
+          <li><code>Playlist</code> built on a private circular doubly linked list with one sentinel and <code>__slots__</code> nodes,
+            plus <code>self._index: dict[str, _Node]</code>.</li>
+          <li><code>add(song)</code> appends; <code>play_next(song)</code> inserts right after the current song; duplicate ids raise <code>ValueError</code>.</li>
+          <li><code>current</code> property; <code>next()</code> and <code>previous()</code> move the cursor and return the new
+            current song (wrapping around is optional; document your choice).</li>
+          <li><code>remove(song_id)</code> in O(1); if it was current, current moves to the next song.</li>
+          <li><code>move_up(song_id)</code> / <code>move_down(song_id)</code> swap a song with its neighbour by re-linking nodes, not swapping values.</li>
+          <li><code>__len__</code>, <code>__iter__</code>, <code>__reversed__</code>, <code>__contains__</code> (by id), and
+            <code>total_duration()</code> formatted as <code>h:mm:ss</code>.</li>
+          <li>A test file with at least twelve tests covering empty playlists, single-song playlists, and removal of the current song.</li>
+        </ul>
+        <ul class="checklist" data-id="m21-mini">
+          <li>The linked list uses a sentinel, so no method contains special cases for head or tail</li>
+          <li><code>remove</code>, <code>play_next</code>, <code>move_up</code>, and <code>move_down</code> are O(1)</li>
+          <li>The id-to-node dict stays in sync with the list after every operation</li>
+          <li>Forward and reverse iteration agree (one is the reverse of the other)</li>
+          <li>Removing the current song moves the cursor sensibly</li>
+          <li>Nodes are private and use <code>__slots__</code></li>
+          <li><code>pixi run python -m pytest -q</code> passes</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li><code>shuffle(seed)</code> that relinks nodes in a random order without creating new nodes.</li>
+          <li>Undo for the last removal (keep the unlinked node and its neighbours).</li>
+          <li>Save and load the playlist as JSON with <code>pathlib</code> (<a href="m09-files-io.html">M09</a>).</li>
+          <li>Compare an equivalent implementation using <code>list</code> with <code>timeit</code> at 100,000 songs.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m21-quiz">
+<script type="application/json">
+{"title": "Linked lists quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the cost of reaching index i in a singly linked list?", "options": ["O(1)", "O(log i)", "O(i)", "O(n²)"], "answer": 2, "explanation": "<p>There is no address formula: you must follow i <code>next</code> pointers from the head.</p>"},
+  {"type": "single", "prompt": "Why keep a <code>tail</code> pointer in a singly linked list?", "options": ["To make removal of the last node O(1)", "To make append O(1)", "To make search faster", "To allow reverse iteration"], "answer": 1, "explanation": "<p>With a tail reference, append links the new node after the tail directly. Removing the last node is still O(n) in a singly linked list, because you need the node before it.</p>"},
+  {"type": "single", "prompt": "In iterative reversal, what must happen first in each loop iteration?", "options": ["<code>cur.next = prev</code>", "<code>prev = cur</code>", "<code>nxt = cur.next</code>", "<code>cur = nxt</code>"], "answer": 2, "explanation": "<p>Saving <code>cur.next</code> first ensures you don't lose the rest of the list when you flip the pointer.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class N:\n    def __init__(self, v, nx=None):\n        self.v, self.nx = v, nx\n\nh = N(1, N(2, N(3)))\nh = N(0, h)\nh.nx.nx = h.nx.nx.nx\nout = []\nwhile h:\n    out.append(h.v)\n    h = h.nx\nprint(out)", "answer": "[0, 1, 3]", "explanation": "<p>After pushing 0 the list is 0 → 1 → 2 → 3. <code>h.nx</code> is node 1, and setting its <code>nx</code> to node 3 skips node 2.</p>"},
+  {"type": "single", "prompt": "What does a sentinel node buy you in a doubly linked list?", "options": ["Faster search", "Less memory", "No special cases for empty lists, head, or tail", "Thread safety"], "answer": 2, "explanation": "<p>Every real node always has real neighbours (possibly the sentinel), so insertion and deletion are the same few assignments everywhere.</p>"},
+  {"type": "single", "prompt": "In Floyd's algorithm, why are slow and fast guaranteed to meet inside a cycle?", "options": ["Fast skips over slow", "Inside the cycle, fast gains exactly one node per step, so the gap shrinks to zero", "They both stop at the cycle start", "Because of hashing"], "answer": 1, "explanation": "<p>Each step fast moves two and slow one, so the distance between them along the cycle decreases by one per step. It cannot skip past zero.</p>"},
+  {"type": "single", "prompt": "When detecting a cycle, why compare nodes with <code>is</code> rather than <code>==</code>?", "options": ["<code>is</code> is faster but equivalent", "Different nodes can hold equal values; we need the same object", "<code>==</code> raises an error on nodes", "No reason"], "answer": 1, "explanation": "<p>A list like 1 → 2 → 1 has no cycle but two equal values. Identity is the only correct test for \"the same node\".</p>"},
+  {"type": "multi", "prompt": "Which operations are O(1) on a doubly linked list with a sentinel, given a reference to the node?", "options": ["Unlink that node", "Insert after that node", "Find the node with value x", "Pop from the back", "Access index n/2"], "answer": [0, 1, 3], "explanation": "<p>Unlinking and inserting next to a known node change a constant number of pointers; the sentinel's <code>prev</code> is the last node. Searching and indexing still require walking.</p>"},
+  {"type": "single", "prompt": "What does <code>__slots__ = (\"value\", \"next\")</code> do for a Node class?", "options": ["Makes nodes immutable", "Stores attributes in fixed slots, saving memory and rejecting unknown attributes", "Makes attribute access O(log n)", "Turns the class into a dataclass"], "answer": 1, "explanation": "<p>Instances get exactly those two slots and no per-instance attribute dict, which matters when you create millions of nodes. Assigning an undeclared attribute raises <code>AttributeError</code>.</p>"},
+  {"type": "single", "prompt": "Why is traversing a linked list usually slower than traversing an array, even though both are O(n)?", "options": ["Linked lists have more elements", "Pointer chasing causes cache misses and prevents prefetching", "Arrays are sorted", "Python caches arrays"], "answer": 1, "explanation": "<p>Each node is a separate heap object; the CPU must load one before it knows where the next is. Arrays are contiguous, so whole cache lines are useful and the hardware can prefetch.</p>"},
+  {"type": "single", "prompt": "How does CPython's <code>collections.deque</code> store its items?", "options": ["One node per item", "A single dynamic array", "A doubly linked list of fixed-size blocks", "A hash table"], "answer": 2, "explanation": "<p>Blocks of 64 slots are linked in both directions, combining O(1) operations at both ends with good memory density.</p>"},
+  {"type": "text", "prompt": "Whose name is attached to the slow/fast pointer cycle-detection algorithm (the \"tortoise and hare\")?", "answer": ["floyd", "floyd's", "floyd's algorithm", "tortoise and hare", "floyd's tortoise and hare", "floyd tortoise and hare"], "explanation": "<p>Floyd's cycle-finding algorithm, also called the tortoise and the hare.</p>"},
+  {"type": "single", "prompt": "Merging two sorted linked lists of lengths n and m by relinking nodes costs:", "options": ["O(n·m) time, O(1) space", "O(n + m) time, O(1) extra space", "O((n+m) log(n+m)) time", "O(n + m) time and space"], "answer": 1, "explanation": "<p>Each step attaches one node and advances, so n + m steps. Relinking existing nodes needs only a dummy head and a tail pointer.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A linked list is nodes holding a value and a <code>next</code> reference; the list keeps the head and often the tail.</li>
+      <li>Push front, append with a tail, and unlinking a known node are O(1); indexing and search are O(n).</li>
+      <li>Pointer code needs care: save before overwriting, and test empty, single, head, and tail cases.</li>
+      <li>Doubly linked lists unlink any known node in O(1); a circular sentinel removes edge cases.</li>
+      <li>Implement <code>__iter__</code>, <code>__len__</code>, and <code>__repr__</code>; use <code>__slots__</code> for nodes.</li>
+      <li>Classic techniques: three-pointer reversal, slow/fast pointers, dummy heads, and leading pointers.</li>
+      <li>Arrays usually win in practice thanks to cache locality; linked lists shine for O(1) splicing (LRU caches, OrderedDict, deque blocks).</li>
+    </ul>
+    <div class="flashcards" data-title="Linked lists">
+<script type="application/json">
+[{"front": "Node", "back": "An object holding a value and a reference to the next (and in doubly linked lists, previous) node."},
+ {"front": "Cost of push_front", "back": "O(1): new node points to old head; head = new node."},
+ {"front": "Why a tail pointer?", "back": "O(1) append. It must be updated when removing the last node or reversing."},
+ {"front": "Reversal loop", "back": "nxt = cur.next; cur.next = prev; prev = cur; cur = nxt. Return prev."},
+ {"front": "Sentinel node", "back": "A dummy node always present; makes the list circular and removes edge cases."},
+ {"front": "Find the middle", "back": "Slow moves 1, fast moves 2; when fast ends, slow is in the middle."},
+ {"front": "Floyd's cycle detection", "back": "Slow/fast pointers meet iff there is a cycle; reset one to head and step both by 1 to find the start."},
+ {"front": "Remove nth from end", "back": "Lead pointer n steps ahead from a dummy; move both until lead.next is None; unlink trail.next."},
+ {"front": "<code>__slots__</code>", "back": "Fixed attribute slots per instance: less memory, no accidental new attributes."},
+ {"front": "Where deque gets its O(1) ends", "back": "A doubly linked list of 64-slot blocks."},
+ {"front": "Arrays vs linked lists in practice", "back": "Arrays usually win: contiguous memory, cache-friendly, less overhead."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html#slots">Data model: __slots__</a></li>
+      <li><a href="https://docs.python.org/3/library/collections.html#collections.deque">collections.deque</a> and
+        <a href="https://docs.python.org/3/library/collections.html#collections.OrderedDict">OrderedDict</a></li>
+      <li><a href="https://github.com/python/cpython/blob/main/Lib/collections/__init__.py">CPython's pure-Python OrderedDict source</a>
+        (search for <code>_Link</code>).</li>
+      <li>Next: <a href="m22-stacks-queues.html">M22 Stacks, Queues &amp; Deques</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M58 · Neural Networks from Scratch · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m58">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Module 58</p>
+    <h1>Neural Networks from Scratch</h1>
+    <p class="lede">A neural network is logistic regression stacked in layers, trained with the same "error times
+      input" gradient you derived in M55. You will build one in NumPy, from a single neuron to backpropagation through a
+      computational graph, train it on problems a straight line cannot solve, and then see how PyTorch automates every
+      step you wrote by hand.</p>
+    <div class="lesson-meta"><span>⏱ ~3.5 hours</span><span>Prerequisites: <a href="m55-ml-foundations.html">M55</a>, <a href="m49-linear-algebra.html">M49</a></span></div>
+    <ul class="objectives">
+      <li>Describe a neuron as a weighted sum plus an activation, and compare sigmoid, tanh, and ReLU</li>
+      <li>Write the forward pass of a multi-layer network in matrix form and track every array's shape</li>
+      <li>Derive backpropagation with the chain rule on a computational graph, and verify it with a numerical gradient check</li>
+      <li>Train a two-layer network in NumPy on XOR and on <code>make_moons</code>, using mini-batch stochastic gradient descent</li>
+      <li>Explain initialization, vanishing gradients, overfitting, weight decay, and dropout</li>
+      <li>Translate the NumPy network into PyTorch tensors, autograd, <code>nn.Module</code>, and an optimizer loop</li>
+      <li>Say where deep learning shines (images, sequences, language) and what CNNs and transformers are</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="neuron">
+    <h2>The neuron</h2>
+    <p>An artificial <strong>neuron</strong> takes inputs <code>x<sub>1</sub>…x<sub>d</sub></code>, multiplies each by a
+      weight, adds a bias, and passes the total through a nonlinear <strong>activation function</strong> <code>g</code>:</p>
+    <p style="text-align:center"><code>a = g(w<sub>1</sub>x<sub>1</sub> + … + w<sub>d</sub>x<sub>d</sub> + b) = g(w · x + b)</code></p>
+    <p>With <code>g</code> = sigmoid this is exactly logistic regression from M55. The name comes from a loose analogy
+      with biological neurons that "fire" when their inputs are strong enough; the analogy stops there. The power comes
+      from <strong>layers</strong>: the outputs of many neurons become the inputs of the next layer. A network with an
+      input layer, one or more <strong>hidden layers</strong>, and an output layer is a <strong>multi-layer
+      perceptron</strong> (MLP), also called a fully connected or dense network.</p>
+    <p>Why bother? A single neuron's decision boundary is a straight line. The classic counterexample is
+      <strong>XOR</strong>: output 1 when exactly one of two inputs is 1. No line separates
+      <code>{(0,1), (1,0)}</code> from <code>{(0,0), (1,1)}</code>. A hidden layer can bend space so that a line works
+      afterwards. Explore a 2-4-1 network below: pick an input, watch values flow forward, and switch to training mode to
+      see it learn XOR.</p>
+    <div class="viz" data-viz="neural-net" data-config='{"layers": [2, 4, 1]}'></div>
+    <aside class="callout note"><p>Browser cells use NumPy and scikit-learn, whose first import takes several seconds
+      while Pyodide downloads them. PyTorch is not available in the browser; its cells are marked "run locally".</p></aside>
+    <p><strong>Remember:</strong> neuron = weighted sum + bias + nonlinearity. Layers of neurons can represent boundaries
+      no single line can.</p>
+  </section>
+
+  <section class="lesson-section" id="activations">
+    <h2>Activation functions</h2>
+    <p>Without a nonlinearity, stacking layers is pointless: <code>W<sub>2</sub>(W<sub>1</sub>x)</code> is just
+      <code>(W<sub>2</sub>W<sub>1</sub>)x</code>, another linear map. The activation is what lets depth add power. Three
+      you must know:</p>
+    <ul>
+      <li><strong>Sigmoid</strong> <code>σ(z) = 1/(1 + e<sup>−z</sup>)</code>: squashes to (0, 1). Derivative
+        <code>σ(z)(1 − σ(z))</code>, at most 0.25. Used for binary outputs; rarely in hidden layers now.</li>
+      <li><strong>tanh</strong> <code>tanh(z)</code>: squashes to (−1, 1), zero-centered. Derivative
+        <code>1 − tanh²(z)</code>, at most 1. Better than sigmoid for hidden layers, still saturates.</li>
+      <li><strong>ReLU</strong> (rectified linear unit) <code>max(0, z)</code>: derivative 1 for positive inputs, 0 for
+        negative. Cheap, does not saturate for positive values, the default in modern hidden layers. A neuron whose
+        input is always negative stops learning ("dead ReLU"); variants such as Leaky ReLU and GELU soften that.</li>
+    </ul>
+    <div class="runnable" data-title="Plot the activations and their derivatives">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+z = np.linspace(-5, 5, 400)
+sig = 1 / (1 + np.exp(-z))
+acts = {
+    "sigmoid": (sig, sig * (1 - sig)),
+    "tanh": (np.tanh(z), 1 - np.tanh(z) ** 2),
+    "ReLU": (np.maximum(0, z), (z > 0).astype(float)),
+}
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.2))
+for ax, (name, (f, df)) in zip(axes, acts.items()):
+    ax.plot(z, f, label=name)
+    ax.plot(z, df, linestyle="--", label="derivative")
+    ax.axhline(0, color="gray", linewidth=0.5); ax.set_title(name); ax.legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the derivatives" data-predict>
+<textarea>
+import numpy as np
+z = np.array([-3.0, 0.0, 3.0])
+s = 1 / (1 + np.exp(-z))
+print((s * (1 - s)).round(3), (z > 0).astype(int))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> the activation supplies the nonlinearity; sigmoid/tanh saturate (tiny derivatives for
+      large |z|), ReLU does not for positive inputs, which is why it is the hidden-layer default.</p>
+  </section>
+
+  <section class="lesson-section" id="forward">
+    <h2>The forward pass in matrix form</h2>
+    <p>Process a whole <strong>batch</strong> of <code>n</code> examples at once. Put them in rows of
+      <code>X</code> (shape <code>(n, d)</code>). A dense layer with <code>h</code> neurons has a weight matrix
+      <code>W</code> of shape <code>(d, h)</code> (column <code>j</code> holds neuron <code>j</code>'s weights) and a bias
+      vector <code>b</code> of shape <code>(h,)</code>:</p>
+    <p style="text-align:center"><code>Z = X W + b</code> (shape <code>(n, h)</code>),&nbsp;&nbsp; <code>A = g(Z)</code></p>
+    <p>NumPy broadcasting adds <code>b</code> to every row. A two-layer network for binary classification is then</p>
+    <pre><code class="language-python">Z1 = X @ W1 + b1        # (n, d) @ (d, h) -> (n, h)
+A1 = np.tanh(Z1)         # hidden activations
+Z2 = A1 @ W2 + b2        # (n, h) @ (h, 1) -> (n, 1)
+P  = sigmoid(Z2)         # probability of class 1</code></pre>
+    <p>For <em>k</em> classes the output layer has <em>k</em> neurons and the <strong>softmax</strong> turns their
+      scores (logits) into probabilities that sum to 1: <code>softmax(z)<sub>j</sub> = e<sup>z<sub>j</sub></sup> /
+      Σ<sub>m</sub> e<sup>z<sub>m</sub></sup></code>. Subtract the row maximum before exponentiating; it does not change
+      the result and prevents overflow. The loss is cross-entropy: minus the log of the probability given to the true
+      class.</p>
+    <div class="viz" data-viz="matrix" data-config='{"op": "matmul"}'></div>
+    <div class="runnable" data-title="A forward pass with shapes printed">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, d, h, k = 5, 3, 4, 2
+X = rng.normal(size=(n, d))
+W1, b1 = rng.normal(size=(d, h)), np.zeros(h)
+W2, b2 = rng.normal(size=(h, k)), np.zeros(k)
+
+def softmax(Z):
+    Z = Z - Z.max(axis=1, keepdims=True)        # numerical stability
+    E = np.exp(Z)
+    return E / E.sum(axis=1, keepdims=True)
+
+Z1 = X @ W1 + b1; A1 = np.maximum(0, Z1)
+Z2 = A1 @ W2 + b2; P = softmax(Z2)
+for name, arr in [("X", X), ("W1", W1), ("Z1", Z1), ("A1", A1), ("W2", W2), ("Z2", Z2), ("P", P)]:
+    print(f"{name:3s} {arr.shape}")
+print("rows of P sum to 1:", np.allclose(P.sum(axis=1), 1))
+y = np.array([0, 1, 1, 0, 1])
+print("cross-entropy:", round(float(-np.mean(np.log(P[np.arange(n), y]))), 4))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the parameter count" data-predict>
+<textarea>
+layers = [784, 128, 64, 10]
+params = sum(a * b + b for a, b in zip(layers, layers[1:]))
+print(params)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> each layer is <code>g(XW + b)</code>; <code>W</code> is <code>(inputs, outputs)</code>;
+      softmax + cross-entropy for multi-class outputs; print shapes.</p>
+  </section>
+
+  <section class="lesson-section" id="backprop">
+    <h2>Backpropagation and the computational graph</h2>
+    <p>Training needs the gradient of the loss with respect to <em>every</em> weight. <strong>Backpropagation</strong> is
+      the chain rule applied efficiently: run the forward pass, keep the intermediate values, then walk backwards from the
+      loss, multiplying local derivatives. It is easiest to see on a <strong>computational graph</strong>, where each node
+      is one simple operation.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 230" role="img" aria-label="Computational graph for one neuron: x and w multiply, add b to get z, sigmoid gives p, loss L compares p with y. Forward values flow right; gradients flow left.">
+        <defs>
+          <marker id="m58-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-1)"/></marker>
+          <marker id="m58-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-3)"/></marker>
+        </defs>
+        <g font-size="13" text-anchor="middle" fill="var(--fg)">
+          <circle cx="50" cy="60" r="22" fill="none" stroke="var(--border-strong)"/><text x="50" y="65">x</text>
+          <circle cx="50" cy="150" r="22" fill="none" stroke="var(--border-strong)"/><text x="50" y="155">w</text>
+          <circle cx="170" cy="105" r="24" fill="var(--viz-1)" opacity="0.15" stroke="var(--viz-1)"/><text x="170" y="110">×</text>
+          <circle cx="170" cy="195" r="20" fill="none" stroke="var(--border-strong)"/><text x="170" y="200">b</text>
+          <circle cx="290" cy="105" r="24" fill="var(--viz-1)" opacity="0.15" stroke="var(--viz-1)"/><text x="290" y="110">+</text>
+          <circle cx="410" cy="105" r="24" fill="var(--viz-1)" opacity="0.15" stroke="var(--viz-1)"/><text x="410" y="110">σ</text>
+          <circle cx="530" cy="105" r="24" fill="var(--viz-2)" opacity="0.2" stroke="var(--viz-2)"/><text x="530" y="110">L</text>
+          <circle cx="530" cy="195" r="20" fill="none" stroke="var(--border-strong)"/><text x="530" y="200">y</text>
+        </g>
+        <g stroke="var(--viz-1)" stroke-width="1.6" marker-end="url(#m58-f)">
+          <line x1="70" y1="70" x2="148" y2="98"/><line x1="70" y1="140" x2="148" y2="113"/>
+          <line x1="194" y1="105" x2="264" y2="105"/><line x1="185" y1="178" x2="272" y2="122"/>
+          <line x1="314" y1="105" x2="384" y2="105"/><line x1="434" y1="105" x2="504" y2="105"/><line x1="530" y1="175" x2="530" y2="131"/>
+        </g>
+        <g font-size="11" fill="var(--viz-1)" text-anchor="middle">
+          <text x="229" y="96">u = w·x</text><text x="349" y="96">z = u + b</text><text x="469" y="96">p = σ(z)</text>
+        </g>
+        <g stroke="var(--viz-3)" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#m58-b)">
+          <path d="M 510 125 Q 470 150 432 125" fill="none"/><path d="M 390 125 Q 350 150 312 125" fill="none"/>
+          <path d="M 270 125 Q 230 150 192 125" fill="none"/><path d="M 150 120 Q 100 165 72 158" fill="none"/>
+        </g>
+        <g font-size="11" fill="var(--viz-3)" text-anchor="middle">
+          <text x="470" y="165">∂L/∂p</text><text x="350" y="165">× σ'(z)</text><text x="230" y="165">× 1</text><text x="96" y="182">× x</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)">
+          <text x="20" y="20">solid: forward pass computes values</text>
+          <text x="330" y="20">dashed: backward pass multiplies local derivatives</text>
+        </g>
+      </svg>
+      <figcaption>One neuron as a graph. ∂L/∂w = ∂L/∂p · σ'(z) · 1 · x: the chain rule, read right to left.</figcaption>
+    </figure>
+    <p>Each node only needs to know its own <strong>local derivative</strong>. Multiplication <code>u = w·x</code> sends
+      back <code>x</code> to <code>w</code> (and <code>w</code> to <code>x</code>); addition passes gradients through
+      unchanged; sigmoid multiplies by <code>σ(z)(1 − σ(z))</code>. With binary cross-entropy, the product
+      <code>∂L/∂p · σ'(z)</code> simplifies to just <code>p − y</code>, which is why output-layer gradients look so
+      clean.</p>
+    <p>For the two-layer network, backprop in matrix form (averaging over the batch of <code>n</code>) is:</p>
+    <pre><code class="language-python">dZ2 = (P - y) / n                 # (n, 1)   output error
+dW2 = A1.T @ dZ2                  # (h, 1)   "error times input" again
+db2 = dZ2.sum(axis=0)             # (1,)
+dA1 = dZ2 @ W2.T                  # (n, h)   send the error back through W2
+dZ1 = dA1 * (1 - A1 ** 2)         # (n, h)   times tanh's local derivative
+dW1 = X.T @ dZ1                   # (d, h)
+db1 = dZ1.sum(axis=0)             # (h,)</code></pre>
+    <p>Every gradient has the same shape as the parameter it belongs to: a quick sanity check. The authoritative check is
+      a <strong>numerical gradient</strong>: nudge one weight by a tiny <code>ε</code> both ways and measure the change in
+      loss, <code>(L(w + ε) − L(w − ε)) / 2ε</code>. If it matches your analytic gradient to about 6 decimal places, your
+      backprop is right.</p>
+    <div class="runnable" data-title="Gradient check: backprop vs numerical">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(6, 2)); y = rng.integers(0, 2, size=(6, 1)).astype(float)
+params = {"W1": rng.normal(size=(2, 3)), "b1": np.zeros(3), "W2": rng.normal(size=(3, 1)), "b2": np.zeros(1)}
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+
+def loss_and_grads(p):
+    A1 = np.tanh(X @ p["W1"] + p["b1"]); P = sigmoid(A1 @ p["W2"] + p["b2"])
+    loss = -np.mean(y * np.log(P) + (1 - y) * np.log(1 - P))
+    dZ2 = (P - y) / len(X)
+    dZ1 = dZ2 @ p["W2"].T * (1 - A1 ** 2)
+    return loss, {"W1": X.T @ dZ1, "b1": dZ1.sum(0), "W2": A1.T @ dZ2, "b2": dZ2.sum(0)}
+
+_, grads = loss_and_grads(params)
+eps = 1e-6
+for name, value in params.items():
+    numeric = np.zeros_like(value)
+    for idx in np.ndindex(value.shape):
+        old = value[idx]
+        value[idx] = old + eps; up, _ = loss_and_grads(params)
+        value[idx] = old - eps; down, _ = loss_and_grads(params)
+        value[idx] = old
+        numeric[idx] = (up - down) / (2 * eps)
+    print(f"{name}: max |backprop - numerical| = {np.abs(grads[name] - numeric).max():.2e}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> forward computes and caches values; backward multiplies local derivatives from the loss
+      back to each weight; gradients match parameter shapes; verify with a numerical check.</p>
+  </section>
+
+  <section class="lesson-section" id="training">
+    <h2>Training a two-layer network: XOR and moons</h2>
+    <p>Put the pieces together: initialize, then repeat forward, loss, backward, update. First, XOR, the problem a single
+      neuron cannot solve.</p>
+    <div class="runnable" data-title="Learn XOR with a 2-4-1 network">
+<textarea>
+import numpy as np
+
+X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=float)
+y = np.array([[0], [1], [1], [0]], dtype=float)
+rng = np.random.default_rng(1)
+W1, b1 = rng.normal(0, 1, (2, 4)), np.zeros(4)
+W2, b2 = rng.normal(0, 1, (4, 1)), np.zeros(1)
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+lr = 1.0
+
+for epoch in range(3001):
+    A1 = np.tanh(X @ W1 + b1)                    # forward
+    P = sigmoid(A1 @ W2 + b2)
+    loss = -np.mean(y * np.log(P) + (1 - y) * np.log(1 - P))
+    dZ2 = (P - y) / len(X)                       # backward
+    dW2, db2 = A1.T @ dZ2, dZ2.sum(0)
+    dZ1 = dZ2 @ W2.T * (1 - A1 ** 2)
+    dW1, db1 = X.T @ dZ1, dZ1.sum(0)
+    W1 -= lr * dW1; b1 -= lr * db1; W2 -= lr * dW2; b2 -= lr * db2     # update
+    if epoch % 500 == 0:
+        print(f"epoch {epoch:4d}  loss {loss:.4f}")
+print("predictions:", P.ravel().round(3), "  targets:", y.ravel())
+</textarea>
+    </div>
+    <aside class="callout think"><p>Change the seed to <code>default_rng(0)</code> and the learning rate to
+      <code>0.5</code>. The loss stalls near 0.35 and two predictions stay at 0.5: the network is stuck in a poor local
+      minimum. Neural network losses are not bowl-shaped like linear regression's; initialization and learning rate
+      matter, and practitioners run several seeds.</p></aside>
+    <p>Now a slightly bigger problem with a curved boundary, plotted:</p>
+    <div class="runnable" data-title="A 2-16-1 network on make_moons">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_moons
+
+X, y = make_moons(n_samples=400, noise=0.2, random_state=0)
+y = y.reshape(-1, 1).astype(float)
+rng = np.random.default_rng(1)
+H = 16
+W1, b1 = rng.normal(0, np.sqrt(1 / 2), (2, H)), np.zeros(H)
+W2, b2 = rng.normal(0, np.sqrt(1 / H), (H, 1)), np.zeros(1)
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+
+def forward(X):
+    A1 = np.tanh(X @ W1 + b1)
+    return A1, sigmoid(A1 @ W2 + b2)
+
+losses = []
+for epoch in range(2000):
+    A1, P = forward(X)
+    losses.append(float(-np.mean(y * np.log(P) + (1 - y) * np.log(1 - P))))
+    dZ2 = (P - y) / len(X)
+    dZ1 = dZ2 @ W2.T * (1 - A1 ** 2)
+    W2 -= 1.0 * (A1.T @ dZ2); b2 -= 1.0 * dZ2.sum(0)
+    W1 -= 1.0 * (X.T @ dZ1); b1 -= 1.0 * dZ1.sum(0)
+print("training accuracy:", np.mean((forward(X)[1] > 0.5) == y))
+
+xx, yy = np.meshgrid(np.linspace(-1.8, 2.8, 200), np.linspace(-1.3, 1.8, 200))
+_, grid = forward(np.column_stack([xx.ravel(), yy.ravel()]))
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 3.8))
+a1.contourf(xx, yy, grid.reshape(xx.shape), levels=20, cmap="RdBu", alpha=0.6)
+a1.scatter(X[:, 0], X[:, 1], c=y.ravel(), cmap="RdBu", edgecolor="k", s=12); a1.set_title("Learned boundary")
+a2.plot(losses); a2.set(title="Training loss", xlabel="epoch", yscale="log")
+fig.tight_layout()
+</textarea>
+    </div>
+    <p>The neural-net visualizer can train XOR too; set it to train mode and compare its loss curve with the cell's.</p>
+    <div class="viz" data-viz="neural-net" data-config='{"layers": [2, 3, 1], "mode": "train"}'></div>
+    <p><strong>Remember:</strong> the training loop is forward → loss → backward → update; neural losses have local
+      minima, so seeds and learning rates matter.</p>
+  </section>
+
+  <section class="lesson-section" id="sgd">
+    <h2>Mini-batches and stochastic gradient descent</h2>
+    <p>So far every step used the whole dataset (<strong>full-batch</strong> gradient descent). With a million images
+      that is far too slow per step. <strong>Stochastic gradient descent (SGD)</strong> estimates the gradient from a small
+      random <strong>mini-batch</strong> (typically 32–512 examples), takes a step, and moves on. One pass through all the
+      data is an <strong>epoch</strong>. The gradient estimates are noisy, but there are many more steps per epoch, and
+      the noise even helps escape poor regions. Shuffle the data every epoch so batches differ.</p>
+    <p>Plain SGD has popular refinements: <strong>momentum</strong> (keep a running average of gradients, like a ball
+      rolling downhill) and <strong>Adam</strong> (per-parameter adaptive step sizes). Try momentum on the Rosenbrock
+      valley below, then compare with plain descent.</p>
+    <div class="viz" data-viz="gradient-descent" data-config='{"fn": "rosenbrock"}'></div>
+    <div class="runnable" data-title="Full batch vs mini-batches">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_moons
+
+X, y = make_moons(n_samples=2000, noise=0.2, random_state=0)
+y = y.reshape(-1, 1).astype(float)
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+
+def train(batch_size, epochs=15, lr=0.5, seed=0):
+    rng = np.random.default_rng(seed)
+    W1, b1 = rng.normal(0, 0.7, (2, 16)), np.zeros(16)
+    W2, b2 = rng.normal(0, 0.25, (16, 1)), np.zeros(1)
+    curve, steps = [], 0
+    for _ in range(epochs):
+        order = rng.permutation(len(X))                      # shuffle each epoch
+        for start in range(0, len(X), batch_size):
+            idx = order[start:start + batch_size]
+            Xb, yb = X[idx], y[idx]
+            A1 = np.tanh(Xb @ W1 + b1); P = sigmoid(A1 @ W2 + b2)
+            dZ2 = (P - yb) / len(Xb); dZ1 = dZ2 @ W2.T * (1 - A1 ** 2)
+            W2 -= lr * A1.T @ dZ2; b2 -= lr * dZ2.sum(0); W1 -= lr * Xb.T @ dZ1; b1 -= lr * dZ1.sum(0)
+            steps += 1
+        P = sigmoid(np.tanh(X @ W1 + b1) @ W2 + b2)
+        curve.append(float(-np.mean(y * np.log(P) + (1 - y) * np.log(1 - P))))
+    return curve, steps
+
+for bs in (2000, 256, 32):
+    curve, steps = train(bs)
+    plt.plot(curve, label=f"batch {bs}: {steps} steps, final loss {curve[-1]:.3f}")
+plt.xlabel("epoch"); plt.ylabel("full training loss"); plt.legend(); plt.title("Same epochs, more (noisier) steps")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> SGD uses mini-batches for cheap, noisy, frequent steps; shuffle each epoch; momentum and
+      Adam are the usual upgrades.</p>
+  </section>
+
+  <section class="lesson-section" id="init-vanishing">
+    <h2>Initialization and vanishing gradients</h2>
+    <p>If all weights start at zero, every hidden neuron computes the same thing and receives the same gradient, forever:
+      the symmetry never breaks. So weights start random. But the <em>scale</em> matters. Each layer multiplies the signal
+      by its weights; too large and activations explode, too small and they shrink toward zero layer after layer. The fix
+      is to scale the random weights by the number of inputs: <strong>Xavier/Glorot</strong> initialization
+      (variance about <code>1/fan_in</code>) for tanh and sigmoid, <strong>He</strong> initialization (variance
+      <code>2/fan_in</code>) for ReLU.</p>
+    <p>Backpropagation multiplies one local derivative per layer. Sigmoid's derivative is at most 0.25, so after 10
+      sigmoid layers the gradient reaching the first layer can be smaller than 0.25¹⁰ ≈ 10⁻⁶: early layers barely learn.
+      That is the <strong>vanishing gradient problem</strong>, and it held deep learning back for years. ReLU (derivative
+      1 when active), careful initialization, normalization layers, and residual (skip) connections are the cures.</p>
+    <div class="runnable" data-title="Gradient size by layer: sigmoid vs ReLU">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+def gradient_norms(activation, depth=15, width=64, seed=0):
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=(128, width))
+    Ws, cache = [], []
+    for _ in range(depth):                                  # forward
+        scale = np.sqrt(2 / width) if activation == "relu" else np.sqrt(1 / width)
+        W = rng.normal(0, scale, (width, width)); Ws.append(W)
+        z = x @ W
+        x = np.maximum(0, z) if activation == "relu" else 1 / (1 + np.exp(-z))
+        cache.append((z, x))
+    g = np.ones_like(x)                                     # pretend dLoss/dOutput = 1
+    norms = []
+    for W, (z, a) in zip(reversed(Ws), reversed(cache)):    # backward
+        local = (z > 0).astype(float) if activation == "relu" else a * (1 - a)
+        g = (g * local) @ W.T
+        norms.append(np.linalg.norm(g))
+    return norms[::-1]                                      # layer 1 first
+
+for act in ("sigmoid", "relu"):
+    plt.semilogy(range(1, 16), gradient_norms(act), "o-", label=act)
+plt.xlabel("layer (1 = closest to the input)"); plt.ylabel("gradient norm"); plt.legend()
+plt.title("Sigmoid gradients vanish toward the input; ReLU + He init keeps them steady")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> random, fan-in-scaled initialization (Xavier for tanh/sigmoid, He for ReLU); sigmoid
+      stacks vanish gradients; ReLU and skip connections keep deep networks trainable.</p>
+  </section>
+
+  <section class="lesson-section" id="regularization">
+    <h2>Overfitting and regularization</h2>
+    <p>A network with thousands of weights can memorize a small dataset. Everything from M55 applies: watch training vs
+      validation loss, and regularize:</p>
+    <ul>
+      <li><strong>Weight decay</strong> (L2): add <code>λ · Σw²</code> to the loss, which adds <code>2λw</code> to each
+        weight's gradient and shrinks weights every step.</li>
+      <li><strong>Early stopping</strong>: track validation loss each epoch and keep the weights from the best epoch.</li>
+      <li><strong>Dropout</strong>: during training, randomly set each hidden activation to zero with probability
+        <code>p</code> (say 0.5) and scale the survivors by <code>1/(1 − p)</code>. Neurons cannot rely on specific
+        partners, so the network learns redundant, robust features; it behaves like averaging many thinned networks. At
+        prediction time dropout is off.</li>
+      <li><strong>More data</strong> and <strong>data augmentation</strong> (flipped or cropped images, for example).</li>
+    </ul>
+    <div class="runnable" data-title="Inverted dropout in four lines">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(0)
+A = np.ones((1000, 64))                # pretend hidden activations for a batch
+p = 0.5                                # drop probability
+mask = rng.random(A.shape) >= p        # keep with probability 1 - p
+A_train = A * mask / (1 - p)           # scale survivors so the expected value is unchanged
+print(A_train[:3, :8])
+print("fraction dropped:", round(1 - mask.mean(), 3))
+print("mean activation, train vs no dropout:", A_train.mean().round(3), A.mean())
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> weight decay, early stopping, and dropout fight overfitting; dropout only runs during
+      training, with inverted scaling.</p>
+  </section>
+
+  <section class="lesson-section" id="pytorch">
+    <h2>PyTorch: the same network, automated</h2>
+    <p>Writing backprop by hand teaches you what is happening. In practice you use a framework that computes gradients
+      automatically. <strong>PyTorch</strong> is the most widely used for research and much of industry. Its core ideas map
+      one-to-one onto what you just built:</p>
+    <table>
+      <thead><tr><th>You wrote</th><th>PyTorch</th></tr></thead>
+      <tbody>
+        <tr><td>NumPy arrays</td><td><code>torch.Tensor</code> (same idea, can live on a GPU)</td></tr>
+        <tr><td>The backward pass by hand</td><td><strong>autograd</strong>: <code>loss.backward()</code> fills every parameter's <code>.grad</code></td></tr>
+        <tr><td><code>W1</code>, <code>b1</code>, … and the forward function</td><td>an <code>nn.Module</code> with layers such as <code>nn.Linear</code></td></tr>
+        <tr><td><code>W -= lr * dW</code></td><td>an optimizer: <code>torch.optim.SGD</code> or <code>Adam</code>, <code>optimizer.step()</code></td></tr>
+        <tr><td>Shuffled mini-batches</td><td><code>torch.utils.data.DataLoader</code></td></tr>
+      </tbody>
+    </table>
+    <aside class="callout pixi"><p>PyTorch is not part of the browser runtime and not in this course's default
+      environment, so the cells below run locally. In your own Pixi project, add it from conda-forge, where the package is
+      named <code>pytorch</code> (you still <code>import torch</code>):</p>
+      <pre data-label="Terminal"><code class="language-bash">pixi add pytorch
+pixi run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"</code></pre>
+      <p>The download is large (hundreds of megabytes). Whether you get a CPU-only or a CUDA (NVIDIA GPU) build depends on
+      your platform and on what Pixi detects; on a machine without an NVIDIA GPU you get a CPU build, which is all this
+      module needs. If you need a GPU build, consult the Pixi documentation on system requirements (the
+      <code>[system-requirements]</code> table, for example declaring a CUDA version) and PyTorch's own install notes,
+      because the details change between releases. Never mix in <code>pip install torch</code>; keep one environment
+      managed by Pixi.</p></aside>
+    <h3>Tensors and autograd</h3>
+    <div class="runnable" data-title="Autograd computes the gradient you derived" data-local="PyTorch is not available in the browser; run locally after `pixi add pytorch`.">
+<textarea>
+import torch
+
+x = torch.tensor([2.0, -1.0])
+w = torch.tensor([0.5, 0.3], requires_grad=True)     # track operations on w
+b = torch.tensor(0.1, requires_grad=True)
+y = torch.tensor(1.0)
+
+p = torch.sigmoid(w @ x + b)                          # forward builds a graph
+loss = -(y * torch.log(p) + (1 - y) * torch.log(1 - p))
+loss.backward()                                       # backward walks it
+
+print("autograd dL/dw:", w.grad)
+print("by hand (p - y) * x:", (p.detach() - y) * x)   # the formula from this module
+</textarea>
+    </div>
+    <h3>An nn.Module and a training loop</h3>
+    <div class="runnable" data-title="make_moons in PyTorch" data-local="PyTorch is not available in the browser; run locally after `pixi add pytorch`.">
+<textarea>
+import torch
+from torch import nn
+from sklearn.datasets import make_moons
+
+torch.manual_seed(0)
+X_np, y_np = make_moons(n_samples=1000, noise=0.2, random_state=0)
+X = torch.tensor(X_np, dtype=torch.float32)
+y = torch.tensor(y_np, dtype=torch.float32).unsqueeze(1)
+
+class MLP(nn.Module):
+    def __init__(self, hidden: int = 16) -> None:
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(2, hidden), nn.ReLU(), nn.Linear(hidden, 1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)                      # logits; the loss applies the sigmoid
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = MLP().to(device)
+X, y = X.to(device), y.to(device)
+loss_fn = nn.BCEWithLogitsLoss()                # sigmoid + cross-entropy, numerically stable
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(X, y), batch_size=64, shuffle=True)
+
+for epoch in range(50):
+    model.train()
+    for xb, yb in loader:
+        optimizer.zero_grad()                   # gradients accumulate unless cleared
+        loss = loss_fn(model(xb), yb)           # forward
+        loss.backward()                         # backward (autograd)
+        optimizer.step()                        # update
+    if epoch % 10 == 0:
+        print(f"epoch {epoch:2d} loss {loss.item():.4f}")
+
+model.eval()
+with torch.no_grad():                           # no graph needed for inference
+    accuracy = ((model(X) > 0).float() == y).float().mean().item()
+print(f"accuracy {accuracy:.3f} on {device}")
+</textarea>
+    </div>
+    <p>The <strong>GPU idea</strong>: a graphics card runs thousands of simple arithmetic operations in parallel, and
+      neural networks are mostly big matrix multiplications, exactly that workload. Moving the model and the tensors to the
+      same device (<code>.to("cuda")</code>, or <code>"mps"</code> on Apple silicon) can make training 10–100× faster for
+      large models. For the tiny networks in this module, the CPU is plenty.</p>
+    <aside class="callout warn"><p>The three classic PyTorch bugs: forgetting <code>optimizer.zero_grad()</code> (gradients
+      add up across steps), applying a sigmoid before <code>BCEWithLogitsLoss</code> (it applies one itself), and
+      forgetting <code>model.eval()</code> / <code>torch.no_grad()</code> at inference (dropout stays on; memory is wasted on
+      the graph).</p></aside>
+    <p><strong>Remember:</strong> tensors + autograd + <code>nn.Module</code> + optimizer = the loop you wrote, with
+      <code>zero_grad → forward → loss → backward → step</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="deep-learning">
+    <h2>Where deep learning shines</h2>
+    <p>On small tabular datasets, gradient-boosted trees (M56) usually beat neural networks with far less effort. Deep
+      learning wins when the input has rich structure and there is a lot of data, because architectures can build that
+      structure in:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Convolutional networks (CNNs)</h4><p>Images. A small filter (say 3×3 weights) slides over the
+        image, so the same pattern detector is reused everywhere; stacked layers detect edges, then textures, then parts,
+        then objects. Far fewer weights than a dense layer on raw pixels.</p></div>
+      <div class="card"><h4>Recurrent networks (RNNs, LSTMs)</h4><p>Sequences processed one step at a time with a hidden
+        state carried forward. Historically used for text, speech, and time series; largely replaced by transformers for
+        language.</p></div>
+      <div class="card"><h4>Transformers</h4><p>Sequences processed with <strong>attention</strong>: every position computes
+        how much to look at every other position, in parallel. The architecture behind modern language models, and
+        increasingly used for images, audio, and proteins.</p></div>
+      <div class="card"><h4>Embeddings and transfer learning</h4><p>Networks pretrained on huge datasets produce embeddings
+        (M57) you can reuse, or fine-tune on your small dataset. Most practical deep learning starts from a pretrained
+        model.</p></div>
+    </div>
+    <p><strong>Remember:</strong> trees for tables, deep learning for images, audio, and text; start from pretrained models
+      when you can.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>NumPy is available. The tests check values, shapes, and gradients numerically.</p>
+
+    <div class="exercise" data-id="m58-e1" data-title="ReLU and its derivative">
+      <div class="exercise-prompt">
+        <p>Write <code>relu(z)</code> returning <code>max(0, z)</code> element-wise, and <code>relu_grad(z)</code> returning
+          1.0 where <code>z &gt; 0</code> and 0.0 elsewhere (use 0 at exactly <code>z = 0</code>). Both take and return NumPy
+          float arrays of the same shape.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def relu(z):
+    ...
+
+def relu_grad(z):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_relu():
+    z = np.array([[-2.0, 0.0], [0.5, 3.0]])
+    assert np.array_equal(relu(z), [[0.0, 0.0], [0.5, 3.0]]), "negatives become 0, positives pass through"
+    assert relu(z).shape == z.shape, "keep the shape"
+
+def test_relu_grad():
+    z = np.array([-1.0, 0.0, 2.0])
+    g = relu_grad(z)
+    assert np.array_equal(g, [0.0, 0.0, 1.0]), f"derivative is 1 only where z > 0, got {g}"
+    assert g.dtype.kind == "f", "return floats, not booleans"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>np.maximum(0, z)</code> and <code>(z &gt; 0).astype(float)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def relu(z):
+    return np.maximum(0.0, z)
+
+def relu_grad(z):
+    return (np.asarray(z) &gt; 0).astype(float)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m58-e2" data-title="A numerically stable softmax">
+      <div class="exercise-prompt">
+        <p>Write <code>softmax(Z)</code> for a 2-D array of logits (one row per example) that returns probabilities with
+          each row summing to 1. Subtract each row's maximum first so that huge logits such as 1000 do not overflow.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def softmax(Z):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_rows_sum_to_one():
+    P = softmax(np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]]))
+    assert np.allclose(P.sum(axis=1), 1.0), "each row must sum to 1"
+    assert np.allclose(P[1], 1 / 3), "equal logits -> equal probabilities"
+
+def test_known_values():
+    P = softmax(np.array([[0.0, np.log(3.0)]]))
+    assert np.allclose(P, [[0.25, 0.75]]), "exp(0) : exp(log 3) = 1 : 3"
+
+def test_large_logits():
+    P = softmax(np.array([[1000.0, 1001.0]]))
+    assert np.all(np.isfinite(P)), "no overflow: subtract the row max"
+    assert np.allclose(P, softmax(np.array([[0.0, 1.0]]))), "softmax is unchanged by adding a constant to a row"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>Z - Z.max(axis=1, keepdims=True)</code>, exponentiate, divide by
+        the row sums with <code>keepdims=True</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def softmax(Z):
+    Z = np.asarray(Z, dtype=float)
+    E = np.exp(Z - Z.max(axis=1, keepdims=True))
+    return E / E.sum(axis=1, keepdims=True)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m58-e3" data-title="Forward pass through a list of layers">
+      <div class="exercise-prompt">
+        <p>Write <code>forward(X, layers)</code> where <code>layers</code> is a list of <code>(W, b)</code> tuples. Apply
+          <code>X @ W + b</code> for each layer, with ReLU after every layer <em>except the last</em>, and return the final
+          output (the logits).</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def forward(X, layers):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_shapes():
+    rng = np.random.default_rng(0)
+    layers = [(rng.normal(size=(4, 8)), np.zeros(8)), (rng.normal(size=(8, 3)), np.zeros(3))]
+    out = forward(rng.normal(size=(5, 4)), layers)
+    assert out.shape == (5, 3), f"(5, 4) through 4->8->3 should give (5, 3), got {out.shape}"
+
+def test_values():
+    X = np.array([[1.0, -1.0]])
+    layers = [(np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([0.0, 0.0])), (np.array([[2.0], [3.0]]), np.array([1.0]))]
+    out = forward(X, layers)
+    assert np.allclose(out, [[3.0]]), "hidden = relu([1, -1]) = [1, 0]; output = 1*2 + 0*3 + 1 = 3"
+
+def test_no_relu_on_last():
+    out = forward(np.array([[1.0]]), [(np.array([[-5.0]]), np.array([0.0]))])
+    assert np.allclose(out, [[-5.0]]), "the last layer outputs raw logits (no ReLU)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop with <code>enumerate(layers)</code> and apply ReLU when
+        <code>i &lt; len(layers) - 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def forward(X, layers):
+    A = np.asarray(X, dtype=float)
+    for i, (W, b) in enumerate(layers):
+        A = A @ W + b
+        if i &lt; len(layers) - 1:
+            A = np.maximum(0.0, A)
+    return A</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m58-e4" data-title="Numerical gradient">
+      <div class="exercise-prompt">
+        <p>Write <code>numerical_gradient(f, w, eps=1e-6)</code>. <code>f</code> takes an array shaped like <code>w</code>
+          and returns a float. Return an array of the same shape where each entry is the central difference
+          <code>(f(w + ε·eᵢ) − f(w − ε·eᵢ)) / 2ε</code>. Do not modify the caller's <code>w</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def numerical_gradient(f, w, eps=1e-6):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_quadratic():
+    w = np.array([1.0, -2.0, 3.0])
+    g = numerical_gradient(lambda v: float(np.sum(v ** 2)), w)
+    assert np.allclose(g, 2 * w, atol=1e-5), f"the gradient of sum(w^2) is 2w, got {g}"
+
+def test_matrix_shape():
+    W = np.arange(6.0).reshape(2, 3)
+    g = numerical_gradient(lambda M: float(np.sum(M * np.array([[1, 2, 3], [4, 5, 6]]))), W)
+    assert g.shape == (2, 3) and np.allclose(g, [[1, 2, 3], [4, 5, 6]], atol=1e-5), "works for 2-D arrays"
+
+def test_does_not_mutate():
+    w = np.array([0.5, 0.5])
+    numerical_gradient(lambda v: float(v[0] * v[1]), w)
+    assert np.array_equal(w, [0.5, 0.5]), "w must be unchanged afterwards"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Work on <code>w = w.astype(float).copy()</code>; loop over
+        <code>np.ndindex(w.shape)</code>, nudge one entry up and down, and restore it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def numerical_gradient(f, w, eps=1e-6):
+    w = np.array(w, dtype=float, copy=True)
+    grad = np.zeros_like(w)
+    for idx in np.ndindex(w.shape):
+        old = w[idx]
+        w[idx] = old + eps
+        up = f(w)
+        w[idx] = old - eps
+        down = f(w)
+        w[idx] = old
+        grad[idx] = (up - down) / (2 * eps)
+    return grad</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m58-e5" data-title="Backprop for a two-layer network">
+      <div class="exercise-prompt">
+        <p>Write <code>backprop(X, y, W1, b1, W2, b2)</code> for the network <code>A1 = tanh(X W1 + b1)</code>,
+          <code>P = sigmoid(A1 W2 + b2)</code> with mean binary cross-entropy loss. <code>y</code> has shape
+          <code>(n, 1)</code>. Return <code>(loss, grads)</code> where <code>grads</code> is a dict with keys
+          <code>"W1"</code>, <code>"b1"</code>, <code>"W2"</code>, <code>"b2"</code>, each the same shape as its parameter.
+          The tests compare against numerical gradients.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def backprop(X, y, W1, b1, W2, b2):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+rng = np.random.default_rng(3)
+X = rng.normal(size=(7, 3)); y = rng.integers(0, 2, size=(7, 1)).astype(float)
+P0 = {"W1": rng.normal(size=(3, 4)), "b1": rng.normal(size=4), "W2": rng.normal(size=(4, 1)), "b2": rng.normal(size=1)}
+
+def _loss(params):
+    A1 = np.tanh(X @ params["W1"] + params["b1"])
+    P = 1 / (1 + np.exp(-(A1 @ params["W2"] + params["b2"])))
+    return float(-np.mean(y * np.log(P) + (1 - y) * np.log(1 - P)))
+
+def test_loss_value():
+    loss, _ = backprop(X, y, **P0)
+    assert abs(loss - _loss(P0)) < 1e-9, "loss should be mean binary cross-entropy"
+
+def test_shapes():
+    _, g = backprop(X, y, **P0)
+    for k in P0:
+        assert np.shape(g[k]) == P0[k].shape, f"grads[{k!r}] should have shape {P0[k].shape}, got {np.shape(g[k])}"
+
+def test_matches_numerical():
+    _, g = backprop(X, y, **P0)
+    eps = 1e-6
+    for k, v in P0.items():
+        num = np.zeros_like(v)
+        for idx in np.ndindex(v.shape):
+            p_up = {n: a.copy() for n, a in P0.items()}; p_up[k][idx] += eps
+            p_dn = {n: a.copy() for n, a in P0.items()}; p_dn[k][idx] -= eps
+            num[idx] = (_loss(p_up) - _loss(p_dn)) / (2 * eps)
+        assert np.allclose(g[k], num, atol=1e-6), f"gradient for {k} does not match the numerical estimate"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Follow the matrix-form backprop in this module:
+        <code>dZ2 = (P - y) / n</code>, <code>dZ1 = dZ2 @ W2.T * (1 - A1 ** 2)</code>, then
+        <code>dW = input.T @ dZ</code> and <code>db = dZ.sum(axis=0)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def backprop(X, y, W1, b1, W2, b2):
+    n = len(X)
+    A1 = np.tanh(X @ W1 + b1)
+    P = 1 / (1 + np.exp(-(A1 @ W2 + b2)))
+    loss = float(-np.mean(y * np.log(P) + (1 - y) * np.log(1 - P)))
+    dZ2 = (P - y) / n
+    dZ1 = dZ2 @ W2.T * (1 - A1 ** 2)
+    grads = {"W1": X.T @ dZ1, "b1": dZ1.sum(axis=0), "W2": A1.T @ dZ2, "b2": dZ2.sum(axis=0)}
+    return loss, grads</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">A NumPy MLP that reads handwritten digits</span></div>
+      <div class="widget-body">
+        <p>Build a small neural-network library in pure NumPy and train it on <code>sklearn.datasets.load_digits</code>
+          (1,797 grayscale 8×8 images of the digits 0–9) to more than 90% test accuracy. Set up with
+          <code>pixi init numpy-mlp</code> and <code>pixi add numpy scikit-learn matplotlib pytest</code> (scikit-learn only
+          for the dataset and the split).</p>
+        <ol>
+          <li><code>mlp.py</code>: a <code>Dense</code> layer class with <code>forward(x)</code> (caching its input) and
+            <code>backward(grad_out)</code> (storing <code>dW</code>, <code>db</code> and returning the gradient for its
+            input); <code>ReLU</code> with the same interface; a <code>softmax_cross_entropy(logits, labels)</code> returning
+            the loss and the gradient <code>(softmax − one_hot) / n</code>.</li>
+          <li>An <code>MLP</code> class holding a list of layers, He initialization, and <code>predict(X)</code>.</li>
+          <li><code>train.py</code>: scale pixels to [0, 1] (they range 0–16), stratified split into train/validation/test,
+            mini-batch SGD (batch 32–64, learning rate about 0.1), optional momentum, 30–60 epochs, and early stopping on
+            validation accuracy. Architecture: 64 → 64 → 10 is enough.</li>
+          <li>Plot training and validation loss per epoch, and show a grid of misclassified test digits with predicted and
+            true labels.</li>
+          <li><code>test_mlp.py</code>: a numerical gradient check for <code>Dense</code> and for the full network, a shape
+            test, and a test that one training step reduces the loss on a fixed batch.</li>
+        </ol>
+        <ul class="checklist" data-id="m58-mini">
+          <li>Backprop passes a numerical gradient check to within 1e-6</li>
+          <li>Test accuracy above 90% (the reference reaches about 96–97%)</li>
+          <li>The test set is used once, after early stopping chose the epoch on validation data</li>
+          <li>Training is reproducible with a fixed seed</li>
+          <li>Loss curves and a misclassification grid are saved as PNG files</li>
+          <li>You can explain, in your own words, every line of your backward pass</li>
+        </ul>
+        <p><strong>Stretch:</strong> add dropout and weight decay and measure their effect; implement Adam; then rewrite the
+          model in PyTorch (<code>pixi add pytorch</code>) and confirm you get similar accuracy with a tenth of the code.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m58-quiz">
+<script type="application/json">
+{"title": "Neural networks quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why can a single neuron not learn XOR?", "options": ["It has too few weights to store four examples", "Its decision boundary is a single straight line, and no line separates XOR's classes", "Sigmoid cannot output 0", "XOR needs integer weights"], "answer": 1, "explanation": "<p>One neuron thresholds a linear function, so its boundary is a line. XOR's positive points sit on opposite corners; a hidden layer is needed to bend the space.</p>"},
+  {"type": "single", "prompt": "What happens if you stack linear layers with no activation function?", "options": ["The network becomes more powerful with each layer", "The whole stack collapses to a single linear map", "Training diverges", "Gradients vanish"], "answer": 1, "explanation": "<p>W2(W1 x) = (W2 W1) x. Nonlinear activations are what let depth add expressive power.</p>"},
+  {"type": "output", "prompt": "A batch X has shape (32, 10). The first layer has W of shape (10, 64). What is the shape of X @ W?", "code": "import numpy as np\nprint((np.zeros((32, 10)) @ np.zeros((10, 64))).shape)", "answer": "(32, 64)", "explanation": "<p>(n, inputs) @ (inputs, outputs) gives (n, outputs): 32 examples, 64 hidden units each.</p>"},
+  {"type": "single", "prompt": "What is the maximum value of the sigmoid's derivative?", "options": ["1", "0.5", "0.25", "It is unbounded"], "answer": 2, "explanation": "<p>σ(z)(1 − σ(z)) peaks at z = 0 where σ = 0.5, giving 0.25. Multiplying many such factors makes gradients vanish.</p>"},
+  {"type": "single", "prompt": "In backprop for a dense layer Z = A W + b, what is ∂L/∂W given dZ = ∂L/∂Z?", "options": ["dZ @ W.T", "A.T @ dZ", "dZ.sum(axis=0)", "W.T @ A"], "answer": 1, "explanation": "<p>Input transposed times output gradient: the same 'error times input' pattern as linear regression. <code>dZ @ W.T</code> is the gradient sent back to A; <code>dZ.sum(0)</code> is db.</p>"},
+  {"type": "single", "prompt": "Your analytic gradient and a numerical gradient differ by 0.3 for one weight. What does that most likely mean?", "options": ["Floating-point noise", "A bug in your backward pass", "The learning rate is too high", "The network is overfitting"], "answer": 1, "explanation": "<p>Correct backprop agrees with central differences to roughly 1e-6 or better. A large gap means a wrong formula, a missing term, or a shape/transposition mistake.</p>"},
+  {"type": "multi", "prompt": "Which statements about mini-batch SGD are true?", "options": ["Each step uses a small random subset of the data", "One epoch is one pass through all the training data", "It always reaches a lower loss than full-batch descent", "Shuffling each epoch keeps batches from repeating in the same order"], "answer": [0, 1, 3], "explanation": "<p>SGD trades exact gradients for many cheap noisy steps. It often trains faster in wall-clock time but is not guaranteed to reach a lower loss.</p>"},
+  {"type": "single", "prompt": "Why not initialize all weights to zero?", "options": ["Zero is not a valid float", "Every hidden neuron would compute the same output and get the same update, so they never differentiate", "It causes exploding gradients", "PyTorch forbids it"], "answer": 1, "explanation": "<p>Identical neurons receive identical gradients, so symmetry is never broken. Random initialization, scaled by fan-in, fixes this.</p>"},
+  {"type": "single", "prompt": "What does dropout do at <em>prediction</em> time (inverted dropout)?", "options": ["Drops half the neurons", "Nothing: all neurons are used and no rescaling is needed", "Multiplies activations by p", "Doubles the learning rate"], "answer": 1, "explanation": "<p>With inverted dropout the scaling by 1/(1 − p) happens during training, so inference just uses the full network. In PyTorch, <code>model.eval()</code> switches dropout off.</p>"},
+  {"type": "text", "prompt": "In PyTorch, which tensor method runs the backward pass and fills <code>.grad</code>? (method name only)", "answer": ["backward", "backward()", ".backward()"], "explanation": "<p><code>loss.backward()</code> walks the recorded graph from the loss and accumulates gradients into every tensor with <code>requires_grad=True</code>.</p>"},
+  {"type": "single", "prompt": "Why call <code>optimizer.zero_grad()</code> every step?", "options": ["It resets the weights", "PyTorch accumulates gradients across backward calls, so old gradients must be cleared", "It moves the model to the GPU", "It is only needed for Adam"], "answer": 1, "explanation": "<p>Gradients add up by design (useful for some techniques). Without clearing, each step uses the sum of all previous gradients.</p>"},
+  {"type": "single", "prompt": "On a 5,000-row table of customer features, which model family is usually the strongest first choice?", "options": ["A large transformer", "Gradient-boosted trees", "A convolutional network", "An RNN"], "answer": 1, "explanation": "<p>For small and medium tabular data, gradient boosting typically matches or beats neural networks with much less tuning. Deep learning shines on images, audio, and text.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "layers = [2, 4, 1]\nprint(sum(a * b + b for a, b in zip(layers, layers[1:])))", "answer": "17", "explanation": "<p>Layer 1: 2×4 weights + 4 biases = 12. Layer 2: 4×1 + 1 = 5. Total 17.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A neuron is <code>g(w·x + b)</code>; layers of neurons with nonlinear activations can represent curved boundaries such as XOR's.</li>
+      <li>Sigmoid and tanh saturate; ReLU is the hidden-layer default.</li>
+      <li>Forward pass: <code>A = g(XW + b)</code> per layer; softmax + cross-entropy for classification.</li>
+      <li>Backprop = chain rule on the computational graph; gradients have parameter shapes; verify with numerical gradients.</li>
+      <li>Train with forward → loss → backward → update, using shuffled mini-batches (SGD), possibly with momentum or Adam.</li>
+      <li>Initialize randomly with fan-in scaling; deep sigmoid stacks suffer vanishing gradients.</li>
+      <li>Regularize with weight decay, early stopping, and dropout.</li>
+      <li>PyTorch automates it: tensors, autograd, <code>nn.Module</code>, optimizers, devices. Install with <code>pixi add pytorch</code>.</li>
+      <li>CNNs for images, transformers for sequences and language; trees still win on most small tables.</li>
+    </ul>
+    <div class="flashcards" data-title="Neural networks">
+<script type="application/json">
+[
+  {"front": "A neuron", "back": "a = g(w·x + b): a weighted sum plus bias through a nonlinear activation."},
+  {"front": "Why activations?", "back": "Without them stacked layers collapse into one linear map."},
+  {"front": "ReLU and its derivative", "back": "max(0, z); derivative 1 for z > 0, else 0."},
+  {"front": "Dense layer shapes", "back": "X (n, in) @ W (in, out) + b (out,) -> (n, out)."},
+  {"front": "Softmax", "back": "exp(z_j) / Σ exp(z_m); subtract the row max first for stability."},
+  {"front": "Backpropagation", "back": "Chain rule from the loss backward through the computational graph, multiplying local derivatives."},
+  {"front": "Dense layer gradients", "back": "dW = Aᵀ dZ, db = Σ dZ over the batch, dA = dZ Wᵀ."},
+  {"front": "Gradient check", "back": "Compare backprop with (L(w+ε) − L(w−ε)) / 2ε; they should agree to ~1e-6."},
+  {"front": "Epoch vs step", "back": "A step uses one mini-batch; an epoch is one pass through all training data."},
+  {"front": "Vanishing gradients", "back": "Repeated small local derivatives (sigmoid ≤ 0.25) shrink gradients toward early layers."},
+  {"front": "Dropout", "back": "Randomly zero activations during training (scale survivors by 1/(1−p)); off at inference."},
+  {"front": "PyTorch training step", "back": "optimizer.zero_grad(); loss = loss_fn(model(x), y); loss.backward(); optimizer.step()."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://pytorch.org/tutorials/beginner/basics/intro.html">PyTorch: Learn the Basics</a></li>
+      <li><a href="https://pytorch.org/docs/stable/notes/autograd.html">PyTorch autograd mechanics</a></li>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a> (search for "system requirements" and "PyTorch" before setting up a GPU environment)</li>
+      <li><a href="https://scikit-learn.org/stable/modules/neural_networks_supervised.html">scikit-learn: MLPClassifier</a> (a ready-made MLP for small problems)</li>
+      <li><a href="https://cs231n.github.io/optimization-2/">CS231n notes: backpropagation, intuitions</a></li>
+      <li>Next: <a href="m59-ml-production.html">M59 · ML in Production</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

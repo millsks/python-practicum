@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M33 · Greedy Algorithms &amp; Backtracking · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m33">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 33</p>
+    <h1>Greedy Algorithms &amp; Backtracking</h1>
+    <p class="lede">Two opposite strategies for problems built from choices. A greedy algorithm commits to the best-looking
+      choice and never looks back: fast, simple, and correct only when you can prove it. Backtracking tries every choice
+      but abandons a branch the moment it cannot succeed: slow in the worst case, yet the only practical tool for
+      puzzles, scheduling, and constraint problems.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites:
+      <a href="m32-dynamic-programming.html">M32 Dynamic Programming</a>, <a href="m28-recursion.html">M28 Recursion</a></span></div>
+    <ul class="objectives">
+      <li>State the greedy choice property and prove a greedy algorithm correct with an exchange argument</li>
+      <li>Solve interval scheduling, interval merging, Huffman coding, and fractional knapsack greedily</li>
+      <li>Recognize when greedy fails, with a coin-change counterexample, and fall back to DP</li>
+      <li>Write backtracking as depth-first search over choices with choose / explore / un-choose</li>
+      <li>Generate subsets, permutations, and combinations, and solve N-queens and sudoku</li>
+      <li>Speed up search with pruning, constraint propagation, and branch and bound</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="greedy-choice">
+    <h2>The greedy idea and how to prove it</h2>
+    <p>A <strong>greedy algorithm</strong> builds a solution one piece at a time, always taking the locally best piece
+      according to some rule, and never revisiting a decision. Dijkstra (always settle the closest vertex) and Prim and
+      Kruskal (always add the cheapest safe edge) from <a href="m31-graph-algorithms.html">M31</a> are greedy.</p>
+    <p>Greedy works when the problem has two properties:</p>
+    <ul>
+      <li><strong>Greedy choice property:</strong> some optimal solution begins with the greedy choice.</li>
+      <li><strong>Optimal substructure:</strong> after making the greedy choice, what remains is a smaller instance of
+        the same problem, and an optimal solution to it combines with the greedy choice into an optimal whole.</li>
+    </ul>
+    <p>The standard proof technique is the <strong>exchange argument</strong>: take any optimal solution
+      <em>O</em> that does not start with the greedy choice <em>g</em>. Show you can swap <em>g</em> into
+      <em>O</em> in place of some element without making it worse. Then there is an optimal solution that starts with
+      <em>g</em>, and induction finishes the proof.</p>
+    <aside class="callout warn"><p>A greedy rule that "seems obviously right" is the most common source of wrong
+      algorithms in interviews and in production. Try to break your rule with a small counterexample <em>before</em>
+      you code it. If you cannot prove it, test it against a brute-force oracle on thousands of random small inputs.</p></aside>
+    <p><strong>Remember:</strong> greedy = one pass, no regrets. It is correct only with a proof; DP (M32) is the safe
+      fallback when choices interact.</p>
+  </section>
+
+  <section class="lesson-section" id="intervals">
+    <h2>Interval scheduling and interval merging</h2>
+    <p><strong>Activity selection:</strong> given meetings as <code>(start, end)</code> intervals and one room, schedule
+      as many as possible. Candidate greedy rules: shortest first? earliest start first? fewest conflicts first? All
+      three fail on some input. The rule that works is <strong>earliest end time first</strong>.</p>
+    <p><strong>Exchange argument.</strong> Let <em>g</em> be the meeting that ends first. Take any optimal schedule
+      <em>O</em>, and let <em>o</em> be its first meeting. Since <em>g</em> ends no later than <em>o</em>, replacing
+      <em>o</em> with <em>g</em> conflicts with nothing else in <em>O</em>, and the count is unchanged. So an optimal
+      schedule starts with <em>g</em>; remove everything overlapping <em>g</em> and repeat. Sorting dominates:
+      O(n log n).</p>
+    <div class="runnable" data-title="Activity selection">
+<textarea>
+def max_meetings(meetings: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    chosen = []
+    free_at = float("-inf")
+    for start, end in sorted(meetings, key=lambda m: m[1]):   # earliest end first
+        if start >= free_at:                                   # half-open: touching is fine
+            chosen.append((start, end))
+            free_at = end
+    return chosen
+
+meetings = [(1, 4), (3, 5), (0, 6), (5, 7), (3, 9), (5, 9), (6, 10), (8, 11), (8, 12), (2, 14), (12, 16)]
+print(max_meetings(meetings))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: does shortest-first work?" data-predict>
+<textarea>
+meetings = [(0, 5), (4, 7), (6, 11)]
+shortest = sorted(meetings, key=lambda m: m[1] - m[0])
+chosen, busy = [], []
+for s, e in shortest:
+    if all(e <= bs or s >= be for bs, be in busy):
+        chosen.append((s, e)); busy.append((s, e))
+print(len(chosen))
+</textarea>
+    </div>
+    <details class="reveal"><summary>Explain the result</summary><p>Shortest-first picks the short middle meeting, which blocks both long ones: 1 meeting instead of 2.</p></details>
+    <p><strong>Merging intervals:</strong> sort by start; walk through, extending the current block while the next
+      interval starts before the block ends. Also O(n log n), and the basis of calendar "busy" views.</p>
+    <div class="runnable" data-title="Merge overlapping intervals">
+<textarea>
+def merge(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [tuple(m) for m in merged]
+
+print(merge([(1, 3), (8, 10), (2, 6), (15, 18), (17, 20)]))
+</textarea>
+    </div>
+    <p>A third classic: the minimum number of rooms for all meetings equals the maximum number of meetings in progress
+      at once. Sort starts, keep a min-heap of end times (<a href="m25-heaps.html">M25</a>), and pop rooms that are
+      free. You will build this in the mini-project.</p>
+  </section>
+
+  <section class="lesson-section" id="when-greedy-fails">
+    <h2>When greedy fails: coin change</h2>
+    <p>"Take the largest coin that fits" makes change optimally for US coins (1, 5, 10, 25). Many people assume it
+      always works. It does not.</p>
+    <div class="runnable" data-title="Greedy vs DP on coins [1, 3, 4]">
+<textarea>
+import math
+
+def greedy_change(coins, amount):
+    used = []
+    for c in sorted(coins, reverse=True):
+        while amount >= c:
+            amount -= c
+            used.append(c)
+    return used if amount == 0 else None
+
+def dp_change(coins, amount):
+    dp = [0] + [math.inf] * amount
+    for a in range(1, amount + 1):
+        dp[a] = min((dp[a - c] + 1 for c in coins if c <= a), default=math.inf)
+    return dp[amount]
+
+for amount in range(1, 13):
+    g = greedy_change([1, 3, 4], amount)
+    d = dp_change([1, 3, 4], amount)
+    flag = "  <-- greedy is worse" if len(g) != d else ""
+    print(f"{amount:>2}: greedy {g} ({len(g)}), optimal {d}{flag}")
+</textarea>
+    </div>
+    <p>At 6, greedy takes 4 + 1 + 1 (three coins) while 3 + 3 uses two. The exchange argument breaks: you cannot swap the
+      4 into the optimal solution {3, 3} without making it worse. Coin systems where greedy is always optimal are called
+      <em>canonical</em>; deciding canonicity is itself a nontrivial algorithm. When in doubt, use DP.</p>
+  </section>
+
+  <section class="lesson-section" id="huffman">
+    <h2>Huffman coding</h2>
+    <p>Store text with fewer bits by giving frequent characters short codes and rare ones long codes. For decoding to be
+      unambiguous, no code may be a prefix of another (a <em>prefix code</em>), which is the same as saying the codes are
+      leaves of a binary tree: 0 = left, 1 = right.</p>
+    <p><strong>Huffman's greedy rule:</strong> repeatedly merge the two least frequent trees into one whose weight is
+      their sum. A min-heap makes each step O(log k), so the whole build is O(k log k) for k distinct symbols.</p>
+    <div class="viz" data-viz="huffman" data-config='{"text": "abracadabra"}'></div>
+    <p><strong>Why it is optimal (sketch).</strong> In some optimal tree the two rarest symbols are sibling leaves at
+      the deepest level: if a rarer symbol were shallower than a more frequent one, swapping them would not increase the
+      total cost (exchange argument). Merging those two into one pseudo-symbol leaves a smaller instance of the same
+      problem, so induction applies.</p>
+    <div class="runnable" data-title="Build Huffman codes with heapq">
+<textarea>
+import heapq
+from collections import Counter
+from itertools import count
+
+def huffman_codes(text: str) -> dict[str, str]:
+    freq = Counter(text)
+    if len(freq) == 1:                       # a single symbol still needs one bit
+        return {next(iter(freq)): "0"}
+    tie = count()                            # tie-breaker so heapq never compares dicts
+    heap = [(f, next(tie), {ch: ""}) for ch, f in freq.items()]
+    heapq.heapify(heap)
+    while len(heap) > 1:
+        f1, _, left = heapq.heappop(heap)
+        f2, _, right = heapq.heappop(heap)
+        merged = {ch: "0" + code for ch, code in left.items()}
+        merged |= {ch: "1" + code for ch, code in right.items()}
+        heapq.heappush(heap, (f1 + f2, next(tie), merged))
+    return heap[0][2]
+
+text = "abracadabra"
+codes = huffman_codes(text)
+bits = sum(len(codes[ch]) for ch in text)
+print(codes)
+print(f"{bits} bits vs {8 * len(text)} bits in 8-bit ASCII")
+</textarea>
+    </div>
+    <aside class="callout note"><p>Huffman coding is a stage inside DEFLATE (zip, gzip, PNG). Python 3.14's new
+      <code>compression.zstd</code> module (PEP 784) exposes Zstandard, which uses Huffman coding for literals alongside
+      the finite-state entropy coder.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="fractional-knapsack">
+    <h2>Fractional knapsack: greedy wins where 0/1 needs DP</h2>
+    <p>If you may take <em>fractions</em> of items (gold dust rather than gold bars), sort by value per unit weight and
+      take as much of the densest item as fits, then the next. Exchange argument: any solution that holds some weight
+      of a less dense item while a denser one is not fully taken can be improved by swapping that weight. O(n log n).</p>
+    <div class="runnable" data-title="Fractional vs 0/1">
+<textarea>
+def fractional_knapsack(items: list[tuple[float, float]], capacity: float) -> float:
+    total = 0.0
+    for weight, value in sorted(items, key=lambda it: it[1] / it[0], reverse=True):
+        take = min(weight, capacity)
+        total += value * take / weight
+        capacity -= take
+        if capacity == 0:
+            break
+    return total
+
+items = [(10, 60), (20, 100), (30, 120)]       # (weight, value)
+print(fractional_knapsack(items, 50))          # 60 + 100 + 2/3 of 120
+# The same greedy for 0/1 would take items 1 and 2 (value 160), but 2 + 3 gives 220.
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a tiny change in the rules (fractions allowed or not) can switch a problem between
+      greedy and DP. Always re-check the exchange argument.</p>
+  </section>
+
+  <section class="lesson-section" id="backtracking">
+    <h2>Backtracking: depth-first search over choices</h2>
+    <p>Many problems ask you to <em>construct</em> something: a subset, an ordering, a placement. Backtracking explores
+      the tree of partial solutions depth-first. At each node it <strong>chooses</strong> an option,
+      <strong>explores</strong> recursively, then <strong>un-chooses</strong> it so the next option starts from a
+      clean state. If a partial solution already violates a constraint, the whole subtree is skipped: that is
+      <em>pruning</em>.</p>
+    <pre><code class="language-python">def backtrack(partial):
+    if is_complete(partial):
+        record(partial)
+        return
+    for option in options(partial):
+        if is_consistent(partial, option):   # prune
+            partial.append(option)          # choose
+            backtrack(partial)              # explore
+            partial.pop()                   # un-choose</code></pre>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "power-set", "n": 3}'></div>
+    <div class="tabs">
+      <div class="tab" data-label="Subsets">
+        <div class="runnable" data-title="All subsets (2^n)">
+<textarea>
+def subsets(items):
+    out, cur = [], []
+    def go(i):
+        if i == len(items):
+            out.append(cur.copy())
+            return
+        go(i + 1)                 # leave items[i] out
+        cur.append(items[i])      # put it in
+        go(i + 1)
+        cur.pop()                 # undo
+    go(0)
+    return out
+
+print(subsets(["a", "b", "c"]))
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="Permutations">
+        <div class="runnable" data-title="All orderings (n!)">
+<textarea>
+def permutations(items):
+    out, cur, used = [], [], [False] * len(items)
+    def go():
+        if len(cur) == len(items):
+            out.append(cur.copy())
+            return
+        for i, x in enumerate(items):
+            if not used[i]:
+                used[i] = True; cur.append(x)
+                go()
+                cur.pop(); used[i] = False
+    go()
+    return out
+
+print(permutations([1, 2, 3]))
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="Combinations">
+        <div class="runnable" data-title="Choose k of n">
+<textarea>
+def combinations(items, k):
+    out, cur = [], []
+    def go(start):
+        if len(cur) == k:
+            out.append(tuple(cur))
+            return
+        # prune: need k - len(cur) more items, so stop early enough
+        for i in range(start, len(items) - (k - len(cur)) + 1):
+            cur.append(items[i])
+            go(i + 1)
+            cur.pop()
+    go(0)
+    return out
+
+import itertools
+print(combinations("abcde", 3))
+print(combinations("abcde", 3) == list(itertools.combinations("abcde", 3)))
+</textarea>
+        </div>
+      </div>
+    </div>
+    <aside class="callout tip"><p>For plain enumeration, <code>itertools.combinations</code>, <code>permutations</code>,
+      and <code>product</code> are implemented in C and are much faster. Write your own backtracking when you need
+      <em>pruning</em>: skipping branches that <code>itertools</code> would generate and you would then filter.</p></aside>
+    <div class="runnable" data-title="Predict: the order of a backtracking search" data-predict>
+<textarea>
+def go(prefix, n):
+    if len(prefix) == n:
+        print("".join(prefix))
+        return
+    for ch in "ab":
+        if prefix and prefix[-1] == ch:     # prune: no two equal letters in a row
+            continue
+        prefix.append(ch)
+        go(prefix, n)
+        prefix.pop()
+
+go([], 3)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="n-queens-sudoku">
+    <h2>N-queens and sudoku</h2>
+    <p><strong>N-queens:</strong> place n queens on an n × n board so none attack each other. Place one queen per row;
+      for each row try each column, skipping columns and diagonals already attacked. Tracking attacked columns and
+      diagonals in sets makes each check O(1): cells on one "\" diagonal share <code>row - col</code>, cells on one
+      "/" diagonal share <code>row + col</code>.</p>
+    <div class="viz" data-viz="n-queens" data-config='{"n": 6}'></div>
+    <div class="runnable" data-title="Count N-queens solutions">
+<textarea>
+def n_queens(n: int) -> int:
+    cols, diag, anti = set(), set(), set()
+    def place(row: int) -> int:
+        if row == n:
+            return 1
+        found = 0
+        for col in range(n):
+            if col in cols or row - col in diag or row + col in anti:
+                continue                       # pruned: attacked
+            cols.add(col); diag.add(row - col); anti.add(row + col)
+            found += place(row + 1)
+            cols.remove(col); diag.remove(row - col); anti.remove(row + col)
+        return found
+    return place(0)
+
+print([n_queens(n) for n in range(1, 9)])
+</textarea>
+    </div>
+    <p><strong>Sudoku:</strong> find an empty cell, try each digit that does not clash with its row, column, or box,
+      recurse, and undo on failure. Plain backtracking already solves most newspaper puzzles in milliseconds; the next
+      section makes it robust.</p>
+    <div class="runnable" data-title="A compact sudoku solver">
+<textarea>
+def solve(board: list[list[int]]) -> bool:
+    for r in range(9):
+        for c in range(9):
+            if board[r][c] == 0:
+                for d in range(1, 10):
+                    if ok(board, r, c, d):
+                        board[r][c] = d
+                        if solve(board):
+                            return True
+                        board[r][c] = 0          # undo
+                return False                      # no digit fits: backtrack
+    return True                                   # no empty cells left
+
+def ok(board, r, c, d):
+    if d in board[r] or any(board[i][c] == d for i in range(9)):
+        return False
+    br, bc = 3 * (r // 3), 3 * (c // 3)
+    return all(board[i][j] != d for i in range(br, br + 3) for j in range(bc, bc + 3))
+
+puzzle = "530070000600195000098000060800060003400803001700020006060000280000419005000080079"
+board = [[int(puzzle[9 * r + c]) for c in range(9)] for r in range(9)]
+print(solve(board))
+print("\n".join("".join(map(str, row)) for row in board))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="pruning">
+    <h2>Pruning, constraint propagation, and branch and bound</h2>
+    <p>Backtracking is exponential in the worst case, so its speed is entirely about how much of the tree you avoid.</p>
+    <ul>
+      <li><strong>Feasibility pruning:</strong> stop as soon as a partial solution breaks a constraint (the N-queens
+        attack check).</li>
+      <li><strong>Variable ordering, MRV:</strong> branch on the variable with the <em>fewest</em> remaining options.
+        A sudoku cell with one candidate costs no branching at all; a cell with nine multiplies the tree by nine.</li>
+      <li><strong>Constraint propagation:</strong> after each choice, deduce forced consequences. If an empty sudoku
+        cell has exactly one candidate (a <em>naked single</em>), fill it; if any cell has zero, fail immediately.
+        Propagation often solves easy puzzles with no guessing.</li>
+      <li><strong>Symmetry breaking:</strong> in N-queens, try only the left half of the first row and double the count
+        (careful with the middle column for odd n).</li>
+    </ul>
+    <div class="runnable" data-title="Measure: how much does MRV save?">
+<textarea>
+def peers(r, c):
+    br, bc = 3 * (r // 3), 3 * (c // 3)
+    return {(r, j) for j in range(9)} | {(i, c) for i in range(9)} | {
+        (i, j) for i in range(br, br + 3) for j in range(bc, bc + 3)} - {(r, c)}
+
+PEERS = {(r, c): peers(r, c) for r in range(9) for c in range(9)}
+
+def candidates(b, r, c):
+    return set(range(1, 10)) - {b[i][j] for i, j in PEERS[(r, c)]}
+
+def solve(b, mrv, stats):
+    empties = [(r, c) for r in range(9) for c in range(9) if b[r][c] == 0]
+    if not empties:
+        return True
+    if mrv:
+        r, c = min(empties, key=lambda rc: len(candidates(b, *rc)))
+    else:
+        r, c = empties[0]
+    for d in candidates(b, r, c):
+        stats[0] += 1
+        b[r][c] = d
+        if solve(b, mrv, stats):
+            return True
+        b[r][c] = 0
+    return False
+
+# The classic newspaper puzzle. (On "minimum" puzzles with 17 clues, the gap is millions vs thousands.)
+puzzle = "530070000600195000098000060800060003400803001700020006060000280000419005000080079"
+for mrv in (False, True):
+    board = [[int(puzzle[9 * r + c]) for c in range(9)] for r in range(9)]
+    stats = [0]
+    solve(board, mrv, stats)
+    print(f"MRV={mrv!s:<5} guesses={stats[0]:,}")
+</textarea>
+    </div>
+    <h3>Branch and bound</h3>
+    <p>For <em>optimization</em> searches (find the best, not just any), keep the best complete solution found so far.
+      At each node compute an optimistic <strong>bound</strong> on any solution in its subtree; if the bound cannot beat
+      the incumbent, prune. For 0/1 knapsack the fractional-knapsack value of the remaining items is a valid upper bound
+      (you can never do better than the relaxation). Good bounds plus good ordering (try the most promising branch first
+      so the incumbent improves early) let branch and bound solve instances far beyond brute force. It is the core of
+      integer-programming solvers.</p>
+    <div class="runnable" data-title="Knapsack by branch and bound">
+<textarea>
+def knapsack_bb(items, capacity):
+    items = sorted(items, key=lambda it: it[1] / it[0], reverse=True)   # densest first
+    best = 0
+    nodes = 0
+
+    def bound(i, weight, value):
+        room = capacity - weight
+        for w, v in items[i:]:                     # fractional relaxation
+            if w <= room:
+                room -= w; value += v
+            else:
+                return value + v * room / w
+        return value
+
+    def go(i, weight, value):
+        nonlocal best, nodes
+        nodes += 1
+        best = max(best, value)
+        if i == len(items) or bound(i, weight, value) <= best:
+            return                                  # prune: cannot beat the incumbent
+        w, v = items[i]
+        if weight + w <= capacity:
+            go(i + 1, weight + w, value + v)        # take (promising branch first)
+        go(i + 1, weight, value)                    # skip
+
+    go(0, 0, 0)
+    return best, nodes
+
+import random
+rng = random.Random(1)
+items = [(rng.randint(5, 40), rng.randint(10, 100)) for _ in range(30)]
+best, nodes = knapsack_bb(items, 200)
+print(f"best value {best}, visited {nodes} of {2 ** 31 - 1:,} possible tree nodes")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m33-e1" data-title="Minimum arrows (interval greedy)">
+      <div class="exercise-prompt">
+        <p>Balloons are closed intervals <code>[start, end]</code> on a line. An arrow shot at <code>x</code> bursts
+          every balloon with <code>start &lt;= x &lt;= end</code>. Write <code>min_arrows(balloons)</code> returning
+          the minimum number of arrows that burst them all.</p>
+      </div>
+<textarea class="starter">
+def min_arrows(balloons: list[tuple[int, int]]) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert min_arrows([(10, 16), (2, 8), (1, 6), (7, 12)]) == 2, "shoot at 6 and 12"
+    assert min_arrows([(1, 2), (3, 4), (5, 6), (7, 8)]) == 4, "disjoint balloons need one arrow each"
+    assert min_arrows([(1, 2), (2, 3), (3, 4), (4, 5)]) == 2, "closed intervals: touching balloons share an arrow"
+
+def test_edges():
+    assert min_arrows([]) == 0, "no balloons, no arrows"
+    assert min_arrows([(1, 10), (2, 3), (4, 5)]) == 2, "one wide balloon can share arrows with both small ones"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Sort by end. Shoot at the first balloon's end; skip every balloon
+        whose start is at most that point; repeat. The exchange argument is the same as activity selection.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def min_arrows(balloons: list[tuple[int, int]]) -&gt; int:
+    arrows = 0
+    last = None
+    for start, end in sorted(balloons, key=lambda b: b[1]):
+        if last is None or start &gt; last:
+            arrows += 1
+            last = end
+    return arrows</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m33-e2" data-title="Find a greedy counterexample">
+      <div class="exercise-prompt">
+        <p>Write <code>first_greedy_failure(coins, limit)</code> returning the smallest amount in
+          <code>1..limit</code> where "largest coin first" uses more coins than the optimum, or <code>None</code> if
+          greedy is optimal for every amount up to <code>limit</code>. Assume <code>1</code> is always a coin.</p>
+      </div>
+<textarea class="starter">
+def first_greedy_failure(coins: list[int], limit: int) -> int | None:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_non_canonical():
+    assert first_greedy_failure([1, 3, 4], 20) == 6, "greedy gives 4+1+1 for 6 but 3+3 is better"
+    assert first_greedy_failure([1, 5, 12], 30) == 15, "greedy gives 12+1+1+1 for 15 but 5+5+5 is better"
+
+def test_canonical():
+    assert first_greedy_failure([1, 5, 10, 25], 200) is None, "US coins are canonical"
+    assert first_greedy_failure([1, 2], 50) is None, "1 and 2 are canonical"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute the optimum for every amount with the min-coins DP from
+        M32, and compute the greedy count separately; return the first amount where they differ.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def first_greedy_failure(coins: list[int], limit: int) -&gt; int | None:
+    best = [0] * (limit + 1)
+    for a in range(1, limit + 1):
+        best[a] = 1 + min(best[a - c] for c in coins if c &lt;= a)
+    desc = sorted(coins, reverse=True)
+    for amount in range(1, limit + 1):
+        left, used = amount, 0
+        for c in desc:
+            used += left // c
+            left %= c
+        if used &gt; best[amount]:
+            return amount
+    return None</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m33-e3" data-title="Combination sum (backtracking)">
+      <div class="exercise-prompt">
+        <p>Write <code>combination_sum(candidates, target)</code> returning every combination of the distinct positive
+          <code>candidates</code> (each may be used any number of times) that sums to <code>target</code>. Each
+          combination is a list in non-decreasing order; return them sorted. Prune branches that overshoot.</p>
+      </div>
+<textarea class="starter">
+def combination_sum(candidates: list[int], target: int) -> list[list[int]]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert combination_sum([2, 3, 6, 7], 7) == [[2, 2, 3], [7]], "two ways to make 7"
+    assert combination_sum([2, 3, 5], 8) == [[2, 2, 2, 2], [2, 3, 3], [3, 5]], "three ways to make 8"
+
+def test_none():
+    assert combination_sum([2], 1) == [], "1 cannot be made from 2s"
+    assert combination_sum([4, 2], 0) == [[]], "the empty combination makes 0"
+
+def test_order_independent_of_input():
+    assert combination_sum([7, 6, 3, 2], 7) == [[2, 2, 3], [7]], "input order must not matter"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Sort the candidates. Recurse with a start index so you never pick a
+        smaller candidate after a larger one (that is what prevents duplicates). Break the loop as soon as a candidate
+        exceeds the remaining target.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def combination_sum(candidates: list[int], target: int) -&gt; list[list[int]]:
+    nums = sorted(candidates)
+    out: list[list[int]] = []
+    cur: list[int] = []
+
+    def go(start: int, remaining: int) -&gt; None:
+        if remaining == 0:
+            out.append(cur.copy())
+            return
+        for i in range(start, len(nums)):
+            if nums[i] &gt; remaining:
+                break                      # sorted, so every later candidate overshoots too
+            cur.append(nums[i])
+            go(i, remaining - nums[i])     # i, not i + 1: reuse allowed
+            cur.pop()
+
+    go(0, target)
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m33-e4" data-title="N-queens: return the boards">
+      <div class="exercise-prompt">
+        <p>Write <code>queens(n)</code> returning every solution as a tuple of column indexes, one per row (so
+          <code>(1, 3, 0, 2)</code> means row 0 has its queen in column 1). Return the solutions sorted.</p>
+      </div>
+<textarea class="starter">
+def queens(n: int) -> list[tuple[int, ...]]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def valid(sol):
+    n = len(sol)
+    return all(sol[i] != sol[j] and abs(sol[i] - sol[j]) != j - i for i in range(n) for j in range(i + 1, n))
+
+def test_four():
+    assert queens(4) == [(1, 3, 0, 2), (2, 0, 3, 1)], "4-queens has exactly two solutions"
+
+def test_counts():
+    assert [len(queens(n)) for n in range(1, 9)] == [1, 0, 0, 2, 10, 4, 40, 92], "known solution counts"
+
+def test_all_valid():
+    assert all(valid(s) for s in queens(6)), "no two queens may share a column or diagonal"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Track used columns, <code>row - col</code> diagonals, and
+        <code>row + col</code> anti-diagonals in three sets. Trying columns in increasing order produces solutions
+        already sorted.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def queens(n: int) -&gt; list[tuple[int, ...]]:
+    out: list[tuple[int, ...]] = []
+    placed: list[int] = []
+    cols: set[int] = set()
+    diag: set[int] = set()
+    anti: set[int] = set()
+
+    def go(row: int) -&gt; None:
+        if row == n:
+            out.append(tuple(placed))
+            return
+        for col in range(n):
+            if col in cols or row - col in diag or row + col in anti:
+                continue
+            placed.append(col); cols.add(col); diag.add(row - col); anti.add(row + col)
+            go(row + 1)
+            placed.pop(); cols.remove(col); diag.remove(row - col); anti.remove(row + col)
+
+    go(0)
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m33-e5" data-title="Sudoku with propagation">
+      <div class="exercise-prompt">
+        <p>Write <code>solve_sudoku(puzzle)</code> where <code>puzzle</code> is an 81-character string with
+          <code>.</code> for blanks. Return the solved 81-character string, or <code>None</code> if unsolvable. Use the
+          MRV heuristic (branch on the cell with the fewest candidates) so the hard test runs quickly.</p>
+      </div>
+<textarea class="starter">
+def solve_sudoku(puzzle: str) -> str | None:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+EASY = "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
+EASY_SOLVED = "534678912672195348198342567859761423426853791713924856961537284287419635345286179"
+HARD = "8..........36......7..9.2...5...7.......457.....1...3...1....68..85...1..9....4.."
+
+def is_solution(s, puzzle):
+    rows = [s[9 * r: 9 * r + 9] for r in range(9)]
+    cols = ["".join(row[c] for row in rows) for c in range(9)]
+    boxes = ["".join(rows[r][c] for r in range(br, br + 3) for c in range(bc, bc + 3)) for br in (0, 3, 6) for bc in (0, 3, 6)]
+    full = all(set(u) == set("123456789") for u in rows + cols + boxes)
+    return full and all(p == "." or p == x for p, x in zip(puzzle, s))
+
+def test_easy():
+    assert solve_sudoku(EASY) == EASY_SOLVED, "the classic puzzle has a known solution"
+
+def test_hard():
+    result = solve_sudoku(HARD)
+    assert result is not None and is_solution(result, HARD), "the hard puzzle must be solved and keep its givens"
+
+def test_unsolvable():
+    assert solve_sudoku("12345678." + "........9" + "." * 63) is None, "cell 8 has no legal digit"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Convert to a list of 81 ints. For each empty cell compute its
+        candidates from its 20 peers. Pick the empty cell with the fewest; if it has none, return failure; otherwise try
+        each, recurse, and undo.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">PEERS = []
+for i in range(81):
+    r, c = divmod(i, 9)
+    br, bc = 3 * (r // 3), 3 * (c // 3)
+    group = {9 * r + j for j in range(9)} | {9 * k + c for k in range(9)}
+    group |= {9 * rr + cc for rr in range(br, br + 3) for cc in range(bc, bc + 3)}
+    PEERS.append(group - {i})
+
+def solve_sudoku(puzzle: str) -&gt; str | None:
+    cells = [0 if ch == "." else int(ch) for ch in puzzle]
+
+    def candidates(i):
+        return set(range(1, 10)) - {cells[p] for p in PEERS[i]}
+
+    def go() -&gt; bool:
+        best, best_opts = None, None
+        for i in range(81):
+            if cells[i] == 0:
+                opts = candidates(i)
+                if best_opts is None or len(opts) &lt; len(best_opts):
+                    best, best_opts = i, opts
+                    if not opts:
+                        return False
+        if best is None:
+            return True
+        for d in best_opts:
+            cells[best] = d
+            if go():
+                return True
+        cells[best] = 0
+        return False
+
+    for i, v in enumerate(cells):
+        if v and v in {cells[p] for p in PEERS[i]}:
+            return None
+    return "".join(map(str, cells)) if go() else None</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Meeting rooms and a timetable search</span></div>
+      <div class="widget-body">
+        <p>Build <code>scheduler.py</code> with two parts that contrast the two strategies of this module.</p>
+        <h4>Part A: the greedy meeting-room allocator</h4>
+        <p><code>assign_rooms(meetings: list[tuple[str, int, int]]) -&gt; dict[str, int]</code> maps each meeting name
+          to a room number, using the fewest rooms. Sort by start time and keep a min-heap of
+          <code>(end_time, room)</code>; reuse the room that frees up earliest if it is free in time, otherwise open a
+          new room. Prove (in a docstring comment) that the number of rooms equals the maximum overlap.</p>
+        <h4>Part B: the backtracking timetable</h4>
+        <p><code>timetable(courses, slots, conflicts) -&gt; dict[str, str] | None</code> assigns each course a time
+          slot so no two conflicting courses (sharing a student or teacher) share a slot. This is graph coloring: use
+          backtracking with MRV (the course with the fewest remaining legal slots goes next) and forward checking
+          (after assigning, remove that slot from each conflicting course's options; fail early if any becomes empty).</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init scheduler &amp;&amp; cd scheduler
+pixi add python pytest
+pixi run python scheduler.py meetings.csv
+pixi run pytest -q</code></pre>
+        <ul class="checklist" data-id="m33-mini">
+          <li><code>assign_rooms</code> never puts overlapping meetings in the same room</li>
+          <li>The room count equals the maximum number of simultaneous meetings (checked by a sweep over sorted events)</li>
+          <li><code>timetable</code> returns a valid assignment or <code>None</code> when impossible (for example, a
+            triangle of conflicts with two slots)</li>
+          <li>A counter shows how many assignments MRV and forward checking save on a 20-course instance</li>
+          <li>At least six pytest tests run with <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add soft constraints (teacher preferences) and switch Part B to branch and
+          bound that minimizes violated preferences; load meetings from CSV with the <code>csv</code> module.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m33-quiz">
+<script type="application/json">
+{"title": "Greedy and backtracking quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which greedy rule maximizes the number of non-overlapping meetings?", "options": ["Shortest meeting first", "Earliest start first", "Earliest end first", "Fewest conflicts first"], "answer": 2, "explanation": "<p>Finishing earliest leaves the most room for the rest. An exchange argument swaps it in for the first meeting of any optimal schedule.</p>"},
+  {"type": "single", "prompt": "What is an exchange argument?", "options": ["Trying all swaps of two elements", "Showing an optimal solution can be modified to include the greedy choice without getting worse", "Exchanging recursion for iteration", "Swapping the inner and outer loop"], "answer": 1, "explanation": "<p>If any optimal solution can be transformed to start with the greedy choice at no cost, the greedy choice is safe.</p>"},
+  {"type": "output", "prompt": "How many coins does largest-coin-first use for 6 with coins [1, 3, 4]?", "code": "coins, amount, used = [4, 3, 1], 6, 0\nfor c in coins:\n    used += amount // c\n    amount %= c\nprint(used)", "answer": "3", "explanation": "<p>4 + 1 + 1 = three coins, while 3 + 3 needs only two. Greedy is not optimal for this coin system.</p>"},
+  {"type": "single", "prompt": "Why can fractional knapsack be solved greedily but 0/1 knapsack cannot?", "options": ["Fractional has fewer items", "With fractions, any weight held by a less dense item can be swapped for a denser one; with whole items that swap may not fit", "0/1 knapsack has no optimal substructure", "Sorting does not work on integers"], "answer": 1, "explanation": "<p>The exchange argument needs divisibility. With indivisible items a dense item might leave unusable space, so DP is required.</p>"},
+  {"type": "multi", "prompt": "Which are true of Huffman coding?", "options": ["It repeatedly merges the two least frequent trees", "It produces a prefix code", "Frequent symbols get longer codes", "A min-heap makes it O(k log k) for k symbols"], "answer": [0, 1, 3], "explanation": "<p>Frequent symbols end up near the root with <em>shorter</em> codes. Codes are leaves of a binary tree, so none is a prefix of another.</p>"},
+  {"type": "single", "prompt": "What are the three steps inside a backtracking loop?", "options": ["Sort, search, return", "Choose, explore, un-choose", "Divide, conquer, combine", "Push, pop, peek"], "answer": 1, "explanation": "<p>Make a choice, recurse, then undo it so the next option starts from the same state.</p>"},
+  {"type": "output", "prompt": "How many subsets does a 4-element set have?", "code": "print(2 ** 4)", "answer": "16", "explanation": "<p>Each element is in or out: 2 choices, 4 times. The backtracking tree for subsets has 2^n leaves.</p>"},
+  {"type": "single", "prompt": "In N-queens, which value identifies a \"\\\" diagonal?", "options": ["row + col", "row - col", "row * col", "max(row, col)"], "answer": 1, "explanation": "<p>Moving down-right adds 1 to both row and col, so row - col is constant. The other diagonal keeps row + col constant.</p>"},
+  {"type": "text", "prompt": "What is the name of the heuristic that branches on the variable with the fewest remaining options?", "answer": ["MRV", "minimum remaining values", "minimum remaining value"], "explanation": "<p>Minimum remaining values (MRV) fails fast and keeps the branching factor small.</p>"},
+  {"type": "single", "prompt": "In branch and bound, when can a subtree be pruned?", "options": ["When it is deeper than 10", "When an optimistic bound for it cannot beat the best solution found so far", "When it contains a duplicate", "Never; all subtrees must be explored"], "answer": 1, "explanation": "<p>If even the most optimistic outcome is no better than the incumbent, nothing in the subtree can improve the answer.</p>"},
+  {"type": "multi", "prompt": "Which techniques reduce the size of a sudoku backtracking search?", "options": ["Filling naked singles (constraint propagation)", "MRV variable ordering", "Failing immediately when a cell has no candidates", "Printing the board after each step"], "answer": [0, 1, 2], "explanation": "<p>Propagation removes choices, MRV narrows branching, and early failure cuts dead subtrees. Printing only slows it down.</p>"},
+  {"type": "single", "prompt": "The minimum number of meeting rooms for a set of meetings equals...", "options": ["The number of meetings", "The maximum number of meetings in progress at the same time", "The length of the longest meeting", "The number of distinct start times"], "answer": 1, "explanation": "<p>At the moment of maximum overlap you need that many rooms, and the greedy heap allocator never needs more.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Greedy commits to the locally best choice. It needs the greedy choice property plus optimal substructure,
+        proved with an exchange argument.</li>
+      <li>Earliest-end-first schedules the most intervals; merging sorts by start; Huffman merges the two rarest trees;
+        fractional knapsack takes the densest first.</li>
+      <li>Greedy coin change fails for non-canonical systems such as [1, 3, 4]; use DP.</li>
+      <li>Backtracking is DFS over partial solutions: choose, explore, un-choose, and prune inconsistent branches.</li>
+      <li>Subsets (2<sup>n</sup>), permutations (n!), and combinations (C(n, k)) are the three basic search trees.</li>
+      <li>MRV, constraint propagation, symmetry breaking, and branch-and-bound bounds turn hopeless searches into fast
+        ones.</li>
+    </ul>
+    <div class="flashcards" data-title="Greedy and backtracking">
+<script type="application/json">
+[{"front": "Greedy choice property", "back": "Some optimal solution starts with the greedy choice."},
+ {"front": "Exchange argument", "back": "Swap the greedy choice into any optimal solution without making it worse."},
+ {"front": "Activity selection rule", "back": "Sort by end time; take each meeting that starts after the last chosen one ends."},
+ {"front": "Greedy coin-change counterexample", "back": "Coins [1, 3, 4], amount 6: greedy 4+1+1 (3 coins) vs optimal 3+3 (2)."},
+ {"front": "Huffman coding", "back": "Repeatedly merge the two lowest-frequency trees with a min-heap; yields an optimal prefix code."},
+ {"front": "Fractional knapsack", "back": "Sort by value/weight and take greedily, splitting the last item. Greedy is optimal; 0/1 needs DP."},
+ {"front": "Backtracking template", "back": "If complete, record. For each consistent option: choose, recurse, un-choose."},
+ {"front": "N-queens diagonals", "back": "row - col is constant on one diagonal, row + col on the other."},
+ {"front": "MRV", "back": "Minimum remaining values: branch on the variable with the fewest legal options."},
+ {"front": "Constraint propagation", "back": "Deduce forced consequences after each choice (naked singles); fail early on empty domains."},
+ {"front": "Branch and bound", "back": "Prune a subtree when an optimistic bound cannot beat the incumbent best solution."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/heapq.html">heapq: heap queue algorithm</a></li>
+      <li><a href="https://docs.python.org/3/library/itertools.html#itertools.combinations">itertools combinatoric iterators</a></li>
+      <li><a href="https://norvig.com/sudoku.html">Peter Norvig, "Solving Every Sudoku Puzzle"</a></li>
+      <li>Next: <a href="m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a>; apply backtracking and
+        propagation in the <a href="../projects/p04-puzzle-solver.html">Puzzle Solver Suite</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

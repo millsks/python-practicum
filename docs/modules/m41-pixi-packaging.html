@@ -1,0 +1,1446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M41 · Packaging &amp; Environments with Pixi · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m41">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 41</p>
+    <h1>Packaging &amp; Environments with Pixi</h1>
+    <p class="lede">Code that runs only on your laptop isn't finished yet. This module covers how professionals pin down
+      every dependency, reproduce an environment on any machine, test across Python versions, and ship a package
+      other people can install. It uses this course's own <code>pixi.toml</code> and <code>pyproject.toml</code> as
+      the worked example.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m08-modules.html">M08 Modules</a>, <a href="m17-testing.html">M17 Testing</a>, <a href="m40-stdlib.html">M40 Standard Library</a></span></div>
+    <ul class="objectives">
+      <li>Explain dependency conflicts and why reproducible environments need a lockfile</li>
+      <li>Choose between conda-forge and PyPI packages, and declare each correctly in <code>pixi.toml</code></li>
+      <li>Structure a Pixi workspace with features, environments, solve-groups, and multi-version test environments</li>
+      <li>Write tasks with <code>depends-on</code>, <code>args</code>, <code>env</code>, <code>cwd</code>, and input/output caching</li>
+      <li>Read and write a <code>pyproject.toml</code>: build system, metadata, entry points, and optional dependencies</li>
+      <li>Build sdists and wheels, pick version numbers with SemVer, and outline trusted publishing to PyPI</li>
+      <li>Recognise when a conda recipe (rattler-build) is the right way to distribute</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="the-problem">
+    <h2>The problem: dependency hell and "works on my machine"</h2>
+    <p>Every non-trivial program depends on other code. Your script imports <code>pandas</code>, which imports
+      <code>numpy</code>, which was compiled against a particular C library, which needs a particular operating
+      system feature. These <strong>dependencies</strong> form a graph, and the graph changes every day as
+      maintainers release new versions. Three things go wrong again and again:</p>
+    <ol>
+      <li><strong>Conflicts.</strong> Package A needs <code>lib&lt;2</code> and package B needs <code>lib&gt;=2</code>.
+        Both can't be installed in one environment. This is the classic <em>diamond dependency</em> problem.</li>
+      <li><strong>Drift.</strong> You wrote <code>requests</code> without a version. Six months later a fresh install
+        picks a new major version with a changed API, and your code breaks even though nobody changed it.</li>
+      <li><strong>Pollution.</strong> Installing everything into one global Python means project X's upgrade breaks
+        project Y. You also can't tell which packages a project actually needs.</li>
+    </ol>
+    <p>The professional answer has three parts. First, an <strong>isolated environment</strong> per project: a
+      directory containing its own Python and its own packages. Second, a <strong>manifest</strong>: a
+      human-written file that lists what you want, with version ranges. Third, a <strong>lockfile</strong>: a
+      machine-written file that records the exact versions, builds, and checksums the solver picked for every
+      platform. The manifest records your intent and the lockfile records exactly what was installed. Pixi manages
+      all three.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 220" role="img" aria-label="Diamond dependency conflict">
+        <rect x="200" y="10" width="120" height="36" rx="8" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="260" y="33" text-anchor="middle" fill="var(--fg)" font-size="14">your-app</text>
+        <rect x="60" y="90" width="140" height="36" rx="8" fill="var(--viz-2)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="130" y="113" text-anchor="middle" fill="var(--fg)" font-size="14">reports 3.1</text>
+        <rect x="320" y="90" width="140" height="36" rx="8" fill="var(--viz-2)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="390" y="113" text-anchor="middle" fill="var(--fg)" font-size="14">plots 5.0</text>
+        <rect x="190" y="170" width="140" height="36" rx="8" fill="var(--viz-3)" opacity="0.25" stroke="var(--fg-muted)"/>
+        <text x="260" y="193" text-anchor="middle" fill="var(--fg)" font-size="14">tables ??</text>
+        <line x1="240" y1="46" x2="150" y2="90" stroke="var(--fg-muted)"/>
+        <line x1="280" y1="46" x2="370" y2="90" stroke="var(--fg-muted)"/>
+        <line x1="130" y1="126" x2="230" y2="170" stroke="var(--fg-muted)"/>
+        <line x1="390" y1="126" x2="290" y2="170" stroke="var(--fg-muted)"/>
+        <text x="120" y="160" fill="var(--fg-muted)" font-size="12">tables &lt;2</text>
+        <text x="345" y="160" fill="var(--fg-muted)" font-size="12">tables &gt;=2</text>
+      </svg>
+      <figcaption>A diamond conflict: two direct dependencies disagree about a shared transitive dependency.</figcaption>
+    </figure>
+
+    <p>A <strong>solver</strong> (dependency resolver) searches for one version of every package so that every
+      constraint holds at the same time. Real solvers use SAT techniques; Pixi uses <em>resolvo</em> for conda
+      packages and <em>uv</em>'s resolver for PyPI packages. The brute-force toy below shows the idea. Run it, then
+      change <code>plots</code>' requirement so a solution exists.</p>
+
+    <div class="runnable" data-title="A toy dependency solver">
+<textarea>
+from itertools import product
+
+# Available versions of each package.
+available = {
+    "reports": [3.0, 3.1],
+    "plots": [4.2, 5.0],
+    "tables": [1.8, 1.9, 2.0, 2.1],
+}
+
+# What each (package, version) requires of "tables": (low inclusive, high exclusive).
+needs_tables = {
+    ("reports", 3.0): (1.0, 2.0),
+    ("reports", 3.1): (1.5, 2.0),
+    ("plots", 4.2): (1.9, 3.0),
+    ("plots", 5.0): (2.0, 3.0),
+}
+
+def solve(want_reports, want_plots):
+    """Try every combination; return the first that satisfies all constraints."""
+    for r, p, t in product(available["reports"], available["plots"], available["tables"]):
+        if r < want_reports or p < want_plots:
+            continue
+        lo1, hi1 = needs_tables[("reports", r)]
+        lo2, hi2 = needs_tables[("plots", p)]
+        if lo1 <= t < hi1 and lo2 <= t < hi2:
+            return {"reports": r, "plots": p, "tables": t}
+    return None
+
+print("reports>=3.1, plots>=5.0 ->", solve(3.1, 5.0))
+print("reports>=3.1, plots>=4.2 ->", solve(3.1, 4.2))
+</textarea>
+    </div>
+
+    <aside class="callout think"><p>The second call succeeds because the solver may choose an <em>older</em>
+      <code>plots</code>. This is why solvers sometimes downgrade a package you didn't mention. If you
+      ever see that happen, read the lockfile diff and work out which constraint forced it.</p></aside>
+    <p><strong>Remember:</strong> isolation stops projects from interfering with each other, the manifest records
+      your intent, and the lockfile makes installs reproducible.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="conda-vs-pypi">
+    <h2>conda-forge vs PyPI</h2>
+    <p>There are two big public package ecosystems for Python, and Pixi speaks both.</p>
+    <div class="two-col">
+      <div class="card"><h4>conda-forge (a conda channel)</h4>
+        <p>A community-run <strong>channel</strong>: a server hosting conda packages. A conda package can contain
+          <em>anything</em>, including Python itself, C/C++ libraries (OpenSSL, SQLite, BLAS), compilers, and
+          command-line tools like <code>git-cliff</code> and <code>act</code>. Every package declares its binary
+          dependencies, so the solver can guarantee compatible native libraries.</p></div>
+      <div class="card"><h4>PyPI (the Python Package Index)</h4>
+        <p>The official index for Python <strong>distributions</strong> (wheels and sdists). Almost every Python
+          library publishes here first. Wheels bundle compiled code, but they can't declare non-Python system
+          libraries, so they ship their own copies or assume the OS provides them.</p></div>
+    </div>
+    <p>This course follows one rule: <strong>conda-forge first</strong>. Use <code>pixi add numpy</code>. Only when a
+      package is missing from conda-forge, use <code>pixi add --pypi some-package</code>, which writes it under
+      <code>[pypi-dependencies]</code>. Pixi solves the conda packages first, then resolves PyPI packages
+      <em>on top</em>, treating the conda-installed Python packages as already satisfied. Mixing works, but every
+      PyPI package is one whose native libraries the conda solver can't check.</p>
+    <table>
+      <thead><tr><th>Need</th><th>Command</th><th>Where it lands</th></tr></thead>
+      <tbody>
+        <tr><td>A library on conda-forge</td><td><code>pixi add structlog</code></td><td><code>[dependencies]</code></td></tr>
+        <tr><td>A version range</td><td><code>pixi add "pandas&gt;=3,&lt;4"</code></td><td><code>[dependencies]</code></td></tr>
+        <tr><td>Only on PyPI</td><td><code>pixi add --pypi tiny-lib</code></td><td><code>[pypi-dependencies]</code></td></tr>
+        <tr><td>Your own package, editable</td><td>hand edit</td><td><code>[pypi-dependencies]</code> with <code>{ path = ".", editable = true }</code></td></tr>
+        <tr><td>A dev-only tool</td><td><code>pixi add --feature dev ruff</code></td><td><code>[feature.dev.dependencies]</code></td></tr>
+      </tbody>
+    </table>
+    <aside class="callout warn"><p>Names can differ between ecosystems. The DuckDB Python bindings are
+      <code>python-duckdb</code> on conda-forge and <code>duckdb</code> on PyPI, and the <code>build</code>
+      frontend is <code>python-build</code> on conda-forge. Look a package up with <code>pixi search duckdb</code>
+      before deciding it's "missing".</p></aside>
+    <aside class="callout danger"><p>Never run <code>pip install</code> inside a Pixi environment. Pixi doesn't
+      know about packages pip installs, so the next <code>pixi install</code> may silently remove or conflict with
+      them, and the lockfile no longer describes reality.</p></aside>
+    <p><strong>Remember:</strong> look on conda-forge first and fall back to <code>--pypi</code>. Whichever you
+      use, every package goes through Pixi so it ends up in the lockfile.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="workspace">
+    <h2>Anatomy of a Pixi workspace</h2>
+    <p>A <strong>workspace</strong> is a directory with a <code>pixi.toml</code> manifest. Create one with
+      <code>pixi init</code>. Don't write it by hand, because the generated file uses the current schema, for
+      example the <code>[workspace]</code> table that replaced the older <code>[project]</code>. Here is the real
+      manifest of the repository you're using right now:</p>
+    <pre data-label="pixi.toml (this repository)"><code class="language-toml">[workspace]
+authors = ["Kevin Mills &lt;millsks@gmail.com&gt;"]
+channels = ["conda-forge"]
+name = "python-practicum"
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+version = "0.1.0"
+
+[dependencies]
+python = "3.14.*"
+structlog = "&gt;=26.1.0,&lt;27"
+numpy = "&gt;=2.5.4,&lt;3"
+pandas = "&gt;=3.0.6,&lt;4"
+# ... scipy, scikit-learn, matplotlib, polars, pyarrow, python-duckdb
+
+[pypi-dependencies]
+python-practicum = { path = ".", editable = true }
+
+[feature.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"
+mypy = "*"
+ruff = "*"
+pre-commit = "*"
+git-cliff = "*"
+python-build = "*"
+hatchling = "*"
+act = "*"
+
+[environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tasks]
+fmt = "ruff format ."
+lint = "ruff check ."
+check = "mypy src/"
+test = "pytest tests/unit/"
+cov = "pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=90"
+build = "python -m build --no-isolation"
+pre-commit-all = "pre-commit run --all-files"
+ci = { depends-on = ["pre-commit-all", "build", "check", "lint", "cov"] }
+start = { cmd = "practicum start {{ project }}", args = ["project"] }</code></pre>
+    <p>Read it table by table:</p>
+    <ul>
+      <li><code>[workspace]</code>: identity (name, version, authors), the <strong>channels</strong> to search in
+        priority order, and the <strong>platforms</strong> the lockfile must cover. Pixi solves for <em>all four</em>
+        platforms even on a Mac, so a Windows teammate gets a lockfile that already works for them.</li>
+      <li><code>[dependencies]</code>: conda packages for the <em>default feature</em>, which every environment
+        includes unless told otherwise. Python itself is just another package here.</li>
+      <li><code>[pypi-dependencies]</code>: PyPI packages. The editable path dependency installs this repository's
+        own <code>src/practicum</code> package so that <code>import practicum</code> and the <code>practicum</code>
+        command work, and so edits take effect without reinstalling.</li>
+      <li><code>[feature.dev.dependencies]</code>: a named <strong>feature</strong>, a bundle of extra
+        dependencies (and optionally tasks, channels, or platforms).</li>
+      <li><code>[environments]</code>: which features each environment combines.</li>
+      <li><code>[tasks]</code>: named commands that run inside the environment.</li>
+    </ul>
+    <p>TOML is just data, so you can explore a manifest with the standard library's <code>tomllib</code>
+      (read-only TOML parsing). Run this on a trimmed copy of the manifest:</p>
+    <div class="runnable" data-title="Explore a pixi.toml with tomllib">
+<textarea>
+import tomllib
+
+manifest = '''
+[workspace]
+name = "python-practicum"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+
+[dependencies]
+python = "3.14.*"
+structlog = ">=26.1.0,<27"
+
+[feature.dev.dependencies]
+pytest = "*"
+ruff = "*"
+
+[environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tasks]
+lint = "ruff check ."
+ci = { depends-on = ["lint", "test"] }
+test = "pytest tests/unit/"
+start = { cmd = "practicum start {{ project }}", args = ["project"] }
+'''
+
+data = tomllib.loads(manifest)
+print("name:     ", data["workspace"]["name"])
+print("platforms:", ", ".join(data["workspace"]["platforms"]))
+print("python:   ", data["dependencies"]["python"])
+print("dev tools:", sorted(data["feature"]["dev"]["dependencies"]))
+for name, task in data["tasks"].items():
+    kind = "string" if isinstance(task, str) else "table"
+    print(f"task {name:6} ({kind}): {task}")
+</textarea>
+    </div>
+
+    <div class="runnable" data-title="Predict: how do dotted table headers nest?" data-predict>
+<textarea>
+import tomllib
+
+text = '''
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[feature.py312.tasks]
+test = "pytest"
+'''
+data = tomllib.loads(text)
+print(list(data))
+print(list(data["feature"]["py312"]))
+</textarea>
+    </div>
+
+    <p>The everyday commands:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi init textstats            # new workspace (writes pixi.toml, .gitattributes, .gitignore)
+cd textstats
+pixi add python=3.14 structlog # conda-forge packages
+pixi add --feature dev pytest ruff mypy
+pixi add --pypi tiny-lib       # only if conda-forge lacks it
+pixi install                   # solve, write pixi.lock, create .pixi/envs/default
+pixi run python -c "import structlog; print(structlog.__version__)"
+pixi shell                     # an activated subshell; type exit to leave
+pixi remove tiny-lib</code></pre>
+    <aside class="callout pixi"><p>The environment lives in <code>.pixi/envs/&lt;name&gt;</code> inside the
+      workspace. It is disposable: delete <code>.pixi/</code> (or run <code>pixi clean</code>) and
+      <code>pixi install</code> recreates it exactly from the lockfile. Never commit <code>.pixi/envs</code>, but do
+      commit <code>.pixi/config.toml</code> if you keep workspace settings there (this repo sets
+      <code>tls-root-certs = "system"</code>).</p></aside>
+    <p><strong>Remember:</strong> <code>[workspace]</code> sets where packages come from and which platforms to
+      solve for, the dependency tables say what to install, features and environments group those dependencies,
+      and tasks name the commands you run.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="features-environments">
+    <h2>Features, environments, and solve-groups</h2>
+    <p>A real project needs more than one environment. CI wants the test tools. A lint job wants only
+      <code>ruff</code>, so it installs in seconds. Production wants the runtime dependencies and nothing else. Pixi
+      handles this with two ideas:</p>
+    <ul>
+      <li>A <strong>feature</strong> is a named set of dependencies, tasks, and settings.</li>
+      <li>An <strong>environment</strong> is a list of features. Pixi solves each environment separately and
+        records every one in the same lockfile.</li>
+    </ul>
+    <pre data-label="pixi.toml"><code class="language-toml">[dependencies]                # the "default" feature
+python = "&gt;=3.12"
+structlog = "&gt;=26.1,&lt;27"
+
+[feature.test.dependencies]
+pytest = "*"
+pytest-cov = "*"
+
+[feature.lint.dependencies]
+ruff = "*"
+mypy = "*"
+
+[feature.py312.dependencies]
+python = "3.12.*"
+[feature.py313.dependencies]
+python = "3.13.*"
+[feature.py314.dependencies]
+python = "3.14.*"
+
+[environments]
+default = { features = ["test", "lint", "py314"], solve-group = "main" }
+prod    = { features = ["py314"], solve-group = "main" }
+lint    = { features = ["lint"], no-default-feature = true }
+py312   = ["py312", "test"]
+py313   = ["py313", "test"]
+py314   = ["py314", "test"]</code></pre>
+    <pre class="mermaid">
+flowchart LR
+  D[default feature<br/>python, structlog] --> E1[default env]
+  T[test] --> E1
+  L[lint] --> E1
+  P4[py314] --> E1
+  D --> E2[prod env]
+  P4 --> E2
+  L --> E3[lint env<br/>no-default-feature]
+  D --> E4[py312 env]
+  P2[py312] --> E4
+  T --> E4
+    </pre>
+    <p>Three details matter:</p>
+    <ol>
+      <li><strong>The default feature is implicit.</strong> Every environment includes the top-level
+        <code>[dependencies]</code> unless it says <code>no-default-feature = true</code>. That's why the
+        <code>lint</code> environment above contains only ruff and mypy.</li>
+      <li><strong>Keep the default spec broad when features pin.</strong> The base says
+        <code>python = "&gt;=3.12"</code>, and each <code>pyXYZ</code> feature narrows it. A base of
+        <code>"3.14.*"</code> would contradict a <code>py312</code> feature.</li>
+      <li><strong>Solve-groups share versions.</strong> Environments in the same <code>solve-group</code> are solved
+        together, so any package they share gets the <em>same version</em>. <code>prod</code> is a subset of
+        <code>default</code>, and because they share the <code>main</code> group, production runs the exact
+        <code>structlog</code> build the tests used. The <code>py312</code> environment can't join that group
+        because it needs a different Python.</li>
+    </ol>
+    <pre data-label="Terminal"><code class="language-bash">pixi run -e py312 pytest          # run in a specific environment
+pixi run -e lint ruff check .
+pixi shell -e py313
+pixi install --all                # install every environment
+pixi info                         # lists environments, their features, solve groups, and tasks</code></pre>
+    <p>The exercise in <a href="#practice">Practice</a> asks you to compute an environment's merged dependencies.
+      Here is the core of the idea, simplified. A later feature's spec replaces an earlier one, which is how
+      <code>py312</code> narrows Python:</p>
+    <div class="runnable" data-title="Simulate how features merge into an environment">
+<textarea>
+default = {"python": ">=3.12", "structlog": ">=26.1,<27"}
+features = {
+    "test": {"pytest": "*", "pytest-cov": "*"},
+    "lint": {"ruff": "*", "mypy": "*"},
+    "py312": {"python": "3.12.*"},
+}
+
+def merged(feature_names, include_default=True):
+    deps = dict(default) if include_default else {}
+    for name in feature_names:
+        deps.update(features[name])
+    return deps
+
+print("py312:", merged(["py312", "test"]))
+print("lint: ", merged(["lint"], include_default=False))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>A CI matrix maps neatly onto environments. Each job runs
+      <code>pixi run -e py312 test</code>, <code>-e py313</code>, <code>-e py314</code>, and every job installs from
+      the same committed lockfile. You will wire this into GitHub Actions in
+      <a href="m42-tooling.html">M42</a>.</p></aside>
+    <p><strong>Remember:</strong> environments are made of features. Every environment gets the default feature
+      unless you opt out, and environments in the same solve-group get identical versions of shared packages.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="tasks">
+    <h2>Tasks: depends-on, args, env, cwd, and caching</h2>
+    <p>A <strong>task</strong> is a named command that Pixi runs inside an environment. It's cross-platform, because
+      Pixi uses its own shell (deno_task_shell) and simple commands work the same on Windows. Tasks make the
+      project self-documenting: a newcomer runs <code>pixi task list</code> and sees every workflow.</p>
+    <pre data-label="pixi.toml"><code class="language-toml">[tasks]
+# A plain string is the command.
+lint = "ruff check ."
+
+# A table unlocks options.
+test = { cmd = "pytest tests/unit/", description = "Fast unit tests" }
+
+# depends-on: run these first (in order, each once).
+ci = { depends-on = ["lint", "check", "test"] }
+
+# args: named, optional defaults, substituted with {{ name }} (MiniJinja templates).
+grade = { cmd = "practicum grade {{ project }}", args = ["project"] }
+serve = { cmd = "python -m http.server {{ port }}", args = [{ arg = "port", default = "8000" }], cwd = "docs" }
+
+# env: environment variables for this task.
+debug-test = { cmd = "pytest -x", env = { PYTHONFAULTHANDLER = "1", STRUCTLOG_JSON = "0" } }
+
+# inputs/outputs: skip the task if nothing changed since the last successful run.
+build = { cmd = "python -m build --no-isolation", inputs = ["src/**/*.py", "pyproject.toml"], outputs = ["dist/*"] }
+
+# Run a task in a specific environment as a dependency.
+test-all = { depends-on = [
+  { task = "test", environment = "py312" },
+  { task = "test", environment = "py313" },
+  { task = "test", environment = "py314" },
+] }</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">pixi run ci                # runs lint, check, test, then ci itself
+pixi run grade p01         # {{ project }} becomes p01
+pixi run serve 9000        # overrides the default port
+pixi run build             # second time: "skipping, no changes" if inputs/outputs unchanged
+pixi task list
+pixi task add fmt "ruff format ."</code></pre>
+    <p>Pixi turns <code>depends-on</code> into a <strong>directed acyclic graph</strong> (DAG) and runs it in
+      <strong>topological order</strong>, so every task runs after the tasks it depends on. This is the
+      same algorithm you met in <a href="m31-graph-algorithms.html">M31</a>. The standard library has it built in,
+      as <code>graphlib.TopologicalSorter</code>:</p>
+    <div class="runnable" data-title="Order this repository's ci task">
+<textarea>
+from graphlib import TopologicalSorter
+
+# task -> tasks it depends on (from pixi.toml)
+graph = {
+    "ci": ["pre-commit-all", "build", "check", "lint", "cov"],
+    "pre-commit-all": [],
+    "build": [],
+    "check": [],
+    "lint": [],
+    "cov": [],
+}
+print(list(TopologicalSorter(graph).static_order()))
+
+# Add a cycle and see what happens.
+graph["build"] = ["ci"]
+try:
+    list(TopologicalSorter(graph).static_order())
+except Exception as exc:
+    print(type(exc).__name__, "-", exc)
+</textarea>
+    </div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "dag", "algorithms": ["topological"]}'></div>
+    <p>Here is depth-first search producing the same order, the approach you'll implement in exercise 3. Step
+      through it and watch <code>done</code> grow:</p>
+    <div class="tracer" data-title="Depth-first task ordering">
+<textarea>
+deps = {"ci": ["lint", "test"], "test": ["build"], "lint": [], "build": []}
+order = []
+done = set()
+
+def visit(task):
+    if task in done:
+        return
+    for dep in deps[task]:
+        visit(dep)
+    done.add(task)
+    order.append(task)
+
+visit("ci")
+</textarea>
+    </div>
+    <p><strong>How input/output caching works.</strong> When a task declares <code>inputs</code> and
+      <code>outputs</code>, Pixi hashes the matching files plus the command and environment after a successful run.
+      Next time, if every hash still matches, it skips the task. This toy version uses <code>hashlib</code>:</p>
+    <div class="runnable" data-title="A toy task cache">
+<textarea>
+import hashlib
+
+cache = {}
+
+def fingerprint(command, files):
+    h = hashlib.sha256(command.encode())
+    for name in sorted(files):
+        h.update(name.encode())
+        h.update(files[name].encode())
+    return h.hexdigest()[:12]
+
+def run_task(name, command, files):
+    key = fingerprint(command, files)
+    if cache.get(name) == key:
+        print(f"{name}: skipped (inputs unchanged, {key})")
+        return
+    print(f"{name}: running `{command}`")
+    cache[name] = key
+
+src = {"src/app.py": "print('v1')"}
+run_task("build", "python -m build", src)
+run_task("build", "python -m build", src)
+src["src/app.py"] = "print('v2')"
+run_task("build", "python -m build", src)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Caching only helps if <code>inputs</code> lists <em>everything</em> that affects
+      the output. Leave out <code>pyproject.toml</code> and a version bump won't trigger a rebuild, so you'll ship a
+      stale wheel. When in doubt, include the file.</p></aside>
+    <p><strong>Remember:</strong> tasks are the project's documented workflows. <code>depends-on</code> builds a DAG,
+      <code>args</code> parameterises a command, <code>env</code> and <code>cwd</code> set its context, and
+      <code>inputs</code>/<code>outputs</code> let Pixi skip work that's already done.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="lockfile">
+    <h2>The lockfile, updating, and inspecting</h2>
+    <p><code>pixi.lock</code> is a YAML file that Pixi writes. For every environment and every platform it records
+      the exact URL, checksum (sha256), and dependencies of each package. Here is a real excerpt from this
+      repository:</p>
+    <pre data-label="pixi.lock (excerpt)"><code class="language-yaml">version: 7
+environments:
+  default:
+    channels:
+    - url: https://conda.anaconda.org/conda-forge/
+    indexes:
+    - https://pypi.org/simple
+    packages:
+      linux-64:
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+      ...
+- conda: https://conda.anaconda.org/conda-forge/noarch/structlog-26.1.0-pyhcf101f3_0.conda
+  sha256: c0de1e3bf15ca975300a647bbffdc1b5ee5e98a55122510a240643ca8383eb65
+  depends:
+  - python &gt;=3.10
+  - typing-extensions
+  license: Apache-2.0 OR MIT</code></pre>
+    <p><strong>Commit the lockfile.</strong> It's what makes "it works on my machine" true on <em>every</em> machine.
+      CI, your teammates, and future-you six months from now all get the exact same bytes. The checksums also protect
+      you from a tampered download. Pixi writes a <code>.gitattributes</code> entry marking <code>pixi.lock</code>
+      as generated, so code review tools collapse its diff.</p>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi install</code></td><td>Make the environment match the manifest. It re-solves only if the manifest changed, and otherwise installs from the lock.</td></tr>
+        <tr><td><code>pixi install --locked</code></td><td>Fail if <code>pixi.lock</code> is out of date with <code>pixi.toml</code>. Use this in CI.</td></tr>
+        <tr><td><code>pixi install --frozen</code></td><td>Install exactly what the lock says, without checking the manifest.</td></tr>
+        <tr><td><code>pixi lock</code></td><td>Solve and write the lockfile without installing.</td></tr>
+        <tr><td><code>pixi update [pkg]</code></td><td>Re-solve to the newest versions <em>allowed by the current specs</em>. The manifest is unchanged.</td></tr>
+        <tr><td><code>pixi upgrade [pkg]</code></td><td>Raise the version <em>specs in the manifest</em> to the latest releases (for example <code>&lt;27</code> to <code>&lt;28</code>), then update the lock.</td></tr>
+        <tr><td><code>pixi list</code></td><td>Every installed package with version, build, size, kind (conda/pypi), and source.</td></tr>
+        <tr><td><code>pixi tree [pkg]</code></td><td>The dependency tree. <code>--invert pkg</code> answers "who pulled this in?"</td></tr>
+        <tr><td><code>pixi info</code></td><td>System, workspace, environments, features, solve groups, and tasks.</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Terminal (real output from this repo)"><code class="language-bash">$ pixi tree --invert python-discovery
+python-discovery 1.6.2
+└── virtualenv 21.14.7
+    └── pre-commit 4.7.0
+
+$ pixi list
+Name           Version   Build          Size       Kind   Source
+act            0.2.89    h75b854d_0     12.98 MiB  conda  https://conda.anaconda.org/conda-forge
+...
+
+$ pixi info
+Environments
+------------
+        Environment: default
+           Features: dev, default
+        Solve group: default
+   Target platforms: win-64, linux-64, osx-64, osx-arm64</code></pre>
+    <aside class="callout pro"><p>Update dependencies deliberately, on a branch: run <code>pixi update</code>, run
+      the full test suite, and commit the lockfile change on its own with a message like
+      <code>chore(deps): update lockfile</code>. If something breaks, <code>git revert</code> puts the old lock back.
+      Tools like Dependabot or Renovate can open these PRs for you on a schedule.</p></aside>
+    <p>Version specs are where many surprises start. Predict what this naive comparison prints:</p>
+    <div class="runnable" data-title="Predict: why versions aren't strings" data-predict>
+<textarea>
+versions = ["1.10.0", "1.9.0", "1.2.0"]
+print(max(versions))
+print(max(versions, key=lambda v: tuple(int(p) for p in v.split("."))))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> commit <code>pixi.lock</code> and install with <code>--locked</code> in CI.
+      <code>update</code> moves versions inside your existing specs, <code>upgrade</code> rewrites the specs
+      themselves, and <code>tree</code> and <code>list</code> show you what's actually installed.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="global-exec">
+    <h2>pixi global and pixi exec</h2>
+    <p>Some tools belong to <em>you</em>, not to a project: a favourite editor helper, <code>gh</code>, a linter you
+      run on random files. <code>pixi global</code> installs each tool into its own isolated environment and puts only
+      its executables on your <code>PATH</code> (in <code>~/.pixi/bin</code>). Two global tools can never break
+      each other.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi global install ruff gh       # each gets its own environment
+pixi global list
+pixi global update ruff
+pixi global uninstall gh
+cat ~/.pixi/manifests/pixi-global.toml   # global tools are declared in a manifest too</code></pre>
+    <p><code>pixi exec</code> (alias <code>pixi x</code>) goes one step further. It creates a <em>temporary</em>,
+      cached environment, runs one command, and leaves nothing installed. Use it for one-offs and for trying
+      new Python versions:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi exec cowpy "hello"                       # package and command share a name
+pixi exec --spec "python=3.15" python demo.py # try the 3.15 preview without touching any project
+pixi exec --spec "python=3.12" --spec pytest pytest tests/</code></pre>
+    <aside class="callout tip"><p>The rule of thumb: a tool the <em>project</em> needs goes in
+      <code>pixi.toml</code>, so teammates and CI get it too. A tool <em>you</em> like goes in
+      <code>pixi global</code>. A tool you need <em>once</em> runs with <code>pixi exec</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>global</code> is for your personal toolbox, <code>exec</code> is for
+      one-off commands, and the project manifest is for anything the project needs.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="pyproject">
+    <h2>pyproject.toml anatomy</h2>
+    <p><code>pixi.toml</code> describes the <em>development environment</em>. <code>pyproject.toml</code> describes
+      the <em>Python package</em> you're building: what it's called, what it needs at runtime, how to build it,
+      and how every tool is configured. The two cooperate. Here is this repository's file, trimmed:</p>
+    <pre data-label="pyproject.toml (this repository)"><code class="language-toml">[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "python-practicum"
+version = "0.1.0"
+description = "Python Practicum: an interactive novice-to-pro curriculum ..."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Kevin Mills", email = "millsks@gmail.com" }]
+requires-python = "&gt;=3.12"
+dependencies = []
+
+[project.scripts]
+practicum = "practicum.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/practicum"]
+
+[tool.ruff]
+line-length = 120
+[tool.mypy]
+python_version = "3.12"
+strict = true</code></pre>
+    <dl>
+      <dt><code>[build-system]</code> (PEP 517/518)</dt>
+      <dd>Names the <strong>build backend</strong>, the library that turns your source tree into distributable
+        files. Hatchling is a modern, fast choice. Others are setuptools, flit-core, pdm-backend, and maturin (for
+        Rust extensions). A <strong>build frontend</strong> such as <code>python -m build</code> reads this table,
+        installs <code>requires</code>, and calls the backend.</dd>
+      <dt><code>[project]</code> (PEP 621)</dt>
+      <dd>Standard metadata every tool understands. <code>requires-python</code> is the oldest Python you support.
+        Note that it's <code>&gt;=3.12</code> while development uses 3.14, and that mypy's
+        <code>python_version = "3.12"</code> tracks that floor so 3.13+ APIs get flagged.
+        <code>dependencies</code> lists <em>runtime</em> requirements as loose ranges. This repo leaves it empty
+        and lets Pixi provide <code>structlog</code>. A library published to PyPI would list
+        <code>"structlog&gt;=26.1"</code> here.</dd>
+      <dt><code>[project.scripts]</code></dt>
+      <dd>A <strong>console-script entry point</strong>. When the package is installed, the installer writes a small
+        <code>practicum</code> executable that imports <code>practicum.cli</code> and calls <code>main()</code>.
+        That's why <code>pixi run practicum check-site</code> works. Related tables are
+        <code>[project.gui-scripts]</code> and <code>[project.entry-points."group"]</code> for plugins.</dd>
+      <dt><code>[project.optional-dependencies]</code></dt>
+      <dd>"Extras" that users opt into, for example <code>pip</code>-style <code>mypkg[plot]</code>. Use them for
+        optional runtime features, not for dev tools.</dd>
+      <dt><code>[dependency-groups]</code> (PEP 735)</dt>
+      <dd>Named groups for development (<code>test</code>, <code>docs</code>) that are <em>not</em> published as
+        part of the package. In a Pixi workspace, features usually play this role.</dd>
+      <dt><code>[tool.*]</code></dt>
+      <dd>Each tool's configuration: ruff, mypy, pytest, coverage, git-cliff. One file, no dotfile sprawl.</dd>
+    </dl>
+    <pre data-label="Optional dependencies and plugin entry points"><code class="language-toml">[project]
+dependencies = ["structlog&gt;=26.1"]
+
+[project.optional-dependencies]
+plot = ["matplotlib&gt;=3.11"]
+fast = ["polars&gt;=2"]
+
+[project.entry-points."textstats.formatters"]
+json = "textstats.formatters:JsonFormatter"</code></pre>
+    <p>Entry points are the same <code>module:attribute</code> strings everywhere. The standard library can load
+      one, which is exactly what a console script does:</p>
+    <div class="runnable" data-title="Load an entry point the way an installer's script does">
+<textarea>
+from importlib.metadata import EntryPoint
+
+# Same syntax as  practicum = "practicum.cli:main", pointed at the stdlib so it runs here.
+ep = EntryPoint(name="dump", value="json:dumps", group="console_scripts")
+print("module:", ep.module, "| attr:", ep.attr)
+func = ep.load()
+print(func({"tool": "textstats", "ok": True}))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Lint your pyproject.toml">
+<textarea>
+import tomllib
+
+pyproject = '''
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "textstats"
+version = "0.3.0"
+requires-python = ">=3.12"
+dependencies = ["structlog>=26.1"]
+
+[project.scripts]
+textstats = "textstats.cli:main"
+'''
+
+data = tomllib.loads(pyproject)
+problems = []
+for key in ("name", "version", "requires-python"):
+    if key not in data.get("project", {}):
+        problems.append(f"[project] is missing {key!r}")
+if "build-backend" not in data.get("build-system", {}):
+    problems.append("no build backend")
+for name, target in data["project"].get("scripts", {}).items():
+    if ":" not in target:
+        problems.append(f"script {name!r} must look like 'module:function'")
+print(problems or "pyproject looks complete")
+</textarea>
+    </div>
+    <aside class="callout py315"><p><strong>Python 3.15 preview: startup <code>.start</code> files (PEP 829).</strong>
+      Today, a <code>.pth</code> file in <code>site-packages</code> can contain lines starting with
+      <code>import</code>, which Python <em>executes</em> at every interpreter startup. Coverage tools and editable
+      installs rely on this, but it's an invisible, hard-to-audit code-execution hook. PEP 829 introduces
+      <code>&lt;name&gt;.start</code> files that list explicit <code>module:function</code> entry points for
+      <code>site</code> to call at startup, and begins deprecating executable lines in <code>.pth</code> files.
+      Packaging tools that generate editable installs are the main users, but if you ever wonder "why does
+      this code run before my program?", check <code>.pth</code> and <code>.start</code> files. Check the 3.15
+      "What's New" for the final details.</p></aside>
+    <p><strong>Remember:</strong> <code>[build-system]</code> says how to build, <code>[project]</code> says what
+      you're shipping, and <code>[tool.*]</code> holds every tool's settings. Entry points are
+      <code>module:attr</code> strings.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="building">
+    <h2>Building sdists and wheels</h2>
+    <p>A <strong>distribution</strong> is a file you upload and users install. There are two kinds:</p>
+    <ul>
+      <li>An <strong>sdist</strong> (source distribution, <code>.tar.gz</code>) is your source plus metadata. The
+        installer must <em>build</em> it, which may need a compiler.</li>
+      <li>A <strong>wheel</strong> (<code>.whl</code>, a zip file) is pre-built and ready to unpack into
+        <code>site-packages</code>. It installs fast and runs no code at install time.</li>
+    </ul>
+    <p>A wheel's filename encodes where it can be installed:
+      <code>{name}-{version}-{python tag}-{abi tag}-{platform tag}.whl</code>. Pure-Python packages produce one
+      universal wheel, <code>py3-none-any</code>. Compiled extensions produce one wheel per Python and platform,
+      such as <code>cp314-cp314-manylinux_2_28_x86_64</code>.</p>
+    <div class="runnable" data-title="Predict: decode wheel filenames" data-predict>
+<textarea>
+def wheel_tags(filename):
+    stem = filename.removesuffix(".whl")
+    name, version, py, abi, plat = stem.split("-")
+    return f"{name} {version}: python={py} abi={abi} platform={plat}"
+
+print(wheel_tags("python_practicum-0.1.0-py3-none-any.whl"))
+print(wheel_tags("numpy-2.5.4-cp314-cp314-macosx_14_0_arm64.whl"))
+</textarea>
+    </div>
+    <p>This repository builds through a task: <code>build = "python -m build --no-isolation"</code>. By default
+      <code>python -m build</code> creates a temporary isolated environment and downloads <code>hatchling</code>
+      from PyPI into it. <code>--no-isolation</code> tells it to use the backend that's already in the Pixi
+      environment instead (that's why <code>hatchling</code> and <code>python-build</code> are in the
+      <code>dev</code> feature). The build is then offline-friendly, uses locked versions, and stays reproducible.</p>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run build
+* Building sdist...
+* Building wheel from sdist
+Successfully built python_practicum-0.1.0.tar.gz and python_practicum-0.1.0-py3-none-any.whl
+
+$ pixi run python -m zipfile -l dist/python_practicum-0.1.0-py3-none-any.whl
+practicum/__init__.py
+practicum/cli.py
+...
+python_practicum-0.1.0.dist-info/METADATA
+python_practicum-0.1.0.dist-info/entry_points.txt
+python_practicum-0.1.0.dist-info/RECORD</code></pre>
+    <p>The <code>.dist-info</code> directory is the installed metadata. <code>METADATA</code> holds the
+      <code>[project]</code> fields, <code>entry_points.txt</code> holds your scripts, and <code>RECORD</code>
+      lists every file with a hash. The cell below builds a miniature wheel-shaped zip in memory, so you can see
+      it's just a zip archive:</p>
+    <div class="runnable" data-title="A wheel is a zip file">
+<textarea>
+import io
+import zipfile
+
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as whl:
+    whl.writestr("textstats/__init__.py", "__version__ = '0.3.0'\n")
+    whl.writestr("textstats/cli.py", "def main():\n    return 0\n")
+    whl.writestr("textstats-0.3.0.dist-info/METADATA", "Metadata-Version: 2.4\nName: textstats\nVersion: 0.3.0\n")
+    whl.writestr("textstats-0.3.0.dist-info/entry_points.txt", "[console_scripts]\ntextstats = textstats.cli:main\n")
+
+with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as whl:
+    for info in whl.infolist():
+        print(f"{info.file_size:5d}  {info.filename}")
+    print(whl.read("textstats-0.3.0.dist-info/entry_points.txt").decode())
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Always test the <em>built</em> artifact, not just the source tree. A classic bug is
+      a data file that exists in your checkout but isn't included in the wheel. Install the wheel into a scratch
+      environment, for example
+      <code>pixi exec --spec python=3.14 --spec pip -- pip install dist/*.whl</code> in a throwaway
+      directory, and run the CLI. Use <code>pip</code> only inside that disposable <code>pixi exec</code>
+      environment, never in your workspace.</p></aside>
+    <p><strong>Remember:</strong> an sdist is source that the installer still has to build, and a wheel is a
+      pre-built zip. Build both with <code>python -m build</code> through a Pixi task, and test the wheel you
+      built.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="versioning-publishing">
+    <h2>Versioning and publishing to PyPI</h2>
+    <p><strong>Semantic Versioning</strong> (SemVer) gives a version <code>MAJOR.MINOR.PATCH</code> a meaning:</p>
+    <ul>
+      <li><strong>PATCH</strong> (<code>1.4.2 → 1.4.3</code>): bug fixes only, so everyone can upgrade safely.</li>
+      <li><strong>MINOR</strong> (<code>1.4.2 → 1.5.0</code>): new features that are backward compatible. Patch
+        resets to 0.</li>
+      <li><strong>MAJOR</strong> (<code>1.4.2 → 2.0.0</code>): breaking changes. Minor and patch reset.</li>
+      <li>Before <code>1.0.0</code>, anything may change. Many projects treat <code>0.MINOR</code> as the
+        "breaking" number.</li>
+    </ul>
+    <p>That meaning is what makes the specs in this repo's <code>pixi.toml</code> work:
+      <code>structlog = "&gt;=26.1.0,&lt;27"</code> says "any 26.x from 26.1 on, but not the next major". Python's own
+      version rules (PEP 440) add pre-releases like <code>2.0.0rc1</code>, post-releases, and dev releases. Python
+      itself follows a calendar-based schedule rather than SemVer.</p>
+    <aside class="callout pro"><p>With <a href="m42-tooling.html">Conventional Commits</a> the next version follows
+      from the history: any <code>feat!:</code> or <code>BREAKING CHANGE:</code> bumps major, any <code>feat:</code>
+      bumps minor, and otherwise <code>fix:</code> bumps patch. <code>git-cliff --bumped-version</code> computes it
+      for you.</p></aside>
+    <p><strong>Publishing.</strong> Uploading to PyPI used to mean storing a long-lived API token as a CI secret.
+      If it leaked, attackers could publish malware under your name. <strong>Trusted publishing</strong> replaces
+      the token with OpenID Connect (OIDC). You tell PyPI "releases of <code>textstats</code> may come from
+      GitHub repo <code>me/textstats</code>, workflow <code>release.yml</code>, environment <code>pypi</code>". At
+      release time GitHub issues a short-lived identity token, PyPI checks it and swaps it for an upload token that
+      expires in minutes, and no secret is stored anywhere.</p>
+    <pre data-label=".github/workflows/release.yml"><code class="language-yaml">name: Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+      - run: pixi run build
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/ }
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi            # matches the trusted publisher configured on PyPI
+    permissions:
+      id-token: write            # lets the job request an OIDC token; no secrets needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1</code></pre>
+    <ol>
+      <li>Bump the version in <code>pyproject.toml</code>, update <code>CHANGELOG.md</code>
+        (<code>pixi run changelog</code>), and merge.</li>
+      <li>Tag the release with <code>git tag v0.3.0</code> and <code>git push origin v0.3.0</code>.</li>
+      <li>CI builds the sdist and wheel once and publishes those same files. Try the whole flow first with
+        TestPyPI.</li>
+    </ol>
+    <aside class="callout warn"><p>A version, once published to PyPI, can never be reused, even if you delete the
+      release. If you ship a broken <code>0.3.0</code>, "yank" it and publish <code>0.3.1</code>.</p></aside>
+    <p><strong>Remember:</strong> the version number tells users what kind of change to expect. Publish from CI
+      with trusted publishing, so no long-lived token is stored anywhere.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="conda-recipes">
+    <h2>Conda packages with rattler-build</h2>
+    <p>PyPI is the right home for most Python libraries. A <strong>conda package</strong> is better when your project
+      needs non-Python pieces (a C library, a CLI written in another language) or when your users are Pixi or
+      conda users who want a single solver for everything. conda-forge packages are built from <strong>recipes</strong>
+      by <strong>rattler-build</strong>, the same Rust-based package toolkit (rattler) that Pixi is built on.</p>
+    <pre data-label="recipe/recipe.yaml"><code class="language-yaml">context:
+  version: "0.3.0"
+
+package:
+  name: textstats
+  version: ${{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  script: python -m pip install . --no-deps --no-build-isolation -vv
+  python:
+    entry_points:
+      - textstats = textstats.cli:main
+
+requirements:
+  host:
+    - python &gt;=3.12
+    - hatchling
+    - pip
+  run:
+    - python &gt;=3.12
+    - structlog &gt;=26.1
+
+tests:
+  - python:
+      imports: [textstats]
+  - script: textstats --help</code></pre>
+    <p>The <code>pip</code> inside a recipe runs in rattler-build's throwaway <em>build</em> environment to copy
+      your package into the conda package. It's an implementation detail of the recipe, not something you run in
+      your workspace. Build locally with <code>pixi exec rattler-build build --recipe recipe/recipe.yaml</code>.
+      To publish to conda-forge, you submit the recipe to <code>conda-forge/staged-recipes</code>. After review,
+      a "feedstock" repository rebuilds the package automatically for every platform and new release.</p>
+    <aside class="callout pixi"><p>Pixi is also growing a native build workflow (<code>[package]</code> tables with
+      build backends, plus <code>pixi publish</code>) that builds conda packages straight from a workspace. It's
+      still evolving, so check the Pixi docs for the current status before you rely on it.</p></aside>
+    <p><strong>Remember:</strong> publish wheels to PyPI for Python users. Add a conda recipe when you need native
+      dependencies or want first-class Pixi and conda installs.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises use the same data structures Pixi and packaging tools use. They're graded in the browser
+      against real Python 3.14.</p>
+
+    <div class="exercise" data-id="m41-e1" data-title="Bump a SemVer version">
+      <div class="exercise-prompt">
+        <p>Write <code>bump(version, part)</code>. <code>version</code> is <code>"MAJOR.MINOR.PATCH"</code> and
+          <code>part</code> is <code>"major"</code>, <code>"minor"</code>, or <code>"patch"</code>. Return the new
+          version string, resetting the lower numbers to zero as SemVer requires. Raise <code>ValueError</code>
+          for any other <code>part</code>.</p>
+      </div>
+<textarea class="starter">
+def bump(version: str, part: str) -> str:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_patch():
+    assert bump("1.4.2", "patch") == "1.4.3", "patch adds one to the last number"
+
+def test_minor_resets_patch():
+    assert bump("1.4.2", "minor") == "1.5.0", "minor bump resets patch to 0"
+
+def test_major_resets_both():
+    assert bump("1.4.2", "major") == "2.0.0", "major bump resets minor and patch"
+
+def test_numeric_not_string():
+    assert bump("0.9.9", "patch") == "0.9.10", "versions are numbers: 9 + 1 is 10"
+
+def test_bad_part():
+    try:
+        bump("1.0.0", "huge")
+    except ValueError:
+        return
+    assert False, "an unknown part should raise ValueError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Split on <code>"."</code>, convert with <code>int</code>, then
+        build the result with an f-string for each case.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def bump(version: str, part: str) -&gt; str:
+    major, minor, patch = (int(p) for p in version.split("."))
+    if part == "major":
+        return f"{major + 1}.0.0"
+    if part == "minor":
+        return f"{major}.{minor + 1}.0"
+    if part == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    raise ValueError(f"unknown part: {part!r}")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m41-e2" data-title="Summarise a manifest's tasks">
+      <div class="exercise-prompt">
+        <p>Write <code>describe_tasks(manifest_text)</code>. It parses a <code>pixi.toml</code> string with
+          <code>tomllib</code> and returns a dict mapping each task name to a one-line description:</p>
+        <ul>
+          <li>a string task maps to the command itself;</li>
+          <li>a table with <code>cmd</code> maps to the <code>cmd</code> value;</li>
+          <li>a table with only <code>depends-on</code> maps to <code>"depends-on: a, b"</code> (names joined by
+            <code>", "</code>, in order).</li>
+        </ul>
+        <p>A manifest with no <code>[tasks]</code> table returns <code>{}</code>.</p>
+      </div>
+<textarea class="starter">
+import tomllib
+
+def describe_tasks(manifest_text: str) -> dict[str, str]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+SAMPLE = '''
+[tasks]
+lint = "ruff check ."
+test = { cmd = "pytest tests/unit/", description = "unit" }
+ci = { depends-on = ["lint", "test"] }
+'''
+
+def test_string_task():
+    assert describe_tasks(SAMPLE)["lint"] == "ruff check .", "a string task is its own command"
+
+def test_table_with_cmd():
+    assert describe_tasks(SAMPLE)["test"] == "pytest tests/unit/", "use the cmd field of a table task"
+
+def test_depends_only():
+    assert describe_tasks(SAMPLE)["ci"] == "depends-on: lint, test", "list dependencies joined by ', '"
+
+def test_no_tasks():
+    assert describe_tasks('[workspace]\nname = "x"\n') == {}, "no [tasks] table means an empty dict"
+
+def test_keeps_all():
+    assert set(describe_tasks(SAMPLE)) == {"lint", "test", "ci"}, "every task should appear"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>tomllib.loads(text).get("tasks", {})</code> gives a dict.
+        Check <code>isinstance(task, str)</code> first, then look for <code>"cmd"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import tomllib
+
+def describe_tasks(manifest_text: str) -&gt; dict[str, str]:
+    tasks = tomllib.loads(manifest_text).get("tasks", {})
+    result: dict[str, str] = {}
+    for name, task in tasks.items():
+        if isinstance(task, str):
+            result[name] = task
+        elif "cmd" in task:
+            result[name] = task["cmd"]
+        else:
+            result[name] = "depends-on: " + ", ".join(task.get("depends-on", []))
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m41-e3" data-title="Order tasks like pixi run">
+      <div class="exercise-prompt">
+        <p>Write <code>task_order(manifest_text, target)</code> that returns the list of task names Pixi would run
+          for <code>pixi run target</code>: every dependency before the task that needs it, each task once,
+          dependencies visited in their listed order, and <code>target</code> last. String tasks have no
+          dependencies. Raise <code>ValueError</code> if a task is unknown or the dependencies contain a
+          cycle.</p>
+      </div>
+<textarea class="starter">
+import tomllib
+
+def task_order(manifest_text: str, target: str) -> list[str]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+M = '''
+[tasks]
+fmt = "ruff format ."
+lint = { cmd = "ruff check .", depends-on = ["fmt"] }
+check = "mypy src/"
+test = { cmd = "pytest", depends-on = ["fmt"] }
+ci = { depends-on = ["lint", "check", "test"] }
+'''
+
+def test_simple():
+    assert task_order(M, "check") == ["check"], "a task with no deps runs alone"
+
+def test_chain():
+    assert task_order(M, "lint") == ["fmt", "lint"], "dependencies run first"
+
+def test_ci_order_and_dedupe():
+    assert task_order(M, "ci") == ["fmt", "lint", "check", "test", "ci"], "each task once, deps in listed order"
+
+def test_unknown():
+    try:
+        task_order(M, "deploy")
+    except ValueError:
+        return
+    assert False, "unknown task should raise ValueError"
+
+def test_cycle():
+    cyc = '[tasks]\na = { depends-on = ["b"] }\nb = { depends-on = ["a"] }\n'
+    try:
+        task_order(cyc, "a")
+    except ValueError:
+        return
+    assert False, "a cycle should raise ValueError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Depth-first search with two sets: <code>done</code> and
+        <code>visiting</code>. Meeting a task that is still in <code>visiting</code> means you've found a
+        cycle.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import tomllib
+
+def task_order(manifest_text: str, target: str) -&gt; list[str]:
+    tasks = tomllib.loads(manifest_text).get("tasks", {})
+    order: list[str] = []
+    done: set[str] = set()
+    visiting: set[str] = set()
+
+    def deps_of(name: str) -&gt; list[str]:
+        task = tasks[name]
+        return [] if isinstance(task, str) else list(task.get("depends-on", []))
+
+    def visit(name: str) -&gt; None:
+        if name not in tasks:
+            raise ValueError(f"unknown task: {name}")
+        if name in done:
+            return
+        if name in visiting:
+            raise ValueError(f"cycle through {name}")
+        visiting.add(name)
+        for dep in deps_of(name):
+            visit(dep)
+        visiting.discard(name)
+        done.add(name)
+        order.append(name)
+
+    visit(target)
+    return order</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m41-e4" data-title="Does a version satisfy a spec?">
+      <div class="exercise-prompt">
+        <p>Write <code>satisfies(version, spec)</code> for a simplified version-spec language. <code>version</code>
+          looks like <code>"3.14.2"</code>. <code>spec</code> is one or more comma-separated clauses, all of which
+          must hold:</p>
+        <ul>
+          <li><code>"*"</code> matches anything;</li>
+          <li><code>"3.14.*"</code> matches versions starting with those components;</li>
+          <li><code>&gt;=</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>==</code>
+            followed by a version compare numerically. Pad the shorter version with zeros, so <code>"3.12"</code>
+            equals <code>"3.12.0"</code>.</li>
+        </ul>
+        <p>Spaces around clauses are allowed.</p>
+      </div>
+<textarea class="starter">
+def satisfies(version: str, spec: str) -> bool:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_star():
+    assert satisfies("1.2.3", "*") is True, "* matches anything"
+
+def test_wildcard():
+    assert satisfies("3.14.2", "3.14.*") is True, "3.14.2 is in 3.14.*"
+    assert satisfies("3.13.9", "3.14.*") is False, "3.13.9 is not in 3.14.*"
+
+def test_range():
+    assert satisfies("26.1.0", ">=26.1.0,<27") is True, "26.1.0 is in [26.1.0, 27)"
+    assert satisfies("27.0.0", ">=26.1.0,<27") is False, "27.0.0 is excluded by <27"
+
+def test_numeric():
+    assert satisfies("3.10.0", ">=3.9") is True, "compare numerically: 10 > 9"
+
+def test_padding_and_spaces():
+    assert satisfies("3.12.0", "==3.12") is True, "3.12 equals 3.12.0"
+    assert satisfies("3.12.5", " >=3.12 , <3.13 ") is True, "spaces around clauses are allowed"
+
+def test_strict_ops():
+    assert satisfies("2.0", ">2.0") is False, "> is strict"
+    assert satisfies("2.0", "<=2.0") is True, "<= includes equality"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check two-character operators before one-character ones. Convert
+        versions to tuples of ints and pad both to the same length before comparing.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import operator
+
+OPS = [("&gt;=", operator.ge), ("&lt;=", operator.le), ("==", operator.eq), ("&gt;", operator.gt), ("&lt;", operator.lt)]
+
+def _parts(v: str) -&gt; list[int]:
+    return [int(p) for p in v.split(".")]
+
+def _clause(version: str, clause: str) -&gt; bool:
+    clause = clause.strip()
+    if clause == "*":
+        return True
+    if clause.endswith(".*"):
+        prefix = _parts(clause[:-2])
+        return _parts(version)[: len(prefix)] == prefix
+    for symbol, op in OPS:
+        if clause.startswith(symbol):
+            a, b = _parts(version), _parts(clause[len(symbol):].strip())
+            width = max(len(a), len(b))
+            a += [0] * (width - len(a))
+            b += [0] * (width - len(b))
+            return op(a, b)
+    return _parts(version) == _parts(clause)
+
+def satisfies(version: str, spec: str) -&gt; bool:
+    return all(_clause(version, c) for c in spec.split(","))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m41-e5" data-title="Resolve an environment's dependencies">
+      <div class="exercise-prompt">
+        <p>Write <code>environment_deps(manifest_text, env)</code> that returns the merged conda dependency dict
+          for environment <code>env</code>:</p>
+        <ul>
+          <li>Start from top-level <code>[dependencies]</code>, unless the environment sets
+            <code>no-default-feature = true</code>.</li>
+          <li>Apply each listed feature's <code>dependencies</code> in order. Later specs replace earlier ones for
+            the same package.</li>
+          <li>An environment may be a plain list of features or a table with <code>features</code>.</li>
+          <li><code>"default"</code> with no <code>[environments]</code> entry means just the top-level
+            dependencies. Any other unknown environment raises <code>KeyError</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import tomllib
+
+def environment_deps(manifest_text: str, env: str) -> dict[str, str]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+M = '''
+[dependencies]
+python = ">=3.12"
+structlog = "*"
+
+[feature.test.dependencies]
+pytest = "*"
+
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[feature.lint.dependencies]
+ruff = "*"
+
+[environments]
+py312 = ["py312", "test"]
+lint = { features = ["lint"], no-default-feature = true }
+dev = { features = ["test", "lint"], solve-group = "main" }
+'''
+
+def test_list_env():
+    assert environment_deps(M, "py312") == {"python": "3.12.*", "structlog": "*", "pytest": "*"}, "feature overrides python"
+
+def test_no_default():
+    assert environment_deps(M, "lint") == {"ruff": "*"}, "no-default-feature drops top-level deps"
+
+def test_table_env():
+    assert environment_deps(M, "dev") == {"python": ">=3.12", "structlog": "*", "pytest": "*", "ruff": "*"}, "table form"
+
+def test_implicit_default():
+    assert environment_deps(M, "default") == {"python": ">=3.12", "structlog": "*"}, "default is just top-level deps"
+
+def test_unknown():
+    try:
+        environment_deps(M, "gpu")
+    except KeyError:
+        return
+    assert False, "unknown environment should raise KeyError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Normalise the environment entry first: if it is a list, turn it
+        into <code>{"features": that_list}</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import tomllib
+
+def environment_deps(manifest_text: str, env: str) -&gt; dict[str, str]:
+    data = tomllib.loads(manifest_text)
+    envs = data.get("environments", {})
+    if env in envs:
+        entry = envs[env]
+    elif env == "default":
+        entry = {"features": []}
+    else:
+        raise KeyError(env)
+    if isinstance(entry, list):
+        entry = {"features": entry}
+    deps: dict[str, str] = {}
+    if not entry.get("no-default-feature", False):
+        deps.update(data.get("dependencies", {}))
+    for name in entry.get("features", []):
+        deps.update(data["feature"][name].get("dependencies", {}))
+    return deps</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: package a CLI tool</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">textstats: a packaged, multi-version CLI</span></div>
+      <div class="widget-body">
+        <p>Build <code>textstats</code>, a command-line tool that prints word, line, and character counts and the
+          top <em>N</em> words of a text file. The point isn't the counting. It's producing a project that any
+          teammate can clone and run with one command, on any OS and any supported Python.</p>
+        <h4>Steps</h4>
+        <ol>
+          <li><code>pixi init textstats</code>, then create the src layout:
+            <code>src/textstats/__init__.py</code>, <code>src/textstats/core.py</code> (pure functions),
+            <code>src/textstats/cli.py</code> (an <code>argparse</code> <code>main()</code> that returns an exit
+            code).</li>
+          <li>Write <code>pyproject.toml</code> with hatchling, <code>[project]</code> metadata,
+            <code>requires-python = "&gt;=3.12"</code>, and <code>[project.scripts] textstats = "textstats.cli:main"</code>.</li>
+          <li>In <code>pixi.toml</code>, add <code>textstats = { path = ".", editable = true }</code> under
+            <code>[pypi-dependencies]</code>. Set the base <code>python = "&gt;=3.12"</code>. Add features
+            <code>test</code> (pytest, pytest-cov), <code>lint</code> (ruff, mypy), <code>build</code>
+            (python-build, hatchling), and <code>py312</code>/<code>py313</code>/<code>py314</code>.</li>
+          <li>Define environments: <code>default</code> (test, lint, build, py314), <code>lint</code> with
+            <code>no-default-feature</code>, and <code>py312</code>/<code>py313</code>/<code>py314</code> with
+            <code>test</code>.</li>
+          <li>Add tasks: <code>test</code>, <code>lint</code>, <code>check</code>, and
+            <code>build</code> with <code>inputs</code>/<code>outputs</code>. Add <code>stats</code> with an
+            <code>args</code> entry for the file path, <code>test-all</code> using <code>depends-on</code> with an
+            <code>environment</code> per Python version, and <code>ci</code> chaining everything.</li>
+          <li>Write tests in <code>tests/unit/test_core.py</code> and run
+            <code>pixi run -e py312 test</code>.</li>
+          <li><code>pixi run build</code> and list the wheel's contents with <code>python -m zipfile -l</code>.</li>
+          <li>Commit <code>pixi.toml</code>, <code>pixi.lock</code>, and <code>pyproject.toml</code>. Clone into a new
+            directory and check that <code>pixi run ci</code> passes there.</li>
+        </ol>
+        <ul class="checklist" data-id="m41-mini">
+          <li><code>pixi run textstats README.md</code> prints counts (the console script works)</li>
+          <li><code>pixi run test-all</code> passes on Python 3.12, 3.13, and 3.14</li>
+          <li><code>pixi run -e lint lint</code> installs only ruff and mypy (check with <code>pixi list -e lint</code>)</li>
+          <li>Running <code>pixi run build</code> twice skips the second build</li>
+          <li>The wheel is named <code>textstats-0.1.0-py3-none-any.whl</code> and contains <code>entry_points.txt</code></li>
+          <li><code>pixi.lock</code> is committed and a fresh clone passes <code>pixi install --locked</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add <code>[project.optional-dependencies] fast = ["polars&gt;=2"]</code> and use polars when it's
+            importable.</li>
+          <li>Write a <code>release.yml</code> for trusted publishing to TestPyPI.</li>
+          <li>Write a rattler-build <code>recipe.yaml</code> and build a conda package locally.</li>
+          <li>Try your CLI on the 3.15 preview with <code>pixi exec --spec "python=3.15"</code>, using
+            <code>lazy import</code> for the heavy imports in <code>cli.py</code>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="3.15 preview: lazy imports keep CLIs fast to start">
+<textarea>
+# cli.py: heavy modules load only if the command actually needs them.
+lazy import json
+lazy from collections import Counter
+import argparse
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="textstats")
+    parser.add_argument("path")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    words = open(args.path).read().split()
+    top = Counter(words).most_common(3)
+    print(json.dumps(top) if args.json else top)
+    return 0
+
+raise SystemExit(main())
+</textarea>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m41-quiz">
+<script type="application/json">
+{"title": "Packaging & environments quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the difference between <code>pixi.toml</code> and <code>pixi.lock</code>?", "options": ["They are two copies of the same data", "The manifest states intent with ranges; the lockfile records exact resolved packages and hashes per platform", "The lockfile is only for Windows", "The manifest is generated from the lockfile"], "answer": 1, "explanation": "<p>You edit the manifest (what you want). Pixi writes the lockfile (exactly what it solved). Commit both.</p>"},
+  {"type": "single", "prompt": "A package exists on both conda-forge and PyPI. This course's rule says to…", "options": ["<code>pixi add --pypi pkg</code>", "<code>pixi add pkg</code> (conda-forge first)", "<code>pip install pkg</code> inside <code>pixi shell</code>", "vendor the source"], "answer": 1, "explanation": "<p>conda-forge first: the conda solver can then check its native dependencies too. Use <code>--pypi</code> only when conda-forge lacks it, and never pip directly.</p>"},
+  {"type": "multi", "prompt": "Which statements about environments are true?", "options": ["Every environment includes the top-level <code>[dependencies]</code> unless <code>no-default-feature = true</code>", "Environments in one solve-group get the same versions of shared packages", "A py312 environment can share a solve-group with a Python 3.14 environment", "Environments are combinations of features"], "answer": [0, 1, 3], "explanation": "<p>The default feature is implicit. Solve-groups share versions, which is impossible when the Python versions differ.</p>"},
+  {"type": "single", "prompt": "What does <code>pixi upgrade</code> do that <code>pixi update</code> does not?", "options": ["Nothing; they are aliases", "It rewrites the version specs in the manifest to allow newer releases", "It upgrades Pixi itself", "It deletes the lockfile"], "answer": 1, "explanation": "<p><code>update</code> moves within existing specs and only changes the lock. <code>upgrade</code> raises the specs in <code>pixi.toml</code> too. Pixi updates itself with <code>pixi self-update</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from graphlib import TopologicalSorter\ng = {\"ci\": [\"lint\"], \"lint\": [\"fmt\"], \"fmt\": []}\nprint(list(TopologicalSorter(g).static_order()))", "answer": "['fmt', 'lint', 'ci']", "explanation": "<p>Dependencies come before the tasks that need them. This is the order <code>pixi run ci</code> would use.</p>"},
+  {"type": "text", "prompt": "Which task key lists the tasks that must run first?", "answer": ["depends-on"], "explanation": "<p><code>depends-on</code> builds the task DAG.</p>"},
+  {"type": "single", "prompt": "A task declares <code>inputs</code> and <code>outputs</code>. When does Pixi skip it?", "options": ["Never", "When the input/output file hashes and command match the last successful run", "When the task ran in the last hour", "When the outputs folder exists"], "answer": 1, "explanation": "<p>Pixi fingerprints the inputs, outputs, and command. If nothing changed, re-running would produce the same result.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(max([\"1.10.0\", \"1.9.0\"]))", "answer": "1.9.0", "explanation": "<p>Strings compare character by character and <code>'9' &gt; '1'</code>. Compare versions as tuples of integers.</p>"},
+  {"type": "single", "prompt": "What does <code>practicum = \"practicum.cli:main\"</code> under <code>[project.scripts]</code> do?", "options": ["Runs main() during the build", "Creates an executable named practicum that imports practicum.cli and calls main()", "Declares a dependency on a package named practicum", "Configures pytest"], "answer": 1, "explanation": "<p>It's a console-script entry point. The installer generates the wrapper executable.</p>"},
+  {"type": "single", "prompt": "Why does this repo build with <code>python -m build --no-isolation</code>?", "options": ["It's faster to type", "It uses the locked hatchling from the Pixi environment instead of downloading a fresh one", "It skips building the wheel", "It disables tests"], "answer": 1, "explanation": "<p>Isolated builds fetch the backend from PyPI. With <code>--no-isolation</code> the build uses the reproducible, locked toolchain Pixi installed.</p>"},
+  {"type": "single", "prompt": "Under SemVer, which bump does a backward-compatible new feature need from 2.3.1?", "options": ["2.3.2", "2.4.0", "3.0.0", "2.4.1"], "answer": 1, "explanation": "<p>Minor bump with patch reset: 2.4.0.</p>"},
+  {"type": "multi", "prompt": "Which are benefits of PyPI trusted publishing?", "options": ["No long-lived API token stored in CI secrets", "Upload credentials are short-lived", "PyPI checks which repo and workflow is publishing", "You can re-upload over an existing version"], "answer": [0, 1, 2], "explanation": "<p>OIDC trust removes stored secrets. Versions on PyPI are still immutable; you yank and publish a new one.</p>"},
+  {"type": "text", "prompt": "Which Pixi command runs a one-off command in a temporary environment, e.g. with Python 3.15?", "answer": ["pixi exec", "exec", "pixi x"], "explanation": "<p><code>pixi exec --spec \"python=3.15\" python file.py</code> leaves nothing installed in your workspace.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Reproducibility needs isolation (one environment per project), a manifest (what you want), and a
+        lockfile (what was solved, with hashes, for every platform).</li>
+      <li>conda-forge first. Use <code>--pypi</code> only when a package is missing there, and never call
+        <code>pip</code> in a workspace.</li>
+      <li>Features bundle dependencies and environments combine features. <code>no-default-feature</code> gives you
+        lean environments, and solve-groups give environments identical shared versions.</li>
+      <li>Tasks document workflows. <code>depends-on</code> forms a DAG run in topological order, and
+        <code>args</code>, <code>env</code>, <code>cwd</code>, and <code>inputs</code>/<code>outputs</code> refine
+        them.</li>
+      <li><code>pixi update</code> stays inside your specs and <code>pixi upgrade</code> rewrites them.
+        <code>tree</code>, <code>list</code>, and <code>info</code> show what's installed.</li>
+      <li><code>pyproject.toml</code> holds the build system, standard metadata, entry points, extras, and tool
+        configuration.</li>
+      <li>A wheel is a pre-built zip and an sdist is source. Version with SemVer and publish through trusted
+        publishing. Use conda recipes for native dependencies.</li>
+    </ul>
+    <div class="flashcards" data-title="Packaging and Pixi">
+<script type="application/json">
+[{"front": "Manifest vs lockfile", "back": "Manifest = intent with version ranges (you edit). Lockfile = exact packages, URLs, hashes per platform (Pixi writes). Commit both."},
+ {"front": "<code>[dependencies]</code> vs <code>[pypi-dependencies]</code>", "back": "conda-forge packages vs PyPI packages. conda-forge first."},
+ {"front": "Feature", "back": "A named bundle of dependencies, tasks, and settings: <code>[feature.test.dependencies]</code>."},
+ {"front": "Environment", "back": "A list of features, solved separately and stored in the same lockfile. <code>pixi run -e py312 test</code>."},
+ {"front": "Solve-group", "back": "Environments solved together so shared packages get identical versions (e.g., prod and default)."},
+ {"front": "<code>no-default-feature = true</code>", "back": "The environment excludes top-level <code>[dependencies]</code>. Useful for lean lint environments."},
+ {"front": "Task <code>inputs</code>/<code>outputs</code>", "back": "File globs Pixi hashes. If unchanged since the last success, the task is skipped."},
+ {"front": "<code>pixi update</code> vs <code>pixi upgrade</code>", "back": "update: newest versions within current specs (lock only). upgrade: raise the specs in the manifest."},
+ {"front": "Wheel filename tags", "back": "name-version-python-abi-platform.whl. Pure Python is <code>py3-none-any</code>."},
+ {"front": "<code>[project.scripts]</code>", "back": "Console-script entry points: <code>name = \"pkg.module:func\"</code> creates an executable."},
+ {"front": "Trusted publishing", "back": "PyPI trusts a specific GitHub workflow via OIDC; short-lived credentials, no stored token."},
+ {"front": "pixi global vs pixi exec", "back": "global: persistent personal tools on PATH. exec: temporary environment for one command."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a>: workspaces, environments, tasks, and global tools</li>
+      <li><a href="https://packaging.python.org/en/latest/">Python Packaging User Guide</a></li>
+      <li><a href="https://packaging.python.org/en/latest/specifications/pyproject-toml/">pyproject.toml specification</a></li>
+      <li><a href="https://docs.python.org/3/library/tomllib.html">tomllib</a> and <a href="https://docs.python.org/3/library/importlib.metadata.html">importlib.metadata</a></li>
+      <li><a href="https://semver.org/">Semantic Versioning 2.0.0</a> and <a href="https://peps.python.org/pep-0440/">PEP 440</a></li>
+      <li><a href="https://docs.pypi.org/trusted-publishers/">PyPI trusted publishers</a></li>
+      <li><a href="https://rattler.build/latest/">rattler-build documentation</a></li>
+      <li><a href="../reference/pixi-cheatsheet.html">Pixi cheat sheet</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

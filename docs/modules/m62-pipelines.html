@@ -1,0 +1,1158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M62 · Pipelines, Orchestration &amp; Data Quality · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m62">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 9 · Data Engineering · Module 62</p>
+    <h1>Pipelines, Orchestration &amp; Data Quality</h1>
+    <p class="lede">A script that moves data once is easy. A pipeline that runs every night for three years, survives
+      crashes, re-runs safely, loads only what changed, refuses bad data, and tells you what happened is engineering. This
+      module teaches the design principles behind such pipelines, has you build a small pipeline framework in Python, tours
+      the orchestrators professionals use, and makes data quality and observability first-class.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m61-sql-duckdb.html">M61 · Analytical SQL &amp; DuckDB</a>, <a href="m15-decorators.html">M15 · Decorators &amp; Context Managers</a></span></div>
+    <ul class="objectives">
+      <li>Design pipelines that are idempotent, deterministic, incremental, and safe to retry and backfill</li>
+      <li>Explain at-most-once, at-least-once, and exactly-once delivery, and how idempotent sinks give effectively-once results</li>
+      <li>Build a mini framework: tasks as functions, a DAG with <code>graphlib</code>, retries with backoff, and checkpoints</li>
+      <li>Compare cron, Airflow, Prefect, and Dagster and read their core code</li>
+      <li>Validate data with schema, null, uniqueness, range, and referential checks, and report rejected rows</li>
+      <li>Make pipelines observable with structured logs, metrics, and lineage, and test them properly</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="principles">
+    <h2>Pipeline design principles</h2>
+    <p>Every principle below exists because something will go wrong: the job will crash halfway, the source will resend a
+      file, a bug will be found in last month's logic, the network will blip. Design for re-runs from day one.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Idempotency</h4><p>Running a job twice with the same input leaves the same result as running it
+        once. Achieved with upserts on natural keys, or by atomically replacing a whole partition ("delete day X, insert day
+        X" in one transaction). Never with blind appends.</p></div>
+      <div class="card"><h4>Determinism</h4><p>The same input always gives the same output. Avoid
+        <code>datetime.now()</code>, unseeded randomness, and unordered iteration inside transforms; pass the logical run
+        date in as a parameter instead.</p></div>
+      <div class="card"><h4>Incremental loads</h4><p>Process only new or changed data, tracked with a <em>watermark</em>
+        (the highest <code>updated_at</code> or id seen) or a manifest of processed files. Full reloads stay available as a
+        fallback.</p></div>
+      <div class="card"><h4>Backfills</h4><p>Re-running a pipeline for a historical range (after fixing a bug or adding a
+        column). Easy only if runs are parameterized by date and idempotent.</p></div>
+      <div class="card"><h4>Retries</h4><p>Transient failures (timeouts, rate limits, locks) are retried with exponential
+        backoff; permanent failures (bad credentials, schema errors) fail fast and alert.</p></div>
+      <div class="card"><h4>Atomicity</h4><p>Outputs appear all at once or not at all: write to a temp file and rename, or
+        load in one database transaction. Readers never see half a batch.</p></div>
+    </div>
+    <h3>See idempotency in the visualizer</h3>
+    <p>Both visualizers process the same twelve source records. Run each once, then press <strong>Re-run</strong>. The
+      first loads with a plain <code>INSERT</code> (append), the second with an upsert keyed on the record id. Watch the
+      target row counts after the second run.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Extract", "Validate", "Transform", "Load"], "mode": "batch", "write": "append"}'></div>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Extract", "Validate", "Transform", "Load"], "mode": "batch", "write": "upsert"}'></div>
+    <aside class="callout think"><p>The append pipeline doubled its rows on re-run. Which real events cause re-runs you don't
+      control? (A scheduler retrying after a timeout that actually succeeded; an operator re-triggering a failed DAG; a
+      source re-delivering a file.) Every one of them is a duplicate-data bug waiting for an append-only load.</p></aside>
+
+    <h3>Delivery semantics</h3>
+    <p>When data moves between systems, a failure can happen after work is done but before it is acknowledged. That forces
+      a choice:</p>
+    <table>
+      <thead><tr><th>Guarantee</th><th>How it happens</th><th>Risk</th></tr></thead>
+      <tbody>
+        <tr><td><strong>At-most-once</strong></td><td>Acknowledge (or commit the offset) <em>before</em> processing</td><td>A crash loses data</td></tr>
+        <tr><td><strong>At-least-once</strong></td><td>Process, then acknowledge; on crash, redo</td><td>Duplicates after a crash</td></tr>
+        <tr><td><strong>Exactly-once</strong></td><td>Processing and acknowledgement commit atomically (transactions), or at-least-once plus an idempotent sink</td><td>Complexity and cost</td></tr>
+      </tbody>
+    </table>
+    <p>In practice, most systems choose <strong>at-least-once delivery with idempotent writes</strong>: duplicates may be
+      delivered, but the upsert absorbs them, so the <em>result</em> is as if each record were processed exactly once
+      ("effectively once").</p>
+    <div class="runnable" data-title="At-least-once delivery + idempotent sink = effectively once">
+<textarea>
+import random, sqlite3
+
+rng = random.Random(3)
+events = [{"id": i, "amount": i * 10} for i in range(1, 6)]
+delivered = []
+for e in events:                                # a flaky network redelivers some events
+    delivered.append(e)
+    if rng.random() < 0.5:
+        delivered.append(e)
+print("delivered ids:", [e["id"] for e in delivered])
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE appended (id INTEGER, amount INTEGER)")
+conn.execute("CREATE TABLE upserted (id INTEGER PRIMARY KEY, amount INTEGER)")
+for e in delivered:
+    conn.execute("INSERT INTO appended VALUES (:id, :amount)", e)
+    conn.execute("INSERT INTO upserted VALUES (:id, :amount) ON CONFLICT (id) DO UPDATE SET amount = excluded.amount", e)
+print("append total:", conn.execute("SELECT SUM(amount) FROM appended").fetchone()[0])
+print("upsert total:", conn.execute("SELECT SUM(amount) FROM upserted").fetchone()[0], "(correct: 150)")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> assume every step will run more than once; make writes idempotent and outputs atomic.</p>
+  </section>
+
+  <section class="lesson-section" id="incremental">
+    <h2>Incremental loads, watermarks, and backfills</h2>
+    <p>A full reload copies the whole source every run. That's simple and correct, but it gets slower every day. An
+      <strong>incremental load</strong> copies only rows that changed since the last run. The pipeline stores a
+      <strong>watermark</strong>, the highest change marker it has processed (an <code>updated_at</code> timestamp or an
+      auto-increment id), and next time asks the source for rows above it.</p>
+    <pre class="mermaid">
+sequenceDiagram
+  participant P as Pipeline
+  participant S as State store
+  participant Src as Source DB
+  participant W as Warehouse
+  P->>S: read watermark (2026-03-05 10:00)
+  P->>Src: SELECT ... WHERE updated_at > watermark
+  Src-->>P: 42 changed rows
+  P->>W: upsert 42 rows (one transaction)
+  P->>S: watermark = max(updated_at) of the batch
+    </pre>
+    <div class="runnable" data-title="A watermark-driven incremental load">
+<textarea>
+import sqlite3
+
+src = sqlite3.connect(":memory:")
+src.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, email TEXT, updated_at TEXT)")
+src.executemany("INSERT INTO customers VALUES (?, ?, ?)", [
+    (1, "ada@x.io", "2026-03-01 09:00"), (2, "ben@x.io", "2026-03-01 12:00"), (3, "cy@x.io", "2026-03-02 08:00")])
+
+wh = sqlite3.connect(":memory:")
+wh.execute("CREATE TABLE dim_customer (id INTEGER PRIMARY KEY, email TEXT, updated_at TEXT)")
+wh.execute("CREATE TABLE etl_state (key TEXT PRIMARY KEY, value TEXT)")
+
+def run():
+    row = wh.execute("SELECT value FROM etl_state WHERE key = 'customers'").fetchone()
+    watermark = row[0] if row else ""                      # "" sorts before any ISO timestamp
+    changed = src.execute("SELECT id, email, updated_at FROM customers WHERE updated_at > ? ORDER BY updated_at",
+                          (watermark,)).fetchall()
+    with wh:                                               # one transaction: data and watermark together
+        wh.executemany("""INSERT INTO dim_customer VALUES (?, ?, ?)
+                          ON CONFLICT (id) DO UPDATE SET email = excluded.email, updated_at = excluded.updated_at""",
+                       changed)
+        if changed:
+            wh.execute("INSERT INTO etl_state VALUES ('customers', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                       (changed[-1][2],))
+    print(f"watermark {watermark or '(none)':16} -> loaded {len(changed)} rows")
+
+run()                                                      # first run: everything
+run()                                                      # nothing changed: 0 rows
+src.execute("UPDATE customers SET email = 'ben@new.io', updated_at = '2026-03-03 10:00' WHERE id = 2")
+src.execute("INSERT INTO customers VALUES (4, 'di@x.io', '2026-03-03 11:00')")
+run()                                                      # only the two changes
+print(wh.execute("SELECT * FROM dim_customer ORDER BY id").fetchall())
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Watermarks have sharp edges. (1) Rows committed late with an older
+      <code>updated_at</code> (a long transaction) slip below the watermark and are never loaded; mitigate with a lookback
+      window (<code>updated_at &gt; watermark - 10 minutes</code>, harmless because the load is idempotent). (2) Hard
+      deletes don't change <code>updated_at</code>; use soft deletes, change data capture (CDC), or a periodic full
+      reconciliation. (3) Store the watermark in the <em>same transaction</em> as the data, or a crash between them causes
+      skipped or repeated data.</p></aside>
+    <h3>Backfills</h3>
+    <p>A <strong>backfill</strong> re-runs the pipeline for past periods. If each run is a pure function of its logical date
+      (<code>run(day)</code> processes exactly that day's partition and replaces it atomically), a backfill is just a loop,
+      and it can even run in parallel:</p>
+    <pre><code class="language-python">from datetime import date, timedelta
+
+def backfill(start: date, end: date) -&gt; None:
+    day = start
+    while day &lt;= end:
+        run_for_day(day)          # idempotent: deletes + reinserts that day's partition in one transaction
+        day += timedelta(days=1)</code></pre>
+    <p><strong>Remember:</strong> watermark + upsert + same-transaction state = safe incremental loads; date-parameterized,
+      idempotent runs make backfills trivial.</p>
+  </section>
+
+  <section class="lesson-section" id="framework">
+    <h2>Build a mini pipeline framework</h2>
+    <p>Orchestrators look complicated, but their core is small: tasks are functions, dependencies form a <strong>directed
+      acyclic graph (DAG)</strong>, a scheduler runs tasks in dependency order, failures are retried, and state is
+      recorded so a re-run can resume. You'll build each piece with the standard library.</p>
+    <h3>Tasks and a DAG with graphlib</h3>
+    <p><code>graphlib.TopologicalSorter</code> (stdlib since 3.9) takes a mapping <code>node → predecessors</code>.
+      <code>static_order()</code> gives one valid order; the <code>prepare()</code> / <code>get_ready()</code> /
+      <code>done()</code> protocol tells you which tasks are ready <em>right now</em>, which is how a parallel scheduler
+      works. Cycles raise <code>graphlib.CycleError</code>.</p>
+    <div class="runnable" data-title="A DAG runner in 25 lines">
+<textarea>
+from graphlib import TopologicalSorter
+
+TASKS = {}
+
+def task(*deps):
+    """Register a function as a task that depends on the named tasks."""
+    def register(fn):
+        TASKS[fn.__name__] = (fn, deps)
+        return fn
+    return register
+
+@task()
+def extract(results):
+    return [{"id": 1, "amount": "10.5"}, {"id": 2, "amount": "oops"}, {"id": 3, "amount": "7"}]
+
+@task("extract")
+def validate(results):
+    return [r for r in results["extract"] if r["amount"].replace(".", "", 1).isdigit()]
+
+@task("validate")
+def transform(results):
+    return [{**r, "amount": float(r["amount"])} for r in results["validate"]]
+
+@task("transform")
+def load(results):
+    return f"loaded {len(results['transform'])} rows"
+
+@task("validate")
+def report(results):
+    return f"rejected {len(results['extract']) - len(results['validate'])} rows"
+
+graph = {name: deps for name, (_, deps) in TASKS.items()}
+sorter = TopologicalSorter(graph)
+sorter.prepare()
+results, wave = {}, 1
+while sorter.is_active():
+    ready = sorted(sorter.get_ready())          # these could run in parallel
+    print(f"wave {wave}: {ready}")
+    for name in ready:
+        results[name] = TASKS[name][0](results)
+        sorter.done(name)
+    wave += 1
+print(results["load"], "|", results["report"])
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the order graphlib picks" data-predict>
+<textarea>
+from graphlib import TopologicalSorter
+
+deps = {"load": {"transform"}, "transform": {"extract"}, "report": {"extract"}, "extract": set()}
+ts = TopologicalSorter(deps)
+ts.prepare()
+print(sorted(ts.get_ready()))
+ts.done("extract")
+print(sorted(ts.get_ready()))
+</textarea>
+    </div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "dag"}'></div>
+
+    <h3>Retries with exponential backoff</h3>
+    <p>A retry decorator wraps a task so transient errors are retried after a growing delay (1 s, 2 s, 4 s…), with
+      <em>jitter</em> (a random fraction) so a thousand workers don't retry in lockstep. Only retry errors that can
+      succeed later.</p>
+    <div class="runnable" data-title="A retry decorator">
+<textarea>
+import functools, random, time
+
+def retry(times=3, exceptions=(ConnectionError, TimeoutError), base_delay=0.01, jitter=0.5):
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 2):
+                try:
+                    return fn(*args, **kwargs)
+                except exceptions as exc:
+                    if attempt > times:
+                        raise
+                    delay = base_delay * 2 ** (attempt - 1) * (1 + random.random() * jitter)
+                    print(f"  attempt {attempt} failed ({exc!r}); retrying in {delay*1000:.0f} ms")
+                    time.sleep(delay)
+        return wrapper
+    return decorator
+
+calls = 0
+
+@retry(times=3)
+def fetch_page():
+    global calls
+    calls += 1
+    if calls < 3:
+        raise ConnectionError("connection reset")
+    return "<html>ok</html>"
+
+print(fetch_page(), "after", calls, "calls")
+
+@retry(times=3)
+def bad_credentials():
+    raise PermissionError("401 Unauthorized")      # not retryable: fails immediately
+
+try:
+    bad_credentials()
+except PermissionError as exc:
+    print("failed fast:", exc)
+</textarea>
+    </div>
+
+    <h3>State and checkpoints</h3>
+    <p>A <strong>checkpoint</strong> records progress so a crashed run can resume instead of starting over. Write state
+      <em>atomically</em>: write a temporary file, then <code>Path.replace()</code> it over the old one. A rename is atomic on
+      the same filesystem, so a crash never leaves a half-written state file.</p>
+    <div class="runnable" data-title="Resume from a checkpoint after a crash">
+<textarea>
+import json, tempfile
+from pathlib import Path
+
+state_path = Path(tempfile.mkdtemp()) / "checkpoint.json"
+
+def load_state():
+    return json.loads(state_path.read_text()) if state_path.exists() else {"done": []}
+
+def save_state(state):
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(state_path)                  # atomic rename
+
+def run(steps, crash_at=None):
+    state = load_state()
+    for name in steps:
+        if name in state["done"]:
+            print(f"  skip {name} (checkpointed)")
+            continue
+        if name == crash_at:
+            raise RuntimeError(f"crash during {name}")
+        print(f"  run  {name}")
+        state["done"].append(name)
+        save_state(state)
+
+steps = ["download", "unzip", "parse", "load"]
+try:
+    print("run 1:"); run(steps, crash_at="parse")
+except RuntimeError as exc:
+    print("  !", exc)
+print("run 2:"); run(steps)
+print("state:", state_path.read_text())
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Project 9's <code>etl.dag</code> module is this framework grown up: a <code>Task</code>
+      dataclass, a <code>DAG</code> class with <code>order()</code> and <code>run()</code>, per-task retries, a
+      <code>TaskFailedError</code> that chains the original exception, and a processed-files manifest saved only after the
+      load commits.</p></aside>
+    <p><strong>Remember:</strong> DAG + topological order + retries for transient errors + atomic checkpoints is the heart of
+      every orchestrator.</p>
+  </section>
+
+  <section class="lesson-section" id="orchestration">
+    <h2>Orchestration tools</h2>
+    <p>An <strong>orchestrator</strong> schedules and runs pipelines and gives you what your mini framework lacks: a UI,
+      history, alerting, distributed workers, backfill commands, secrets, and sensors that wait for data. The main options:</p>
+    <table>
+      <thead><tr><th>Tool</th><th>Model</th><th>Strengths</th><th>Watch out for</th></tr></thead>
+      <tbody>
+        <tr><td><strong>cron</strong></td><td>Time-based schedule for commands</td><td>Everywhere, zero setup</td><td>No dependencies, retries, history, or alerting; overlapping runs</td></tr>
+        <tr><td><strong>Apache Airflow</strong></td><td>DAGs of tasks, defined in Python, scheduled by logical date</td><td>Huge ecosystem of operators, mature, the industry default</td><td>Heavier to run; passing data between tasks (XCom) is for small values</td></tr>
+        <tr><td><strong>Prefect</strong></td><td>Plain Python functions as <code>@flow</code>/<code>@task</code></td><td>Minimal ceremony, dynamic workflows, good local dev</td><td>Fewer prebuilt integrations than Airflow</td></tr>
+        <tr><td><strong>Dagster</strong></td><td><em>Software-defined assets</em>: you declare the tables you want, it derives the graph</td><td>Lineage, partitions, data-aware scheduling, type checks</td><td>A different mental model (assets, not tasks)</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="crontab"><code class="language-bash"># m h dom mon dow   command  (02:30 every day; flock prevents overlapping runs)
+30 2 * * *  cd /srv/etl &amp;&amp; flock -n /tmp/etl.lock pixi run python -m etl.pipeline raw wh.db state &gt;&gt; etl.log 2&gt;&amp;1</code></pre>
+    <div class="tabs">
+      <div class="tab" data-label="Airflow">
+        <div class="runnable" data-local="Needs Apache Airflow and a scheduler: pixi add apache-airflow (conda-forge), then airflow standalone." data-title="An Airflow DAG with the TaskFlow API">
+<textarea>
+from datetime import datetime, timedelta
+from airflow.decorators import dag, task
+
+@dag(schedule="@daily", start_date=datetime(2026, 3, 1), catchup=True,      # catchup=True backfills from start_date
+     default_args={"retries": 3, "retry_delay": timedelta(minutes=5)})
+def bike_trips():
+    @task
+    def extract(ds=None) -> str:              # ds = the run's logical date, e.g. "2026-03-05"
+        return f"s3://raw/trips/date={ds}/"
+
+    @task
+    def validate(path: str) -> dict:
+        return {"path": path, "rejected": 3}
+
+    @task
+    def load(report: dict) -> None:
+        print("loading", report)
+
+    load(validate(extract()))                 # calling tasks wires the dependencies
+
+bike_trips()
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="Prefect">
+        <div class="runnable" data-local="Needs Prefect locally: pixi add prefect (conda-forge)." data-title="A Prefect flow">
+<textarea>
+from prefect import flow, task
+
+@task(retries=3, retry_delay_seconds=10)
+def extract(day: str) -> list[dict]:
+    return [{"trip_id": "T1", "day": day}]
+
+@task
+def load(rows: list[dict]) -> int:
+    return len(rows)
+
+@flow(log_prints=True)
+def bike_trips(day: str = "2026-03-05") -> None:
+    n = load(extract(day))
+    print(f"loaded {n} rows for {day}")
+
+if __name__ == "__main__":
+    bike_trips()                    # runs locally; bike_trips.serve(cron="30 2 * * *") schedules it
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="Dagster">
+        <div class="runnable" data-local="Needs Dagster locally: pixi add dagster dagster-webserver (conda-forge), then dagster dev -f assets.py." data-title="Dagster software-defined assets">
+<textarea>
+import dagster as dg
+
+@dg.asset
+def raw_trips() -> list[dict]:
+    """Trips exactly as delivered."""
+    return [{"trip_id": "T1", "km": "3.2"}, {"trip_id": "T1", "km": "3.2"}]
+
+@dg.asset
+def clean_trips(raw_trips: list[dict]) -> list[dict]:     # the parameter name declares the dependency
+    """Deduplicated, typed trips."""
+    return [{**t, "km": float(t["km"])} for t in {t["trip_id"]: t for t in raw_trips}.values()]
+
+@dg.asset_check(asset=clean_trips)
+def trip_ids_unique(clean_trips: list[dict]) -> dg.AssetCheckResult:
+    ids = [t["trip_id"] for t in clean_trips]
+    return dg.AssetCheckResult(passed=len(ids) == len(set(ids)))
+
+defs = dg.Definitions(assets=[raw_trips, clean_trips], asset_checks=[trip_ids_unique])
+</textarea>
+        </div>
+      </div>
+    </div>
+    <aside class="callout tip"><p>Airflow's <em>logical date</em> (<code>ds</code>) is the start of the data interval a run
+      covers, not when it runs: the run for 2026-03-05 typically executes just after midnight on 2026-03-06. Building every
+      task around that parameter (never <code>now()</code>) is what makes Airflow backfills (<code>airflow dags backfill
+      -s 2026-01-01 -e 2026-01-31 bike_trips</code>) correct.</p></aside>
+    <p><strong>Remember:</strong> cron schedules commands; orchestrators add dependencies, retries, history, backfills, and
+      visibility. Airflow is task-centric, Prefect is function-centric, Dagster is asset-centric.</p>
+  </section>
+
+  <section class="lesson-section" id="quality">
+    <h2>Data quality</h2>
+    <p>Bad data is worse than no data: it produces confident wrong answers. Quality checks belong at the pipeline's front
+      door (reject or quarantine bad input) and at its exit (verify outputs before publishing). The checks you will write
+      again and again:</p>
+    <ul>
+      <li><strong>Schema</strong>: expected columns exist with expected types.</li>
+      <li><strong>Completeness</strong>: required fields are not null; row counts are within the normal range.</li>
+      <li><strong>Uniqueness</strong>: keys don't repeat.</li>
+      <li><strong>Validity</strong>: values in range (<code>0 &lt;= fare &lt; 500</code>) or in an allowed set; formats match.</li>
+      <li><strong>Consistency</strong>: <code>end_time &gt; start_time</code>; totals match line items.</li>
+      <li><strong>Referential integrity</strong>: foreign keys point at existing dimension rows.</li>
+      <li><strong>Freshness</strong>: the newest record is recent enough.</li>
+    </ul>
+    <p>Decide per rule what a failure does: <em>reject the row</em> (to a rejected-rows report or quarantine table with a
+      reason), <em>warn</em> (log and continue), or <em>fail the run</em> (stop before publishing, for problems such as a
+      missing column or a 90% drop in volume).</p>
+    <div class="runnable" data-title="A rule engine with reasons">
+<textarea>
+from datetime import datetime
+
+rows = [
+    {"trip_id": "T1", "start": "2026-03-05 08:00", "end": "2026-03-05 08:20", "station": "S01", "fare": "3.50"},
+    {"trip_id": "T2", "start": "2026-03-05 09:00", "end": "2026-03-05 08:00", "station": "S02", "fare": "2.00"},
+    {"trip_id": "T3", "start": "not a date",       "end": "2026-03-05 10:00", "station": "S99", "fare": ""},
+    {"trip_id": "T1", "start": "2026-03-05 08:00", "end": "2026-03-05 08:20", "station": "S01", "fare": "3.50"},
+    {"trip_id": "T4", "start": "2026-03-05 11:00", "end": "2026-03-05 11:30", "station": "S02", "fare": "950"},
+]
+STATIONS = {"S01", "S02"}
+
+def parse(ts):
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+def rule_required(r):
+    return [f"missing:{k}" for k, v in r.items() if not v]
+
+def rule_times(r):
+    s, e = parse(r["start"]), parse(r["end"])
+    if s is None or e is None:
+        return ["bad_timestamp"]
+    return ["end_before_start"] if e <= s else []
+
+def rule_station(r):
+    return [] if r["station"] in STATIONS else ["unknown_station"]
+
+def rule_fare(r):
+    return [] if not r["fare"] or 0 <= float(r["fare"]) < 500 else ["fare_out_of_range"]
+
+RULES = [rule_required, rule_times, rule_station, rule_fare]
+valid, rejected, seen = [], [], set()
+for r in rows:
+    reasons = [reason for rule in RULES for reason in rule(r)]
+    if r["trip_id"] in seen:
+        reasons.append("duplicate_trip_id")
+    if reasons:
+        rejected.append((r["trip_id"], reasons))
+    else:
+        valid.append(r)
+        seen.add(r["trip_id"])
+print("valid:", [r["trip_id"] for r in valid])
+for trip_id, reasons in rejected:
+    print("rejected", trip_id, reasons)
+</textarea>
+    </div>
+    <p>With pandas, column-level checks are vectorized one-liners, which is how you'd profile a whole batch:</p>
+    <div class="runnable" data-title="Batch-level checks with pandas">
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({
+    "trip_id": ["T1", "T2", "T2", "T4", "T5"],
+    "duration_s": [600, 1200, 1200, -30, None],
+    "member_type": ["member", "casual", "casual", "member", "vip"],
+})
+checks = {
+    "trip_id unique": df["trip_id"].is_unique,
+    "duration not null": df["duration_s"].notna().all(),
+    "duration in [0, 86400]": df["duration_s"].dropna().between(0, 86_400).all(),
+    "member_type allowed": df["member_type"].isin({"member", "casual"}).all(),
+    "row count >= 3": len(df) >= 3,
+}
+for name, ok in checks.items():
+    print(f"{'PASS' if ok else 'FAIL'}  {name}")
+print("\nnull rate per column:\n", df.isna().mean().round(2))
+print("\noffending rows:\n", df[df.duplicated("trip_id", keep=False) | ~df["member_type"].isin({"member", "casual"})])
+</textarea>
+    </div>
+    <h3>Libraries</h3>
+    <p>You rarely hand-roll quality checks at scale. <strong>pandera</strong> declares DataFrame schemas with typed columns
+      and checks (pandas and Polars). <strong>Great Expectations</strong> (GX) manages suites of "expectations" with HTML data
+      docs. <strong>pydantic</strong> validates individual records (API payloads, JSON events) into typed models. dbt has
+      built-in <code>unique</code>/<code>not_null</code>/<code>accepted_values</code>/<code>relationships</code> tests, and
+      Soda offers YAML checks.</p>
+    <div class="tabs">
+      <div class="tab" data-label="pandera">
+        <div class="runnable" data-local="pandera is not available in the browser. Locally: pixi add pandera" data-title="A pandera schema">
+<textarea>
+import pandas as pd
+import pandera.pandas as pa
+
+trips = pa.DataFrameSchema(
+    {
+        "trip_id": pa.Column(str, unique=True),
+        "duration_s": pa.Column(int, pa.Check.in_range(0, 86_400)),
+        "member_type": pa.Column(str, pa.Check.isin(["member", "casual"])),
+    },
+    strict=True,                         # no unexpected columns
+)
+df = pd.DataFrame({"trip_id": ["T1", "T1"], "duration_s": [60, -5], "member_type": ["member", "vip"]})
+try:
+    trips.validate(df, lazy=True)        # lazy=True collects every failure instead of stopping at the first
+except pa.errors.SchemaErrors as err:
+    print(err.failure_cases[["column", "check", "failure_case"]])
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="pydantic">
+        <div class="runnable" data-local="Run locally after pixi add pydantic." data-title="Validate records with pydantic">
+<textarea>
+from datetime import datetime
+from typing import Literal
+from pydantic import BaseModel, Field, ValidationError, model_validator
+
+class Trip(BaseModel):
+    trip_id: str
+    start: datetime
+    end: datetime
+    member_type: Literal["member", "casual"]
+    fare: float = Field(ge=0, lt=500)
+
+    @model_validator(mode="after")
+    def end_after_start(self):
+        if self.end <= self.start:
+            raise ValueError("end_before_start")
+        return self
+
+try:
+    Trip(trip_id="T9", start="2026-03-05T09:00", end="2026-03-05T08:00", member_type="vip", fare=-1)
+except ValidationError as err:
+    for e in err.errors():
+        print(e["loc"], e["msg"])
+</textarea>
+        </div>
+      </div>
+    </div>
+    <p><strong>Remember:</strong> check schema, completeness, uniqueness, validity, consistency, references, and freshness;
+      every rejection carries a reason; decide per rule whether to reject, warn, or fail.</p>
+  </section>
+
+  <section class="lesson-section" id="observability">
+    <h2>Observability: logs, metrics, lineage</h2>
+    <p>When a pipeline misbehaves at 3 a.m., you need to answer: did it run, what did it read, what did it write, how long
+      did it take, and what changed? Three kinds of signals answer those questions.</p>
+    <ul>
+      <li><strong>Structured logs</strong>: events as key/value records (JSON), not prose. A log aggregator can then answer
+        "show every run where <code>rows_rejected &gt; 100</code>". Production code uses <code>structlog</code> instead of
+        <code>print()</code>, with a <code>run_id</code> bound to every line.</li>
+      <li><strong>Metrics</strong>: numbers tracked over time (rows in/out, rejection rate, duration, freshness lag), with
+        alerts on anomalies, for example "row count 60% below the 7-day average".</li>
+      <li><strong>Lineage</strong>: which datasets each job read and wrote, so you can trace a bad dashboard number back to
+        its source and see what a broken table affects downstream. <strong>OpenLineage</strong> is the open standard;
+        Airflow, Dagster, Spark, and dbt can emit it.</li>
+    </ul>
+    <div class="runnable" data-local="structlog is not available in the browser. Locally: pixi add structlog" data-title="Structured pipeline logs with structlog">
+<textarea>
+import time, uuid
+import structlog
+
+structlog.configure(processors=[
+    structlog.contextvars.merge_contextvars,
+    structlog.processors.add_log_level,
+    structlog.processors.TimeStamper(fmt="iso", utc=True),
+    structlog.processors.JSONRenderer(),
+])
+log = structlog.get_logger()
+
+structlog.contextvars.bind_contextvars(run_id=str(uuid.uuid7()), pipeline="bike_trips")   # uuid7: new in 3.14
+start = time.perf_counter()
+log.info("extract_done", files=7, rows_read=255)
+log.warning("rows_rejected", count=21, reasons={"end_before_start": 7, "unknown_station": 7, "bad_timestamp": 7})
+log.info("load_done", rows_loaded=222, duration_s=round(time.perf_counter() - start, 3))
+# {"run_id": "...", "pipeline": "bike_trips", "files": 7, "rows_read": 255, "event": "extract_done", "level": "info", ...}
+</textarea>
+    </div>
+    <div class="runnable" data-title="A run record: metrics plus lineage, as JSON">
+<textarea>
+import json, uuid
+from datetime import datetime, UTC
+
+def run_record(job, inputs, outputs, metrics):
+    return {
+        "eventType": "COMPLETE",
+        "eventTime": datetime(2026, 3, 6, 2, 31, tzinfo=UTC).isoformat(),
+        "run": {"runId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{job}/2026-03-05"))},   # deterministic for the demo
+        "job": {"namespace": "spokes", "name": job},
+        "inputs": [{"namespace": "file", "name": n} for n in inputs],
+        "outputs": [{"namespace": "sqlite", "name": n} for n in outputs],
+        "metrics": metrics,
+    }
+
+rec = run_record("bike_trips.load", ["raw/trips_2026-03-05.csv", "raw/stations_2026-03-05.csv"],
+                 ["warehouse.fact_trip", "warehouse.dim_station"],
+                 {"rows_read": 34, "rows_rejected": 3, "rows_loaded": 30, "rejection_rate": round(3 / 34, 3)})
+print(json.dumps(rec, indent=2))
+
+history = [228, 231, 225, 240, 236, 229, 233]           # rows loaded on previous days
+today = 92
+mean = sum(history) / len(history)
+if today < 0.5 * mean:
+    print(f"ALERT: loaded {today} rows, {today / mean:.0%} of the 7-day mean ({mean:.0f})")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> log events with structured fields and a run id, track volume and freshness metrics with
+      alerts, and record lineage so you can trace and assess impact.</p>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Testing pipelines</h2>
+    <p>Pipelines are code and deserve the same test pyramid as any other code, plus a few data-specific tests:</p>
+    <ul>
+      <li><strong>Unit tests</strong> for pure transforms: given these input rows, expect these output rows. Fast and
+        numerous. Keep transforms pure (no I/O) precisely so they are easy to test.</li>
+      <li><strong>Integration tests</strong> run the pipeline end to end against real files in <code>tmp_path</code> and a
+        real (temporary) database.</li>
+      <li><strong>Idempotency tests</strong>: run twice, assert identical row counts and contents.</li>
+      <li><strong>Incremental tests</strong>: deliver data in two batches; the result must equal one full load.</li>
+      <li><strong>Edge-case fixtures</strong>: duplicates, nulls, late data, time-zone boundaries, empty inputs.</li>
+      <li><strong>Data tests in production</strong>: the quality checks above, run on every batch.</li>
+    </ul>
+    <pre><code class="language-python"># tests/integration/test_pipeline.py      (pixi run pytest)
+import sqlite3
+import pytest
+from etl.generator import generate
+from etl.pipeline import run_pipeline
+
+@pytest.mark.integration
+def test_running_twice_is_idempotent(tmp_path):
+    generate(tmp_path / "raw")
+    first = run_pipeline(tmp_path / "raw", tmp_path / "wh.db", tmp_path / "state")
+    (tmp_path / "state" / "manifest.json").unlink()            # force a full re-read
+    second = run_pipeline(tmp_path / "raw", tmp_path / "wh.db", tmp_path / "state")
+    assert second.fact_trip_rows == first.fact_trip_rows
+
+@pytest.mark.integration
+def test_two_batches_equal_one_full_load(tmp_path):
+    ...  # deliver day 1, run; deliver day 2, run; compare with a fresh full run</code></pre>
+    <div class="runnable" data-title="Testing a transform: a tiny test runner in the browser">
+<textarea>
+def normalize_city(rows):
+    return [{**r, "city": r["city"].strip().title()} for r in rows if r.get("city")]
+
+def test_strips_and_titles():
+    assert normalize_city([{"city": "  new york "}]) == [{"city": "New York"}]
+
+def test_drops_missing_city():
+    assert normalize_city([{"city": ""}, {}]) == []
+
+def test_is_idempotent():
+    once = normalize_city([{"city": "boston"}])
+    assert normalize_city(once) == once, "applying a transform twice should change nothing"
+
+for name, fn in list(globals().items()):
+    if name.startswith("test_"):
+        try:
+            fn()
+            print("PASS", name)
+        except AssertionError as exc:
+            print("FAIL", name, exc)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> pure transforms get unit tests; the whole pipeline gets idempotency and incremental tests on
+      temporary files and databases.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m62-e1" data-title="A retry decorator">
+      <div class="exercise-prompt">
+        <p>Write <code>retry(times, exceptions)</code>, a decorator factory. The wrapped function is called up to
+          <code>times + 1</code> times. If it raises one of <code>exceptions</code> (a tuple), call it again; if the last
+          attempt fails, re-raise that exception. Any other exception propagates immediately. Also record the number of
+          calls made in the most recent invocation as the attribute <code>wrapper.attempts</code>. Preserve the function's
+          name with <code>functools.wraps</code>. No sleeping is needed.</p>
+      </div>
+<textarea class="starter">
+import functools
+
+def retry(times, exceptions):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_succeeds_after_failures():
+    state = {"n": 0}
+    @retry(3, (ConnectionError,))
+    def flaky():
+        state["n"] += 1
+        if state["n"] < 3:
+            raise ConnectionError("blip")
+        return "ok"
+    assert flaky() == "ok" and state["n"] == 3
+    assert flaky.attempts == 3, "two failures + one success = 3 attempts"
+    assert flaky() == "ok" and flaky.attempts == 1, "attempts is reset per invocation (the next call succeeds at once)"
+
+def test_gives_up():
+    @retry(2, (TimeoutError,))
+    def slow():
+        raise TimeoutError("slow")
+    try:
+        slow()
+    except TimeoutError:
+        assert slow.attempts == 3, "1 call + 2 retries"
+    else:
+        raise AssertionError("should re-raise after the last attempt")
+
+def test_other_errors_propagate():
+    @retry(5, (TimeoutError,))
+    def bug():
+        raise KeyError("x")
+    try:
+        bug()
+    except KeyError:
+        assert bug.attempts == 1, "non-retryable errors are not retried"
+
+def test_wraps():
+    @retry(1, (Exception,))
+    def named():
+        return 1
+    assert named.__name__ == "named"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Inside <code>wrapper</code>, loop
+        <code>for attempt in range(1, times + 2)</code>, set <code>wrapper.attempts = attempt</code> before each call, and
+        re-raise with a bare <code>raise</code> when <code>attempt == times + 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import functools
+
+def retry(times, exceptions):
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 2):
+                wrapper.attempts = attempt
+                try:
+                    return fn(*args, **kwargs)
+                except exceptions:
+                    if attempt == times + 1:
+                        raise
+        wrapper.attempts = 0
+        return wrapper
+    return decorator</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m62-e2" data-title="Parallel waves from a DAG">
+      <div class="exercise-prompt">
+        <p>Write <code>waves(deps)</code> where <code>deps</code> maps each task to a list of tasks it depends on. Return a
+          list of lists: each inner list holds the tasks that can run in parallel at that step (all their dependencies are
+          in earlier waves), sorted alphabetically. Use <code>graphlib.TopologicalSorter</code> with
+          <code>prepare()</code>, <code>get_ready()</code>, and <code>done()</code>. A cycle should raise
+          <code>graphlib.CycleError</code>.</p>
+      </div>
+<textarea class="starter">
+from graphlib import TopologicalSorter
+
+def waves(deps):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from graphlib import CycleError
+
+def test_pipeline_waves():
+    deps = {"load": ["transform"], "transform": ["validate"], "validate": ["extract"],
+            "report": ["validate"], "extract": [], "notify": ["load", "report"]}
+    assert waves(deps) == [["extract"], ["validate"], ["report", "transform"], ["load"], ["notify"]]
+
+def test_independent_tasks_share_a_wave():
+    assert waves({"a": [], "b": [], "c": ["a", "b"]}) == [["a", "b"], ["c"]]
+
+def test_dependency_only_mentioned_as_predecessor():
+    assert waves({"b": ["a"]}) == [["a"], ["b"]], "nodes that appear only as dependencies still run"
+
+def test_cycle():
+    try:
+        waves({"a": ["b"], "b": ["a"]})
+    except CycleError:
+        return
+    raise AssertionError("a cycle must raise graphlib.CycleError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>prepare()</code> raises <code>CycleError</code> for you. Then
+        loop <code>while ts.is_active()</code>: take <code>ready = sorted(ts.get_ready())</code>, append it, and call
+        <code>ts.done(*ready)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from graphlib import TopologicalSorter
+
+def waves(deps):
+    ts = TopologicalSorter(deps)
+    ts.prepare()
+    out = []
+    while ts.is_active():
+        ready = sorted(ts.get_ready())
+        out.append(ready)
+        ts.done(*ready)
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m62-e3" data-title="Incremental load with a watermark">
+      <div class="exercise-prompt">
+        <p>Write <code>incremental_load(conn, source_rows)</code>. <code>source_rows</code> is the full current source: a
+          list of <code>(id, value, updated_at)</code> tuples (ISO strings). The warehouse <code>conn</code> has (or you
+          create, if missing) <code>target(id INTEGER PRIMARY KEY, value TEXT, updated_at TEXT)</code> and
+          <code>state(key TEXT PRIMARY KEY, value TEXT)</code>. Read the watermark from <code>state</code> where
+          <code>key = 'target'</code> (none on the first run), upsert only rows with <code>updated_at</code> strictly greater
+          than the watermark, store the new watermark (the max <code>updated_at</code> loaded) in the same transaction, and
+          return the number of rows loaded.</p>
+      </div>
+<textarea class="starter">
+def incremental_load(conn, source_rows):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def test_incremental_runs():
+    conn = sqlite3.connect(":memory:")
+    src = [(1, "a", "2026-03-01 09:00"), (2, "b", "2026-03-01 10:00")]
+    assert incremental_load(conn, src) == 2, "first run loads everything"
+    assert incremental_load(conn, src) == 0, "nothing new on the second run"
+    src = [(1, "a", "2026-03-01 09:00"), (2, "B", "2026-03-02 08:00"), (3, "c", "2026-03-02 09:00")]
+    assert incremental_load(conn, src) == 2, "only the changed row and the new row"
+    assert conn.execute("SELECT * FROM target ORDER BY id").fetchall() == [
+        (1, "a", "2026-03-01 09:00"), (2, "B", "2026-03-02 08:00"), (3, "c", "2026-03-02 09:00")]
+    assert conn.execute("SELECT value FROM state WHERE key = 'target'").fetchone() == ("2026-03-02 09:00",)
+
+def test_empty_source():
+    conn = sqlite3.connect(":memory:")
+    assert incremental_load(conn, []) == 0
+    assert conn.execute("SELECT COUNT(*) FROM state").fetchone() == (0,), "no watermark until something loads"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Filter in Python: <code>[r for r in source_rows if watermark is None or
+        r[2] &gt; watermark]</code>. Use <code>with conn:</code> around the upserts and the state upsert.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def incremental_load(conn, source_rows):
+    conn.execute("CREATE TABLE IF NOT EXISTS target (id INTEGER PRIMARY KEY, value TEXT, updated_at TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
+    row = conn.execute("SELECT value FROM state WHERE key = 'target'").fetchone()
+    watermark = row[0] if row else None
+    changed = [r for r in source_rows if watermark is None or r[2] &gt; watermark]
+    with conn:
+        conn.executemany("""
+            INSERT INTO target VALUES (?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """, changed)
+        if changed:
+            conn.execute("""
+                INSERT INTO state VALUES ('target', ?)
+                ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            """, (max(r[2] for r in changed),))
+    return len(changed)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m62-e4" data-title="A custom validator with reasons">
+      <div class="exercise-prompt">
+        <p>Write <code>validate(rows, schema)</code>. <code>schema</code> maps column → a dict of rules, any of:
+          <code>"required": True</code>, <code>"unique": True</code>, <code>"min": n</code>, <code>"max": n</code>,
+          <code>"allowed": {...}</code>. Return <code>(valid_rows, rejected)</code> where <code>rejected</code> is a list of
+          <code>(row_index, reasons)</code> and reasons are strings formatted <code>"&lt;rule&gt;:&lt;column&gt;"</code>, for
+          example <code>"required:fare"</code>, <code>"min:fare"</code>, <code>"unique:trip_id"</code>. Rules:</p>
+        <ul>
+          <li>A value of <code>None</code> or <code>""</code> fails <code>required</code> and skips the other rules for that column.</li>
+          <li><code>unique</code>: a value already seen in an earlier <em>valid</em> row is a duplicate.</li>
+          <li>Check columns in schema order and rules in the order required, unique, min, max, allowed.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+def validate(rows, schema):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+SCHEMA = {
+    "trip_id": {"required": True, "unique": True},
+    "fare": {"required": True, "min": 0, "max": 500},
+    "member": {"allowed": {"member", "casual"}},
+}
+ROWS = [
+    {"trip_id": "T1", "fare": 3.5, "member": "member"},
+    {"trip_id": "T1", "fare": 2.0, "member": "casual"},
+    {"trip_id": "T2", "fare": -1, "member": "vip"},
+    {"trip_id": "", "fare": None, "member": "member"},
+    {"trip_id": "T3", "fare": 900, "member": None},
+    {"trip_id": "T4", "fare": 0, "member": "casual"},
+]
+
+def test_valid_rows():
+    valid, _ = validate(ROWS, SCHEMA)
+    assert [r["trip_id"] for r in valid] == ["T1", "T4"], "only rows 0 and 5 pass"
+
+def test_reasons():
+    _, rejected = validate(ROWS, SCHEMA)
+    assert rejected == [
+        (1, ["unique:trip_id"]),
+        (2, ["min:fare", "allowed:member"]),
+        (3, ["required:trip_id", "required:fare"]),
+        (4, ["max:fare"]),
+    ], f"got {rejected}"
+
+def test_optional_null_is_fine():
+    valid, rejected = validate([{"trip_id": "X", "fare": 1, "member": None}], SCHEMA)
+    assert len(valid) == 1 and rejected == [], "a null in a non-required column skips its rules"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Collect reasons for one row into a list. Only add the row's unique
+        values to the <code>seen</code> sets if the row ends up valid.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def validate(rows, schema):
+    valid, rejected = [], []
+    seen = {col: set() for col, rules in schema.items() if rules.get("unique")}
+    for i, row in enumerate(rows):
+        reasons = []
+        for col, rules in schema.items():
+            value = row.get(col)
+            if value is None or value == "":
+                if rules.get("required"):
+                    reasons.append(f"required:{col}")
+                continue
+            if rules.get("unique") and value in seen[col]:
+                reasons.append(f"unique:{col}")
+            if "min" in rules and value &lt; rules["min"]:
+                reasons.append(f"min:{col}")
+            if "max" in rules and value &gt; rules["max"]:
+                reasons.append(f"max:{col}")
+            if "allowed" in rules and value not in rules["allowed"]:
+                reasons.append(f"allowed:{col}")
+        if reasons:
+            rejected.append((i, reasons))
+        else:
+            valid.append(row)
+            for col in seen:
+                seen[col].add(row[col])
+    return valid, rejected</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m62-e5" data-title="Resume from a checkpoint">
+      <div class="exercise-prompt">
+        <p>Write <code>run_steps(steps, state_path)</code>. <code>steps</code> is a list of <code>(name, fn)</code> pairs;
+          <code>state_path</code> is a <code>pathlib.Path</code> to a JSON file shaped <code>{"done": [names]}</code>
+          (missing on the first run). Skip steps already done; run the others in order, and after <em>each</em> success
+          append its name and save the file atomically (write a <code>.tmp</code> sibling, then <code>replace</code>). If a
+          step raises, let the exception propagate (earlier progress stays saved). Return the list of names actually run.</p>
+      </div>
+<textarea class="starter">
+import json
+from pathlib import Path
+
+def run_steps(steps, state_path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json, tempfile
+from pathlib import Path
+
+def test_resume_after_crash():
+    path = Path(tempfile.mkdtemp()) / "state.json"
+    calls = []
+    fail = {"on": True}
+    def step(name):
+        def fn():
+            if name == "parse" and fail["on"]:
+                raise RuntimeError("boom")
+            calls.append(name)
+        return (name, fn)
+    steps = [step("download"), step("parse"), step("load")]
+    try:
+        run_steps(steps, path)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("the failing step's exception should propagate")
+    assert json.loads(path.read_text()) == {"done": ["download"]}, "progress before the crash is saved"
+    fail["on"] = False
+    assert run_steps(steps, path) == ["parse", "load"], "the second run resumes at the failed step"
+    assert calls == ["download", "parse", "load"], "download ran only once"
+    assert run_steps(steps, path) == [], "a completed run does nothing"
+    assert not path.with_suffix(".tmp").exists() and not Path(str(path) + ".tmp").exists(), "temp file renamed away"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Load state with
+        <code>json.loads(state_path.read_text()) if state_path.exists() else {"done": []}</code>. Save with
+        <code>tmp = state_path.with_suffix(".tmp")</code>, <code>tmp.write_text(...)</code>,
+        <code>tmp.replace(state_path)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import json
+from pathlib import Path
+
+def run_steps(steps, state_path):
+    state = json.loads(state_path.read_text()) if state_path.exists() else {"done": []}
+    ran = []
+    for name, fn in steps:
+        if name in state["done"]:
+            continue
+        fn()
+        state["done"].append(name)
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state))
+        tmp.replace(state_path)
+        ran.append(name)
+    return ran</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an incremental ETL with a validation report</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Orders ETL with watermark and quality report</span></div>
+      <div class="widget-body">
+        <p>Simulate an e-commerce source database (SQLite) where orders are inserted and updated over time, and build a
+          pipeline that loads them incrementally into a warehouse database, validating every batch.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init orders-etl &amp;&amp; cd orders-etl
+pixi add python structlog pytest
+pixi run python simulate.py --day 2026-03-01    # inserts/updates orders in source.db with a fixed seed
+pixi run python -m orders_etl                   # one incremental run
+pixi run pytest</code></pre>
+        <ol>
+          <li><code>simulate.py</code> adds about 100 orders per day and updates about 10 existing ones (status changes),
+            setting <code>updated_at</code>; include some bad rows (negative totals, unknown customer ids, null emails).</li>
+          <li>The pipeline is a DAG built on <code>graphlib</code>: <code>extract</code> (rows above the watermark, with a
+            5-minute lookback), <code>validate</code>, <code>load</code> (upsert), <code>report</code>.</li>
+          <li><code>extract</code> is wrapped in your retry decorator; inject a random <code>ConnectionError</code> to prove it.</li>
+          <li><code>validate</code> applies at least six rules and writes <code>reports/run-&lt;run_id&gt;.json</code> with
+            counts by reason and the rejected rows.</li>
+          <li>Data and watermark commit in one transaction; every step logs JSON with structlog and a bound
+            <code>run_id</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m62-mini">
+          <li>Running the pipeline twice in a row loads 0 rows the second time</li>
+          <li>Three daily runs produce the same warehouse as one run after three days (tested)</li>
+          <li>Killing the process mid-run (raise in <code>load</code>) leaves the watermark unchanged, and the next run recovers</li>
+          <li>The validation report lists every rejected row with at least one reason</li>
+          <li>The run fails (non-zero exit) if more than 20% of a batch is rejected</li>
+        </ul>
+        <p><strong>Stretch:</strong> turn the DAG into a Prefect flow or Dagster assets; add a <code>--backfill START END</code>
+          option that re-processes a date range idempotently; emit an OpenLineage-shaped JSON event per run.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m62-quiz">
+<script type="application/json">
+{"title": "Pipelines, orchestration, and data quality", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "A load is <strong>idempotent</strong> when…", "options": ["It runs in under a second", "Running it twice with the same input gives the same result as running it once", "It never fails", "It uses Parquet"], "answer": 1, "explanation": "<p>Idempotency makes retries, re-runs, and backfills safe. Upserts on a natural key or atomic partition replacement achieve it.</p>"},
+  {"type": "single", "prompt": "Why should a transform take the run date as a parameter instead of calling <code>datetime.now()</code>?", "options": ["now() is slow", "So the output is deterministic and backfills reproduce the right periods", "Parameters are required by Python", "now() returns UTC"], "answer": 1, "explanation": "<p>A run for 2026-03-05 must produce the same output whether it runs that night or during a backfill months later.</p>"},
+  {"type": "single", "prompt": "Where should an incremental pipeline store its new watermark?", "options": ["In a log file written after the load", "In the same transaction as the loaded data", "Nowhere; recompute it every time from the source", "In an environment variable"], "answer": 1, "explanation": "<p>If data and watermark commit together, a crash can never leave them inconsistent (skipping or duplicating data).</p>"},
+  {"type": "multi", "prompt": "Which are real risks of <code>updated_at</code> watermarks?", "options": ["Long transactions commit rows with an older updated_at after the watermark moved past it", "Hard deletes are invisible", "They cannot be stored in SQLite", "Clock skew between source servers"], "answer": [0, 1, 3], "explanation": "<p>Late commits and clock skew are mitigated with a lookback window (safe because loads are idempotent); deletes need soft deletes, CDC, or reconciliation.</p>"},
+  {"type": "single", "prompt": "At-least-once delivery combined with an idempotent sink gives…", "options": ["At-most-once results", "Duplicated results", "Effectively-once results", "Lost data"], "answer": 2, "explanation": "<p>Duplicates may be delivered, but the upsert absorbs them, so the stored result is as if each record were processed once.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from graphlib import TopologicalSorter\nts = TopologicalSorter({'b': ['a'], 'c': ['a'], 'd': ['b', 'c']})\nprint(list(ts.static_order())[0], list(ts.static_order())[-1])", "answer": "a d", "explanation": "<p>a has no dependencies, so it comes first; d depends on both b and c, so it comes last. (b and c can come in either order.)</p>"},
+  {"type": "single", "prompt": "Which exception does <code>graphlib</code> raise for a dependency cycle?", "options": ["ValueError", "RecursionError", "graphlib.CycleError", "KeyError"], "answer": 2, "explanation": "<p><code>CycleError</code> (a subclass of ValueError) is raised by <code>prepare()</code> or <code>static_order()</code> and carries the cycle.</p>"},
+  {"type": "multi", "prompt": "Which errors are usually worth retrying with backoff?", "options": ["HTTP 503 Service Unavailable", "A network timeout", "HTTP 401 Unauthorized", "A missing required column in the source file"], "answer": [0, 1], "explanation": "<p>Transient errors may succeed later. Bad credentials and schema errors are permanent: fail fast and alert.</p>"},
+  {"type": "single", "prompt": "Why write a state file to a temporary path and then <code>replace()</code> it?", "options": ["It is faster", "The rename is atomic, so readers never see a half-written file even after a crash", "JSON requires it", "To compress it"], "answer": 1, "explanation": "<p>Writing in place can leave a truncated file if the process dies mid-write; an atomic rename swaps old for new in one step.</p>"},
+  {"type": "single", "prompt": "Which orchestrator is built around <em>software-defined assets</em>?", "options": ["cron", "Airflow", "Prefect", "Dagster"], "answer": 3, "explanation": "<p>Dagster models the data assets you want to exist and derives the execution graph and lineage from their dependencies.</p>"},
+  {"type": "single", "prompt": "In Airflow, the logical date <code>ds</code> of a daily run is…", "options": ["The wall-clock time the task started", "The start of the data interval the run covers", "Always today", "The DAG's creation date"], "answer": 1, "explanation": "<p>The run for 2026-03-05 covers that day's data and typically executes after the interval ends, early on 2026-03-06.</p>"},
+  {"type": "multi", "prompt": "Which are data quality dimensions?", "options": ["Completeness (no unexpected nulls)", "Uniqueness of keys", "Freshness", "The number of Python files"], "answer": [0, 1, 2], "explanation": "<p>Quality covers completeness, uniqueness, validity, consistency, referential integrity, and freshness. Code size is not a data property.</p>"},
+  {"type": "single", "prompt": "Why use structured (JSON) logs with a bound <code>run_id</code> in pipelines?", "options": ["They look nicer in a terminal", "Aggregators can filter and aggregate by fields, and all lines of one run can be correlated", "print() is not allowed in Python", "They are smaller"], "answer": 1, "explanation": "<p>Fields such as rows_rejected or run_id are queryable without fragile text parsing. structlog makes this easy.</p>"},
+  {"type": "text", "prompt": "Name the open standard for emitting data lineage events from jobs (one word).", "answer": ["OpenLineage"], "explanation": "<p>OpenLineage defines run, job, and dataset events; Airflow, Spark, dbt, and Dagster integrations emit it, and Marquez can store and display them.</p>"},
+  {"type": "single", "prompt": "The best test that a daily incremental pipeline is correct is…", "options": ["Running it once and eyeballing the output", "Comparing two incremental batches against one full load of the same data", "Measuring its speed", "Counting log lines"], "answer": 1, "explanation": "<p>Incremental results must equal a full load. Pair that with a run-twice idempotency test.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Design every pipeline to be idempotent, deterministic, atomic, incremental, and safe to retry and backfill.</li>
+      <li>At-least-once delivery plus idempotent writes gives effectively-once results.</li>
+      <li>Watermarks drive incremental loads; store them with the data, use a lookback, and plan for deletes.</li>
+      <li>A DAG plus <code>graphlib.TopologicalSorter</code>, a retry decorator, and atomic checkpoints form a working mini orchestrator.</li>
+      <li>cron schedules commands; Airflow (tasks), Prefect (functions), and Dagster (assets) add dependencies, retries, history, and backfills.</li>
+      <li>Quality checks cover schema, completeness, uniqueness, validity, consistency, references, and freshness, and every rejection carries a reason.</li>
+      <li>Observe with structured logs, volume/freshness metrics with alerts, and lineage; test idempotency and incremental equivalence.</li>
+    </ul>
+    <div class="flashcards" data-title="Pipelines and quality">
+<script type="application/json">
+[{"front": "Idempotent pipeline", "back": "Running it again with the same input leaves the same result. Upserts or atomic partition overwrite."},
+ {"front": "Watermark", "back": "The highest change marker processed so far (updated_at or id); the next run reads rows above it."},
+ {"front": "Backfill", "back": "Re-running a pipeline for past periods; safe when runs are date-parameterized and idempotent."},
+ {"front": "At-least-once + idempotent sink", "back": "Duplicates may arrive but are absorbed: effectively-once results."},
+ {"front": "graphlib.TopologicalSorter", "back": "Stdlib DAG ordering: static_order(), or prepare()/get_ready()/done() for parallel waves; CycleError on cycles."},
+ {"front": "Exponential backoff with jitter", "back": "Retry delays grow (1, 2, 4, ...) times a random factor so clients don't retry in lockstep."},
+ {"front": "Atomic file write", "back": "Write a temp file, then Path.replace() it over the target."},
+ {"front": "Airflow vs Prefect vs Dagster", "back": "Task-centric DAGs / Python-function flows / software-defined assets."},
+ {"front": "Rejected-rows report", "back": "Every invalid row with all its reasons, kept for fixing the source instead of silently dropping."},
+ {"front": "Three observability signals", "back": "Structured logs, metrics (volume, freshness, duration), and lineage."},
+ {"front": "Incremental correctness test", "back": "Load in batches and compare with a single full load; also run twice for idempotency."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/graphlib.html">graphlib</a> and <a href="https://docs.python.org/3/library/functools.html#functools.wraps">functools.wraps</a> in the Python docs</li>
+      <li><a href="https://airflow.apache.org/docs/">Apache Airflow</a>, <a href="https://docs.prefect.io/">Prefect</a>, and <a href="https://docs.dagster.io/">Dagster</a> documentation</li>
+      <li><a href="https://pandera.readthedocs.io/">pandera</a>, <a href="https://docs.greatexpectations.io/">Great Expectations</a>, and <a href="https://docs.pydantic.dev/">pydantic</a></li>
+      <li><a href="https://www.structlog.org/">structlog</a> and <a href="https://openlineage.io/">OpenLineage</a></li>
+      <li>Maxime Beauchemin, "Functional Data Engineering: a modern paradigm for batch data processing"</li>
+      <li>Next: <a href="m63-big-data-streaming.html">M63 · Streaming &amp; Big Data</a>, then <a href="../projects/p09-etl-pipeline.html">Project 9</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

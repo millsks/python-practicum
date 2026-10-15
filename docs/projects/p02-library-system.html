@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 2 · Library Management System · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p02">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Graded project</p>
+    <h1>Project 2: Library Management System</h1>
+    <p class="lede">Build the circulation system for a small-town library: ISBN validation, copies, members with tiered
+      loan limits, due dates and fines, waiting lists, keyword search, notifications, and JSON persistence. This is
+      where classes, dataclasses, enums, Protocols, decorators, type hints, and pytest stop being separate topics and
+      become one working program.</p>
+    <div class="lesson-meta"><span>⏱ ~8–12 hours</span><span>Prerequisites: <a href="../modules/m10-classes.html">M10</a>–<a href="../modules/m18-functional.html">M18</a></span><span>67 grading tests</span></div>
+    <ul class="objectives">
+      <li>Model a domain with frozen and mutable dataclasses, enums carrying data, and custom exceptions</li>
+      <li>Decouple services from the outside world with Protocols (a clock and a notifier) and dependency injection</li>
+      <li>Choose the right data structure for each job: dicts for lookup, a deque for a waiting list, sets for an inverted index</li>
+      <li>Serialize a graph of objects to JSON and rebuild it exactly</li>
+      <li>Make a code base pass <code>mypy --strict</code> and a 67-test suite</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>The Millbrook Public Library serves a town of 12,000 people. It owns about 4,000 titles, keeps several copies of
+      the popular ones, and has 900 card holders. Loans are still written on index cards, and the head librarian, Rosa,
+      has three problems she wants solved:</p>
+    <ol>
+      <li><strong>Typos in ISBNs.</strong> Volunteers type ISBNs by hand. A single wrong digit puts the wrong book in the
+        catalog. ISBNs carry a <em>check digit</em> designed to catch exactly this kind of mistake, and the software
+        should use it.</li>
+      <li><strong>Fair waiting lists.</strong> When the new thriller comes in, twenty people want it. Whoever asked first
+        should get it first, and they should be told when it is waiting for them at the desk.</li>
+      <li><strong>Fines that are actually charged.</strong> Late fines are 25 cents per day, capped at $10 per loan. A
+        member who owes $5 or more cannot borrow until they pay something down.</li>
+    </ol>
+    <p>Members have one of three tiers. Children may borrow 3 items for 14 days, standard members 5 items for 21 days,
+      and premium (donor) members 10 items for 28 days.</p>
+    <aside class="callout think"><p>Before reading the spec, sketch on paper which <em>nouns</em> in this story become
+      classes and which <em>verbs</em> become methods. Compare your sketch with the architecture diagram below.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Data modeling</h4><p><code>@dataclass(frozen=True, slots=True)</code> for <code>Book</code>,
+        mutable dataclasses for <code>Copy</code>, <code>Member</code>, and <code>Loan</code>, an <code>Enum</code> whose
+        members carry a loan limit and loan period, and a <code>StrEnum</code> for copy status (M13).</p></div>
+      <div class="card"><h4>Interfaces</h4><p>A <code>Clock</code> Protocol and a <code>Notifier</code> Protocol, so the
+        <code>Library</code> never calls <code>date.today()</code> or sends real email directly (M12, M16).</p></div>
+      <div class="card"><h4>Errors</h4><p>A small exception hierarchy rooted at <code>LibraryError</code>, with
+        <code>raise ... from</code> to keep the cause when translating low-level errors (M07).</p></div>
+      <div class="card"><h4>Data structures</h4><p>Dicts keyed by id, a <code>deque</code> for each waiting list, and an
+        inverted index of word → set of ISBNs for search (M06, M14).</p></div>
+      <div class="card"><h4>The data model</h4><p><code>__str__</code>, <code>__len__</code>, <code>__contains__</code>,
+        and properties such as <code>Loan.is_open</code> and <code>Member.is_blocked</code> (M10, M11).</p></div>
+      <div class="card"><h4>Testing and typing</h4><p>Injectable time makes due-date logic testable; the solution passes
+        <code>mypy --strict</code> (M16, M17).</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <p>The package is <code>library</code>. Its public API is re-exported from <code>library/__init__.py</code>, so tests
+      can write <code>from library import Library, Book, Member</code>.</p>
+    <table>
+      <thead><tr><th>Module</th><th>What it provides</th></tr></thead>
+      <tbody>
+        <tr><td><code>errors.py</code></td><td><code>LibraryError</code> and its subclasses: <code>InvalidISBNError</code>
+          (also a <code>ValueError</code>), <code>NotFoundError</code> (also a <code>LookupError</code>),
+          <code>DuplicateError</code>, <code>NoCopiesAvailableError</code>, <code>LoanLimitError</code>,
+          <code>OutstandingFinesError</code>, <code>HoldError</code>, <code>PersistenceError</code>. Provided complete.</td></tr>
+        <tr><td><code>isbn.py</code></td><td><code>normalize_isbn</code>, <code>is_valid_isbn10</code>,
+          <code>is_valid_isbn13</code>, <code>isbn10_to_isbn13</code>, and <code>validate_isbn</code>, which returns the
+          canonical ISBN-13 or raises <code>InvalidISBNError</code>.</td></tr>
+        <tr><td><code>clock.py</code></td><td>The <code>Clock</code> Protocol (<code>today() -&gt; date</code>),
+          <code>SystemClock</code>, and <code>FixedClock(start)</code> with <code>advance(days)</code>.</td></tr>
+        <tr><td><code>models.py</code></td><td><code>MemberTier</code> (CHILD, STANDARD, PREMIUM with
+          <code>label</code>, <code>loan_limit</code>, <code>loan_days</code>, and <code>from_label</code>),
+          <code>CopyStatus</code>, <code>Book</code>, <code>Copy</code>, <code>Member</code>, <code>Loan</code>
+          (<code>is_open</code>, <code>days_overdue</code>, <code>is_overdue</code>, <code>fine_cents</code>), and
+          <code>due_date</code>.</td></tr>
+        <tr><td><code>notify.py</code></td><td><code>Notification</code>, the <code>Notifier</code> Protocol
+          (<code>send(member, subject, body)</code>), and <code>InMemoryNotifier</code> with <code>sent</code>,
+          <code>for_member</code>, and <code>__len__</code>.</td></tr>
+        <tr><td><code>search.py</code></td><td><code>tokenize</code> and <code>SearchIndex</code> with <code>add</code>,
+          <code>remove</code>, <code>search</code> (every query word must match; sorted by title),
+          <code>__len__</code>, and <code>__contains__</code>.</td></tr>
+        <tr><td><code>library.py</code></td><td>The <code>Library</code> service: catalog (<code>add_book</code>,
+          <code>add_copies</code>, lookups), members, circulation (<code>checkout</code>, <code>return_copy</code>,
+          <code>overdue_loans</code>, <code>send_overdue_notices</code>, <code>pay_fine</code>), holds
+          (<code>place_hold</code>, <code>cancel_hold</code>, <code>holds_for</code>), <code>search</code>, and
+          <code>from_records</code> for loading.</td></tr>
+        <tr><td><code>storage.py</code></td><td><code>library_to_dict</code>, <code>library_from_dict</code>,
+          <code>save_library(library, path)</code>, and <code>load_library(path, clock=..., notifier=...)</code>.</td></tr>
+      </tbody>
+    </table>
+    <h3>Business rules</h3>
+    <ul>
+      <li>Copy ids are <code>C00001</code>, <code>C00002</code>, …; loan ids are <code>L00001</code>, …</li>
+      <li><code>checkout</code> checks, in order: unpaid fines (≥ 500 cents blocks), the tier's loan limit, then a copy
+        for this member: one reserved for them on the hold shelf first, otherwise any available copy.</li>
+      <li>The due date is the checkout date plus the tier's loan period. "Today" always comes from the injected clock.</li>
+      <li><code>return_copy</code> closes the loan, adds any fine to the member (and notifies them), then
+        <em>shelves</em> the copy: if someone is waiting, the copy goes onto the hold shelf reserved for the first person in
+        line and they get a "Hold ready" notification; otherwise it becomes available.</li>
+      <li>A hold can be placed only when no copy is available, not twice by the same member, and not by a member who
+        already has the title on loan. New copies added with <code>add_copies</code> serve the waiting list first.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>The <code>Library</code> is a <em>service object</em>: it owns the records and enforces the rules. Everything it
+      needs from the outside world (today's date, a way to send messages) comes in through its constructor as an object
+      that satisfies a Protocol. That is <strong>dependency injection</strong>: production code passes
+      <code>SystemClock()</code>; tests pass <code>FixedClock(date(2026, 3, 1))</code> and an
+      <code>InMemoryNotifier()</code> they can inspect.</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph models[models.py]
+    Book
+    Copy
+    Member
+    Loan
+    MemberTier
+  end
+  Library -->|validates with| ISBN[isbn.py]
+  Library --> models
+  Library -->|indexes| SearchIndex[search.py SearchIndex]
+  Library -->|today| Clock[[Clock Protocol]]
+  Library -->|send| Notifier[[Notifier Protocol]]
+  Clock -.-> SystemClock
+  Clock -.-> FixedClock
+  Notifier -.-> InMemoryNotifier
+  Storage[storage.py] -->|to_dict / from_records| Library
+  Storage --> JSON[(library.json)]
+    </pre>
+    <p>Inside the <code>Library</code>, each kind of record lives in a dict keyed by its id, so every lookup is O(1).
+      Each title with a waiting list has a <code>deque</code> of member ids: <code>append</code> joins the back of the
+      line and <code>popleft</code> serves the front, both O(1). A plain list would make <code>pop(0)</code> O(n).</p>
+    <div class="viz" data-viz="stack-queue" data-config='{"mode": "queue", "values": ["M2", "M3", "M7"]}'></div>
+    <p>The search index is an <em>inverted index</em>: instead of storing "book → words", it stores "word → set of
+      ISBNs". A query for <code>tolkien hobbit</code> intersects two small sets instead of scanning every title.</p>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects            # list every project and its status
+pixi run start p02           # copy the starter into work/p02_library_system/
+pixi run grade p02           # run all 67 tests against your work/ copy
+pixi run grade p02 -- -k isbn   # only tests whose names contain "isbn"
+pixi run mypy --strict work/p02_library_system/library</code></pre>
+    <p>Open <code>work/p02_library_system/library/</code>. Every function has its final signature, a Google-style
+      docstring, and a <code>TODO</code> comment telling you what to do. Replace each
+      <code>raise NotImplementedError</code>. <code>errors.py</code> and <code>__init__.py</code> are complete. The
+      constructors of <code>Library</code>, <code>SearchIndex</code>, <code>FixedClock</code>, and
+      <code>InMemoryNotifier</code> are given so you can see the internal data structures.</p>
+    <aside class="callout pixi"><p>All grading runs inside the Pixi environment, so the Python version (3.14) and the
+      pytest version are the same on every machine. Arguments after <code>--</code> are passed through to pytest:
+      <code>pixi run grade p02 -- -x</code> stops at the first failure, <code>-- -q</code> is quieter.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+    <p>Work in order: each milestone's tests only need the earlier ones. Run
+      <code>pixi run grade p02 -- -k &lt;keyword&gt;</code> after each step.</p>
+
+    <div class="milestone">
+      <h4>Milestone 1: ISBNs, records, and the clock</h4>
+      <p>Files: <code>isbn.py</code>, <code>models.py</code>, <code>clock.py</code>. Tests:
+        <code>test_library_isbn.py</code>, <code>test_library_models.py</code> (run with <code>-- -k "isbn or models"</code>).</p>
+      <p>An ISBN-10 is valid when <code>10·d1 + 9·d2 + … + 1·d10</code> is divisible by 11 (the last character may be
+        <code>X</code>, meaning 10). An ISBN-13 is valid when the digits weighted 1, 3, 1, 3, … sum to a multiple of 10.
+        Converting ISBN-10 to ISBN-13 means prefixing <code>978</code> to the first nine digits and computing a
+        <em>new</em> check digit.</p>
+      <ul class="checklist" data-id="p02-m1">
+        <li><code>normalize_isbn</code>, <code>is_valid_isbn10</code>, <code>is_valid_isbn13</code></li>
+        <li><code>isbn10_to_isbn13</code> and <code>validate_isbn</code></li>
+        <li><code>Book.__post_init__</code> normalizes the ISBN on a frozen dataclass and validates title/authors</li>
+        <li><code>MemberTier.from_label</code>, <code>Member.is_blocked</code>, <code>Copy.is_available</code></li>
+        <li><code>Loan</code> overdue and fine math, <code>due_date</code>, <code>FixedClock.advance</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: setting a field on a frozen dataclass</summary>
+        <p>Inside <code>__post_init__</code> of a frozen dataclass, <code>self.isbn = ...</code> raises
+          <code>FrozenInstanceError</code>. The standard escape hatch is
+          <code>object.__setattr__(self, "isbn", validate_isbn(self.isbn))</code>, which bypasses the dataclass's
+          generated <code>__setattr__</code>. Use it only during construction.</p></details>
+      <details class="reveal"><summary>Hint: an Enum whose members carry data</summary>
+        <p>When an Enum member's value is a tuple and the class defines <code>__init__</code>, Python calls
+          <code>__init__</code> with the tuple unpacked, so <code>MemberTier.CHILD.loan_limit</code> works. The starter
+          already does this for you; read it.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 2: catalog, members, loans, and fines</h4>
+      <p>File: <code>library.py</code>. Tests: <code>test_library_loans.py</code> (<code>-- -k loans</code>).</p>
+      <ul class="checklist" data-id="p02-m2">
+        <li><code>add_book</code>, <code>add_copies</code> (sequential zero-padded copy ids), lookups raising <code>NotFoundError</code></li>
+        <li><code>__len__</code> and <code>__contains__</code> (accept any valid ISBN form; never raise)</li>
+        <li><code>register_member</code>, <code>loans_for</code>, <code>pay_fine</code></li>
+        <li><code>checkout</code> with the fine block, loan limit, and copy selection in the right order</li>
+        <li><code>return_copy</code> charging fines; <code>overdue_loans</code> and <code>send_overdue_notices</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: translating KeyError</summary>
+        <pre><code class="language-python">try:
+    return self._members[member_id]
+except KeyError:
+    raise NotFoundError(f"no member {member_id}") from None</code></pre>
+        <p><code>from None</code> hides the internal <code>KeyError</code> from the traceback: callers see one clear
+          domain error.</p></details>
+      <details class="reveal"><summary>Hint: testing three weeks in one second</summary>
+        <p>The tests construct <code>FixedClock(date(2026, 3, 1))</code>, check out a book, then call
+          <code>clock.advance(25)</code> and return it. Because <code>checkout</code> and <code>return_copy</code> ask
+          <code>self.clock.today()</code>, the loan is four days late without anyone waiting. If you call
+          <code>date.today()</code> anywhere in <code>library.py</code>, these tests fail.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 3: holds and notifications</h4>
+      <p>Files: <code>library.py</code>, <code>notify.py</code>. Tests: <code>test_library_holds.py</code> (<code>-- -k holds</code>).</p>
+      <ul class="checklist" data-id="p02-m3">
+        <li><code>InMemoryNotifier.send</code>, <code>for_member</code>, <code>__len__</code></li>
+        <li><code>place_hold</code> with all three refusal rules, returning the 1-based position</li>
+        <li>The private <code>_shelve</code> helper used by both <code>return_copy</code> and <code>add_copies</code></li>
+        <li><code>_copy_for</code> prefers a copy reserved for the borrower</li>
+        <li><code>cancel_hold</code> for a queued hold and for a copy already on the hold shelf</li>
+      </ul>
+      <details class="reveal"><summary>Hint: one place that decides where a copy goes</summary>
+        <p>Three events put a copy "back": a return, a new copy, and a cancelled shelf hold. Write the decision once in
+          <code>_shelve(copy)</code>: if the title's deque is non-empty, <code>popleft()</code> a member, mark the copy
+          <code>ON_HOLD_SHELF</code> with <code>reserved_for</code> set, and notify them; otherwise mark it
+          <code>AVAILABLE</code>. Duplicated rules drift apart; a single helper cannot.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 4: keyword search</h4>
+      <p>File: <code>search.py</code>. Tests: <code>test_library_search.py</code> (<code>-- -k search</code>).</p>
+      <ul class="checklist" data-id="p02-m4">
+        <li><code>tokenize</code> with the provided regex on <code>casefold()</code>ed text</li>
+        <li><code>add</code> (re-adding an ISBN replaces its old words) and <code>remove</code> (drop empty sets)</li>
+        <li><code>search</code> intersects posting sets and sorts by title, then year</li>
+      </ul>
+      <details class="reveal"><summary>Hint: intersecting many sets</summary>
+        <p><code>set.intersection(*list_of_sets)</code> intersects any number of sets. Use
+          <code>self._postings.get(word, set())</code> so an unknown word contributes an empty set (and therefore an empty
+          result) without inserting a key into the <code>defaultdict</code>.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 5: JSON persistence</h4>
+      <p>File: <code>storage.py</code> plus <code>Library.from_records</code>. Tests:
+        <code>test_library_storage.py</code> (<code>-- -k storage</code>).</p>
+      <ul class="checklist" data-id="p02-m5">
+        <li><code>library_to_dict</code> with a <code>version</code> key, ISO date strings, enum labels/values</li>
+        <li><code>Library.from_records</code> rebuilds the dicts, the deques, the search index, and the id counters</li>
+        <li><code>library_from_dict</code> wraps <code>KeyError</code>/<code>TypeError</code>/<code>ValueError</code> in <code>PersistenceError</code></li>
+        <li><code>save_library</code> writes atomically (temporary file, then <code>replace</code>); <code>load_library</code> translates file and JSON errors</li>
+      </ul>
+      <details class="reveal"><summary>Hint: why a format version and an atomic write?</summary>
+        <p>A <code>"version": 1</code> key lets a future release recognize and migrate old files instead of
+          misreading them. Writing to <code>library.json.tmp</code> and then calling <code>Path.replace</code> means a
+          crash mid-write leaves the old file intact: <code>replace</code> is atomic on the same filesystem.</p></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Weight</th><th>What "excellent" looks like</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>50%</td><td><code>pixi run grade p02</code> passes all 67 tests.</td></tr>
+        <tr><td>Typing</td><td>15%</td><td><code>pixi run mypy --strict work/p02_library_system/library</code> reports no errors; no <code>Any</code> outside JSON boundaries.</td></tr>
+        <tr><td>Design</td><td>15%</td><td>Rules live in one place (<code>_shelve</code>, <code>checkout</code>); the library never calls <code>date.today()</code> or prints; internal collections are not leaked (properties return copies).</td></tr>
+        <tr><td>Errors</td><td>10%</td><td>Every failure raises a specific <code>LibraryError</code> subclass with a helpful message; low-level errors are translated with <code>from</code>.</td></tr>
+        <tr><td>Style</td><td>10%</td><td><code>pixi run ruff check</code> and <code>pixi run ruff format --check</code> are clean; docstrings are accurate.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>CLI.</strong> A <code>main()</code> with <code>argparse</code> subcommands (<code>add</code>,
+        <code>lend</code>, <code>return</code>, <code>search</code>, <code>overdue</code>) that loads and saves
+        <code>library.json</code>; register it as a Pixi task.</li>
+      <li><strong>Outbox notifier.</strong> An <code>OutboxNotifier</code> that writes each message to a file. Because
+        it satisfies the <code>Notifier</code> Protocol, the <code>Library</code> needs no changes.</li>
+      <li><strong>Ranked search.</strong> Score by the number of matching words and allow prefix matches
+        (<code>tolk</code> finds Tolkien). A trie (<a href="../modules/m27-advanced-structures.html">M27</a>) makes prefix lookup fast.</li>
+      <li><strong>Renewals.</strong> <code>renew(loan_id)</code> extends a loan once, unless someone is waiting.</li>
+      <li><strong>Property-based tests.</strong> With Hypothesis (<code>pixi add hypothesis</code>), generate random
+        nine-digit bodies, compute the ISBN-10 check digit, and assert the ISBN-13 conversion always validates.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p02-quiz">
+<script type="application/json">
+{"title": "Library system reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why does <code>Library</code> take a <code>clock</code> argument instead of calling <code>date.today()</code>?", "options": ["It is faster", "Tests can control time, so due dates and fines are deterministic", "<code>date.today()</code> is deprecated in 3.14", "JSON cannot store dates"], "answer": 1, "explanation": "<p>Injecting the clock makes time an input. A <code>FixedClock</code> lets a test move three weeks forward instantly and get the same result every run.</p>"},
+  {"type": "single", "prompt": "Why is each waiting list a <code>collections.deque</code> rather than a <code>list</code>?", "options": ["Deques are sorted", "<code>popleft()</code> is O(1); <code>list.pop(0)</code> is O(n)", "Lists cannot hold strings", "Deques are immutable"], "answer": 1, "explanation": "<p>Serving the front of a queue from a list shifts every remaining element. A deque is a doubly linked block structure with O(1) operations at both ends.</p>"},
+  {"type": "multi", "prompt": "Which objects satisfy the <code>Notifier</code> Protocol?", "options": ["<code>InMemoryNotifier</code>", "Any class with a <code>send(member, subject, body)</code> method of the right types", "Only subclasses of <code>Notifier</code>", "<code>FixedClock</code>"], "answer": [0, 1], "explanation": "<p>Protocols use structural typing: having the right methods is enough. No inheritance is required.</p>"},
+  {"type": "output", "prompt": "With 25 cents per day and a 1000-cent cap, what is <code>fine_cents</code> for a loan returned 50 days late?", "answer": "1000", "explanation": "<p>50 × 25 = 1250, which the cap reduces to 1000.</p>"},
+  {"type": "text", "prompt": "Which function bypasses a frozen dataclass's <code>__setattr__</code> inside <code>__post_init__</code>? (name it as <code>module.function</code> or just the method name)", "answer": ["object.__setattr__", "__setattr__"], "explanation": "<p><code>object.__setattr__(self, \"isbn\", value)</code> calls the base implementation directly, skipping the generated method that raises <code>FrozenInstanceError</code>.</p>"},
+  {"type": "single", "prompt": "What is the main benefit of writing the save file to a temporary path and then calling <code>Path.replace</code>?", "options": ["Smaller files", "A crash mid-write cannot leave a half-written <code>library.json</code>", "It sorts the keys", "It compresses the data"], "answer": 1, "explanation": "<p>Renaming within one filesystem is atomic: readers see either the old file or the complete new one.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

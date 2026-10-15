@@ -1,0 +1,1124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M54 · Statistics &amp; Probability · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m54">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 54</p>
+    <h1>Statistics &amp; Probability</h1>
+    <p class="lede">Data is a sample of a noisy world. Statistics is the discipline of saying what the sample tells you
+      about the world, and how sure you can be. This module builds the ideas by simulation first (so you can see them
+      happen), then connects them to the formulas and the <code>scipy.stats</code> functions professionals use.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m50-scipy.html">M50 SciPy</a>,
+      <a href="m53-visualization.html">M53 Data Visualization</a></span></div>
+    <ul class="objectives">
+      <li>Summarize data with measures of center, spread, and position, and know when each misleads</li>
+      <li>Estimate probabilities by simulation with <code>random</code> and NumPy's <code>Generator</code></li>
+      <li>Use the common distributions (uniform, normal, binomial, Poisson, exponential) through <code>scipy.stats</code></li>
+      <li>Explain the law of large numbers and the central limit theorem, and demonstrate both by simulation</li>
+      <li>Build confidence intervals analytically and by bootstrap, and interpret them correctly</li>
+      <li>Run and interpret t-tests, chi-square tests, and an A/B test, including what a p-value does and does not mean</li>
+      <li>Report effect sizes and avoid sampling bias and multiple-comparison traps</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="descriptive">
+    <h2>Describing data: center, spread, position</h2>
+    <p><strong>Descriptive statistics</strong> summarize a dataset you have. (Inferential statistics, later, reasons
+      from a sample to a larger population.) Three families of numbers do most of the work:</p>
+    <ul>
+      <li><strong>Center</strong>: the <strong>mean</strong> (sum divided by count), the <strong>median</strong> (the
+        middle value when sorted), and the <strong>mode</strong> (the most common value). The mean uses every value,
+        so a single extreme value can drag it far; the median is <em>robust</em> to outliers.</li>
+      <li><strong>Spread</strong>: the <strong>variance</strong> is the average squared distance from the mean; the
+        <strong>standard deviation</strong> (std) is its square root, back in the data's units. The
+        <strong>interquartile range</strong> (IQR) is the distance between the 25th and 75th percentiles: the spread of
+        the middle half, robust like the median.</li>
+      <li><strong>Position</strong>: <strong>quantiles</strong> (percentiles) say what fraction of data falls below a
+        value. The 90th percentile response time is the value 90% of requests beat.</li>
+    </ul>
+    <h3>Population vs sample variance</h3>
+    <p>If your data is the entire <em>population</em>, variance divides by <em>n</em>. If it is a <em>sample</em> used
+      to estimate a population's variance, divide by <em>n - 1</em> (Bessel's correction): the sample mean is closer
+      to the sample's own points than the true mean is, so dividing by <em>n</em> underestimates the spread. Libraries
+      disagree on the default, which is a classic bug:</p>
+    <table>
+      <thead><tr><th>Tool</th><th>Sample (n - 1)</th><th>Population (n)</th></tr></thead>
+      <tbody>
+        <tr><td><code>statistics</code> (stdlib)</td><td><code>stdev</code>, <code>variance</code></td><td><code>pstdev</code>, <code>pvariance</code></td></tr>
+        <tr><td>NumPy</td><td><code>np.std(x, ddof=1)</code></td><td><code>np.std(x)</code> (default <code>ddof=0</code>)</td></tr>
+        <tr><td>pandas</td><td><code>s.std()</code> (default <code>ddof=1</code>)</td><td><code>s.std(ddof=0)</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Predict: do these agree?" data-predict>
+<textarea>
+import statistics
+import numpy as np
+
+data = [2, 4, 4, 4, 5, 5, 7, 9]
+print(statistics.pstdev(data), statistics.stdev(data) == float(np.std(data)))
+</textarea>
+    </div>
+    <div class="runnable" data-title="One outlier: mean vs median">
+<textarea>
+import statistics
+
+salaries = [42_000, 45_000, 47_000, 50_000, 52_000, 55_000, 58_000]
+print(f"mean   {statistics.mean(salaries):>12,.0f}")
+print(f"median {statistics.median(salaries):>12,.0f}")
+print(f"stdev  {statistics.stdev(salaries):>12,.0f}")
+
+salaries.append(2_500_000)          # the founder joins the dataset
+print("after one outlier:")
+print(f"mean   {statistics.mean(salaries):>12,.0f}")
+print(f"median {statistics.median(salaries):>12,.0f}")
+print(f"stdev  {statistics.stdev(salaries):>12,.0f}")
+
+q1, q2, q3 = statistics.quantiles(salaries, n=4)
+print(f"IQR    {q3 - q1:>12,.0f}   (Q1={q1:,.0f}, Q3={q3:,.0f})")
+print("mode of dice rolls:", statistics.mode([1, 3, 3, 6, 2, 3, 6]))
+</textarea>
+    </div>
+    <div class="runnable" data-title="The same summaries with NumPy and pandas">
+<textarea>
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(42)
+wait = rng.exponential(scale=8.0, size=1000)      # waiting times in minutes, right-skewed
+
+print("numpy  mean/median:", wait.mean().round(2), np.median(wait).round(2))
+print("numpy  std (pop/sample):", wait.std().round(3), wait.std(ddof=1).round(3))
+print("percentiles 50/90/99:", np.percentile(wait, [50, 90, 99]).round(1))
+
+s = pd.Series(wait, name="wait_min")
+print(s.describe().round(2))
+print("skew:", round(s.skew(), 2), "(> 0 means a long right tail)")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>For skewed data (incomes, response times, house prices), report the median and
+      percentiles alongside the mean. "Average response 300 ms" hides that 1% of users wait 5 seconds.</p></aside>
+    <p><strong>Remember:</strong> mean and std are sensitive to outliers; median and IQR are robust. Know whether your
+      tool divides by <em>n</em> or <em>n - 1</em>.</p>
+  </section>
+
+  <section class="lesson-section" id="correlation">
+    <h2>Correlation is not causation</h2>
+    <p>The <strong>Pearson correlation coefficient</strong> <em>r</em> measures how well two variables fit a straight
+      line, from -1 (perfect negative) through 0 (no linear relationship) to +1 (perfect positive).
+      <strong>Spearman's</strong> correlation is Pearson's applied to ranks, so it captures any monotonic (always
+      increasing or always decreasing) relationship and resists outliers.</p>
+    <p>Correlation can arise without one variable causing the other: a <strong>confounder</strong> (a third variable)
+      can drive both, the causation can run backwards, or the pattern can be coincidence in a small sample. Ice-cream
+      sales and drownings correlate because hot weather drives both. Only a controlled experiment (or careful causal
+      methods) supports a causal claim, which is why A/B tests matter.</p>
+    <div class="runnable" data-title="A confounder manufactures a correlation">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+rng = np.random.default_rng(2)
+temperature = rng.uniform(5, 35, 200)                          # the confounder
+ice_cream = 20 + 6 * temperature + rng.normal(0, 25, 200)       # caused by temperature
+swimmers = 10 + 3 * temperature + rng.normal(0, 15, 200)        # also caused by temperature
+
+r, p = stats.pearsonr(ice_cream, swimmers)
+rho, _ = stats.spearmanr(ice_cream, swimmers)
+print(f"Pearson r = {r:.2f}, Spearman rho = {rho:.2f}")
+
+# Control for temperature: correlate what is left after removing its linear effect
+res_ice = ice_cream - np.polyval(np.polyfit(temperature, ice_cream, 1), temperature)
+res_swim = swimmers - np.polyval(np.polyfit(temperature, swimmers, 1), temperature)
+print(f"after controlling for temperature: r = {stats.pearsonr(res_ice, res_swim)[0]:.2f}")
+
+fig, ax = plt.subplots(figsize=(5, 3.5))
+sc = ax.scatter(ice_cream, swimmers, c=temperature, cmap="viridis", s=15)
+fig.colorbar(sc, label="temperature (°C)")
+ax.set_xlabel("ice creams sold")
+ax.set_ylabel("swimmers at the beach")
+ax.set_title(f"r = {r:.2f}, but temperature drives both")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> correlation measures association, not cause. Look for confounders, reverse causation,
+      and chance; use experiments when you need causal answers.</p>
+  </section>
+
+  <section class="lesson-section" id="simulation">
+    <h2>Probability by simulation</h2>
+    <p>A <strong>probability</strong> is the long-run fraction of times an outcome occurs. That definition suggests a
+      method: simulate the process many times and count. This is the <strong>Monte Carlo method</strong>, and with a
+      computer it answers questions whose formulas are hard.</p>
+    <p>Python offers two random number sources. The stdlib <code>random</code> module is fine for small simulations.
+      NumPy's <code>Generator</code>, created with <code>np.random.default_rng(seed)</code>, draws whole arrays at once
+      (much faster) and is the modern recommended API. A <strong>seed</strong> makes the pseudo-random sequence
+      reproducible: same seed, same numbers, which is essential for tests and for others re-running your analysis.</p>
+    <div class="tracer" data-title="Roll two dice a few times">
+<textarea>
+import random
+rng = random.Random(7)
+counts = {}
+for _ in range(5):
+    total = rng.randint(1, 6) + rng.randint(1, 6)
+    counts[total] = counts.get(total, 0) + 1
+</textarea>
+    </div>
+    <div class="runnable" data-title="Two dice: simulation vs exact answer">
+<textarea>
+from collections import Counter
+from fractions import Fraction
+import numpy as np
+
+rng = np.random.default_rng(2025)
+rolls = rng.integers(1, 7, size=(100_000, 2)).sum(axis=1)     # high end is exclusive
+simulated = Counter(rolls.tolist())
+
+exact = Counter(a + b for a in range(1, 7) for b in range(1, 7))   # 36 equally likely pairs
+print("sum  simulated  exact")
+for total in range(2, 13):
+    print(f"{total:>3}  {simulated[total] / len(rolls):9.4f}  {exact[total] / 36:.4f} ({Fraction(exact[total], 36)})")
+</textarea>
+    </div>
+    <h3>Monte Carlo estimate of π</h3>
+    <p>Throw random points into the unit square. The fraction landing inside the quarter circle of radius 1
+      approaches its area, π/4. Error shrinks like 1/√n: 100 times more points buy one more correct digit.</p>
+    <div class="runnable" data-title="Estimate π and watch the error shrink">
+<textarea>
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+for n in [100, 10_000, 1_000_000]:
+    x, y = rng.random(n), rng.random(n)
+    estimate = 4 * np.mean(x * x + y * y <= 1)
+    print(f"n={n:>9,}  pi ~ {estimate:.5f}  error {abs(estimate - math.pi):.5f}")
+
+x, y = rng.random(2000), rng.random(2000)
+inside = x * x + y * y <= 1
+fig, ax = plt.subplots(figsize=(4, 4))
+ax.scatter(x[inside], y[inside], s=3, color="#0072B2", label="inside")
+ax.scatter(x[~inside], y[~inside], s=3, color="#E69F00", label="outside")
+ax.set_aspect("equal")
+ax.set_title(f"4 x {inside.mean():.3f} = {4 * inside.mean():.3f}")
+ax.legend(loc="lower left")
+</textarea>
+    </div>
+    <h3>The birthday paradox</h3>
+    <p>How many people must be in a room before two share a birthday with probability over 50%? Intuition says
+      around 183; the answer is 23, because what matters is the number of <em>pairs</em> (23 people form 253 pairs).
+      The exact probability that <em>n</em> people all have different birthdays is
+      (365/365)(364/365)...((365-n+1)/365).</p>
+    <div class="runnable" data-title="Birthday paradox: formula and simulation">
+<textarea>
+import numpy as np
+
+def p_shared_exact(n, days=365):
+    p_all_different = 1.0
+    for k in range(n):
+        p_all_different *= (days - k) / days
+    return 1 - p_all_different
+
+def p_shared_simulated(n, trials=20_000, seed=1):
+    rng = np.random.default_rng(seed)
+    birthdays = rng.integers(0, 365, size=(trials, n))
+    sorted_days = np.sort(birthdays, axis=1)
+    has_match = (np.diff(sorted_days, axis=1) == 0).any(axis=1)
+    return has_match.mean()
+
+for n in [10, 23, 30, 50, 70]:
+    print(f"n={n:>2}: exact {p_shared_exact(n):.4f}  simulated {p_shared_simulated(n):.4f}")
+print("smallest n over 50%:", next(n for n in range(1, 366) if p_shared_exact(n) > 0.5))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Pass a <code>Generator</code> (or a seed) into functions instead of using global random
+      state. Code like <code>def simulate(n, rng): ...</code> is reproducible, testable, and safe to parallelize with
+      independent streams (<code>rng.spawn(k)</code>).</p></aside>
+    <p><strong>Remember:</strong> probability = long-run frequency; simulate, count, and compare with exact answers
+      when you can. Seed everything.</p>
+  </section>
+
+  <section class="lesson-section" id="distributions">
+    <h2>Probability distributions with scipy.stats</h2>
+    <p>A <strong>random variable</strong> is a quantity whose value comes from a random process. Its
+      <strong>distribution</strong> says how likely each value is. <strong>Discrete</strong> variables (counts) have a
+      <strong>probability mass function</strong> (PMF): P(X = k). <strong>Continuous</strong> variables (times,
+      heights) have a <strong>probability density function</strong> (PDF): probabilities are <em>areas</em> under the
+      curve, and P(X = exactly 1.7) is 0. Both have a <strong>cumulative distribution function</strong> (CDF):
+      P(X ≤ x).</p>
+    <table>
+      <thead><tr><th>Distribution</th><th>Models</th><th><code>scipy.stats</code></th><th>Parameters</th></tr></thead>
+      <tbody>
+        <tr><td>Uniform</td><td>every value in [a, b] equally likely</td><td><code>uniform(loc=a, scale=b-a)</code></td><td>range</td></tr>
+        <tr><td>Normal (Gaussian)</td><td>sums of many small effects: measurement error, heights</td><td><code>norm(loc=μ, scale=σ)</code></td><td>mean μ, std σ</td></tr>
+        <tr><td>Binomial</td><td>number of successes in n independent yes/no trials</td><td><code>binom(n, p)</code></td><td>trials n, success probability p</td></tr>
+        <tr><td>Poisson</td><td>count of rare events in a fixed interval: calls per hour, defects per meter</td><td><code>poisson(mu)</code></td><td>average rate λ (mu)</td></tr>
+        <tr><td>Exponential</td><td>waiting time between Poisson events</td><td><code>expon(scale=1/λ)</code></td><td>rate λ (scale is the mean)</td></tr>
+      </tbody>
+    </table>
+    <p>Every <code>scipy.stats</code> distribution object shares the same methods:</p>
+    <ul>
+      <li><code>pmf(k)</code> (discrete) / <code>pdf(x)</code> (continuous): probability mass or density.</li>
+      <li><code>cdf(x)</code>: P(X ≤ x). <code>sf(x)</code> = 1 - cdf(x), the survival function (more precise in the tail).</li>
+      <li><code>ppf(q)</code>: the percent point function, the inverse of the CDF: "which x has q of the probability
+        below it?" <code>norm.ppf(0.975)</code> is 1.96.</li>
+      <li><code>rvs(size=..., random_state=rng)</code>: random variates (samples).</li>
+      <li><code>mean()</code>, <code>std()</code>, <code>interval(0.95)</code>.</li>
+    </ul>
+    <div class="runnable" data-title="Ask distributions questions">
+<textarea>
+from scipy import stats
+
+heights = stats.norm(loc=170, scale=8)            # adult heights in cm
+print(f"P(height <= 180)    = {heights.cdf(180):.3f}")
+print(f"P(160 < height < 180) = {heights.cdf(180) - heights.cdf(160):.3f}")
+print(f"95th percentile     = {heights.ppf(0.95):.1f} cm")
+print(f"middle 95% interval = {[round(float(v), 1) for v in heights.interval(0.95)]}")
+
+coin = stats.binom(n=10, p=0.5)
+print(f"P(exactly 7 heads in 10) = {coin.pmf(7):.4f}, P(at least 8) = {coin.sf(7):.4f}")
+
+calls = stats.poisson(mu=4)                       # 4 support calls per hour on average
+print(f"P(no calls in an hour) = {calls.pmf(0):.4f}, P(more than 8) = {calls.sf(8):.4f}")
+
+wait = stats.expon(scale=15)                      # mean 15 minutes between buses
+print(f"P(wait > 30 min) = {wait.sf(30):.4f}; median wait = {wait.median():.1f} min")
+print("z for a two-sided 95% interval:", round(stats.norm.ppf(0.975), 3))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Plot PMFs, PDFs, CDFs, and samples">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+rng = np.random.default_rng(3)
+fig, axs = plt.subplots(2, 3, figsize=(11, 6), layout="constrained")
+
+x = np.linspace(-4, 4, 400)
+axs[0, 0].plot(x, stats.norm.pdf(x), color="#0072B2", label="pdf")
+axs[0, 0].plot(x, stats.norm.cdf(x), color="#E69F00", label="cdf")
+axs[0, 0].hist(stats.norm.rvs(size=2000, random_state=rng), bins=40, density=True, alpha=0.3, color="#0072B2")
+axs[0, 0].set_title("Normal(0, 1)")
+axs[0, 0].legend()
+
+k = np.arange(0, 21)
+axs[0, 1].bar(k, stats.binom.pmf(k, 20, 0.3), color="#009E73")
+axs[0, 1].set_title("Binomial(n=20, p=0.3) pmf")
+
+axs[0, 2].bar(k, stats.poisson.pmf(k, 4), color="#D55E00")
+axs[0, 2].set_title("Poisson(λ=4) pmf")
+
+t = np.linspace(0, 60, 400)
+axs[1, 0].plot(t, stats.expon.pdf(t, scale=15), color="#CC79A7")
+axs[1, 0].fill_between(t, stats.expon.pdf(t, scale=15), where=t > 30, color="#CC79A7", alpha=0.3)
+axs[1, 0].set_title("Exponential(mean 15): shaded P(T > 30)")
+
+u = np.linspace(-0.5, 1.5, 400)
+axs[1, 1].plot(u, stats.uniform.pdf(u), color="#56B4E9")
+axs[1, 1].set_title("Uniform(0, 1) pdf")
+
+q = np.linspace(0.001, 0.999, 400)
+axs[1, 2].plot(q, stats.norm.ppf(q), color="#0072B2")
+axs[1, 2].set_title("Normal ppf (inverse cdf)")
+axs[1, 2].set_xlabel("probability q")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> PMF/PDF for "how likely", CDF for "at most", <code>sf</code> for "more than",
+      <code>ppf</code> for "which value has this percentile", <code>rvs</code> to simulate.</p>
+  </section>
+
+  <section class="lesson-section" id="lln-clt">
+    <h2>The law of large numbers and the central limit theorem</h2>
+    <p>Two theorems justify almost everything in inferential statistics.</p>
+    <p>The <strong>law of large numbers</strong> (LLN): as the number of independent observations grows, their
+      average converges to the true expected value. It is why casinos always win in the long run and why your Monte
+      Carlo estimates improve with more samples. It does <em>not</em> say short runs "balance out": after five heads, a
+      fair coin is still 50/50 (believing otherwise is the gambler's fallacy).</p>
+    <p>The <strong>central limit theorem</strong> (CLT): the <em>average</em> of n independent draws from almost any
+      distribution with finite variance is approximately <strong>normally</strong> distributed when n is large enough,
+      with mean μ and standard deviation σ/√n. That σ/√n is the <strong>standard error</strong> (SE) of the mean: the
+      typical distance between a sample mean and the true mean. The CLT is why normal-based confidence intervals and
+      tests work even when the data itself is skewed.</p>
+    <div class="runnable" data-title="LLN: running averages of die rolls settle at 3.5">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(10)
+fig, ax = plt.subplots(figsize=(7, 3.5))
+for i in range(5):
+    rolls = rng.integers(1, 7, 5000)
+    running = np.cumsum(rolls) / np.arange(1, 5001)
+    ax.plot(running, linewidth=1)
+ax.axhline(3.5, color="black", linestyle="--", label="expected value 3.5")
+ax.set_xscale("log")
+ax.set_xlabel("number of rolls (log scale)")
+ax.set_ylabel("running average")
+ax.set_title("Five sequences of die rolls converge to 3.5")
+ax.legend()
+</textarea>
+    </div>
+    <div class="runnable" data-title="CLT: means of skewed data become normal">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+rng = np.random.default_rng(4)
+population = stats.expon(scale=2.0)          # very skewed, mean 2, std 2
+
+fig, axs = plt.subplots(1, 4, figsize=(12, 3), layout="constrained")
+axs[0].hist(population.rvs(size=10_000, random_state=rng), bins=60, density=True, color="#999999")
+axs[0].set_title("raw data (exponential)")
+for ax, n in zip(axs[1:], [2, 10, 50]):
+    means = population.rvs(size=(10_000, n), random_state=rng).mean(axis=1)
+    ax.hist(means, bins=60, density=True, color="#0072B2", alpha=0.7)
+    x = np.linspace(means.min(), means.max(), 200)
+    ax.plot(x, stats.norm.pdf(x, loc=2.0, scale=2.0 / np.sqrt(n)), color="#D55E00", label="CLT prediction")
+    ax.set_title(f"means of n={n}\nstd {means.std():.3f} vs σ/√n {2 / np.sqrt(n):.3f}")
+axs[3].legend(fontsize=8)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: how does the standard error scale?" data-predict>
+<textarea>
+import math
+
+sigma = 12
+for n in [9, 36, 144]:
+    print(n, sigma / math.sqrt(n))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> averages converge (LLN) and are approximately normal with standard error σ/√n (CLT).
+      To halve the error, you need four times the data.</p>
+  </section>
+
+  <section class="lesson-section" id="sampling">
+    <h2>Sampling and bias</h2>
+    <p>A <strong>population</strong> is everyone (or everything) you want to learn about; a <strong>sample</strong> is
+      the part you actually measure. A <strong>statistic</strong> computed on the sample (sample mean x̄) estimates a
+      <strong>parameter</strong> of the population (true mean μ). Two kinds of error separate them:</p>
+    <ul>
+      <li><strong>Sampling error</strong>: random variation from which units happened to be chosen. It shrinks with
+        larger samples (that is the σ/√n), and statistics quantifies it.</li>
+      <li><strong>Bias</strong>: systematic error from <em>how</em> the sample was chosen or measured. It does
+        <strong>not</strong> shrink with more data; a biased sample of a million is still wrong, just precisely
+        wrong.</li>
+    </ul>
+    <p>Common biases: <strong>selection bias</strong> (an online survey misses people who are offline),
+      <strong>survivorship bias</strong> (studying only companies that still exist), <strong>non-response
+      bias</strong> (unhappy customers skip the survey), <strong>convenience sampling</strong> (asking whoever is
+      nearby), and <strong>measurement bias</strong> (leading questions, miscalibrated sensors). The defense is a
+      <strong>random sample</strong> (every unit has a known, nonzero chance of selection) or, for causal questions,
+      <strong>random assignment</strong> to treatment and control.</p>
+    <div class="runnable" data-title="A huge biased sample loses to a small random one">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(12)
+N = 1_000_000
+age = rng.integers(18, 90, N)
+online = rng.random(N) < np.clip(1.1 - age / 80, 0.05, 0.98)      # younger people are more often online
+hours_tv = np.clip(rng.normal(1 + age / 25, 1.0), 0, None)          # older people watch more TV
+true_mean = hours_tv.mean()
+
+online_idx = np.flatnonzero(online)
+biased = hours_tv[rng.choice(online_idx, 200_000, replace=False)]   # online survey: 200k responses
+random_sample = hours_tv[rng.choice(N, 1_000, replace=False)]       # proper random sample: 1k
+
+se = random_sample.std(ddof=1) / np.sqrt(len(random_sample))
+print(f"true mean TV hours        : {true_mean:.3f}")
+print(f"online survey (n=200,000) : {biased.mean():.3f}   <- precise but wrong")
+print(f"random sample (n=1,000)   : {random_sample.mean():.3f} ± {1.96 * se:.3f}")
+</textarea>
+    </div>
+    <aside class="callout think"><p>An app measures "average session length" only for users who open the app at least
+      weekly. What population does that number describe, and which users are invisible to it? How would you sample
+      to estimate the session length of all registered users?</p></aside>
+    <p><strong>Remember:</strong> more data shrinks random error, never bias. Fix bias with random sampling or random
+      assignment, and describe exactly which population a sample represents.</p>
+  </section>
+
+  <section class="lesson-section" id="confidence">
+    <h2>Confidence intervals: analytic and bootstrap</h2>
+    <p>A point estimate ("mean delivery time 31.4 minutes") hides uncertainty. A <strong>confidence interval</strong>
+      (CI) gives a range built by a procedure that captures the true parameter in a stated fraction of repeated
+      samples. For a mean with unknown population σ, the classic 95% interval is</p>
+    <pre><code class="language-python">x̄ ± t* × s / √n      # t* = stats.t.ppf(0.975, df=n - 1), s = sample std (ddof=1)</code></pre>
+    <p>The <strong>t distribution</strong> replaces the normal because s is itself estimated; it has fatter tails for
+      small n and approaches the normal (t* → 1.96) as n grows.</p>
+    <p><strong>Interpretation</strong>, carefully: "95% confidence" is a property of the <em>method</em>. If you
+      repeated the study many times, about 95% of the intervals you computed would contain the true mean. For any one
+      computed interval, the true mean is either in it or not; it is not correct to say "there is a 95% probability μ
+      is in [29.8, 33.0]" in the frequentist framework.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 200" role="img" aria-label="Twenty confidence intervals from repeated samples; most cross the true mean line, one misses">
+        <line x1="260" y1="12" x2="260" y2="180" stroke="var(--fg)" stroke-dasharray="4 3"/>
+        <text x="266" y="194" fill="var(--fg)" font-size="11">true mean μ</text>
+        <g stroke="var(--viz-1)" stroke-width="3">
+          <line x1="200" y1="20" x2="300" y2="20"/><line x1="220" y1="28" x2="320" y2="28"/><line x1="190" y1="36" x2="285" y2="36"/>
+          <line x1="235" y1="44" x2="330" y2="44"/><line x1="210" y1="52" x2="300" y2="52"/><line x1="180" y1="60" x2="275" y2="60"/>
+          <line x1="225" y1="68" x2="315" y2="68"/><line x1="240" y1="76" x2="340" y2="76"/><line x1="205" y1="84" x2="295" y2="84"/>
+          <line x1="215" y1="100" x2="310" y2="100"/><line x1="195" y1="108" x2="290" y2="108"/>
+          <line x1="230" y1="116" x2="325" y2="116"/><line x1="210" y1="124" x2="305" y2="124"/><line x1="185" y1="132" x2="280" y2="132"/>
+          <line x1="220" y1="140" x2="318" y2="140"/><line x1="200" y1="148" x2="296" y2="148"/><line x1="228" y1="156" x2="322" y2="156"/>
+          <line x1="212" y1="164" x2="300" y2="164"/><line x1="190" y1="172" x2="282" y2="172"/>
+        </g>
+        <line x1="270" y1="92" x2="365" y2="92" stroke="var(--viz-4)" stroke-width="3"/>
+        <text x="372" y="96" fill="var(--viz-4)" font-size="11">this interval misses μ</text>
+        <text x="10" y="40" fill="var(--fg-muted)" font-size="11">20 samples,</text>
+        <text x="10" y="54" fill="var(--fg-muted)" font-size="11">20 intervals:</text>
+        <text x="10" y="68" fill="var(--fg-muted)" font-size="11">about 19 cover μ</text>
+      </svg>
+      <figcaption>A 95% CI procedure produces intervals that cover the true value about 95% of the time.</figcaption>
+    </figure>
+    <div class="runnable" data-title="A t-interval, and a simulation of its coverage">
+<textarea>
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(21)
+sample = rng.normal(loc=31, scale=6, size=25)          # 25 delivery times; true mean is 31
+
+n, mean, s = len(sample), sample.mean(), sample.std(ddof=1)
+t_star = stats.t.ppf(0.975, df=n - 1)
+half = t_star * s / np.sqrt(n)
+print(f"mean {mean:.2f}, 95% CI [{mean - half:.2f}, {mean + half:.2f}]  (t* = {t_star:.3f})")
+print("scipy agrees:", np.round(stats.t.interval(0.95, df=n - 1, loc=mean, scale=stats.sem(sample)), 2))
+
+hits = 0
+for _ in range(10_000):
+    x = rng.normal(31, 6, 25)
+    h = stats.t.ppf(0.975, 24) * x.std(ddof=1) / 5
+    hits += (x.mean() - h <= 31 <= x.mean() + h)
+print(f"coverage over 10,000 repeated studies: {hits / 10_000:.3f}")
+</textarea>
+    </div>
+    <h3>The bootstrap</h3>
+    <p>What about a CI for a median, a 90th percentile, or a ratio, where no simple formula exists? The
+      <strong>bootstrap</strong> (Efron, 1979) treats the sample as a stand-in for the population: resample it
+      <em>with replacement</em> many times (each resample the same size as the original), compute the statistic on
+      each, and take the middle 95% of those values (the <em>percentile</em> method). It needs only computation and
+      the assumption that the sample is representative.</p>
+    <div class="runnable" data-title="Bootstrap CI for a median, by hand and with scipy">
+<textarea>
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(5)
+wait = rng.lognormal(mean=2.5, sigma=0.7, size=200)        # skewed waiting times
+
+boots = np.array([np.median(rng.choice(wait, size=wait.size, replace=True)) for _ in range(5000)])
+low, high = np.percentile(boots, [2.5, 97.5])
+print(f"median {np.median(wait):.2f}, 95% bootstrap CI [{low:.2f}, {high:.2f}]")
+
+res = stats.bootstrap((wait,), np.median, n_resamples=5000, confidence_level=0.95,
+                      method="percentile", random_state=rng)
+print("scipy.stats.bootstrap:", np.round([res.confidence_interval.low, res.confidence_interval.high], 2))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a CI expresses the precision of an estimate; 95% describes the long-run hit rate of
+      the method. Use t-intervals for means and the bootstrap for anything else.</p>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Hypothesis testing and p-values</h2>
+    <p>A hypothesis test asks whether data are surprising under a default assumption. The vocabulary:</p>
+    <ul>
+      <li><strong>Null hypothesis H₀</strong>: the "nothing is going on" claim, such as "the new checkout converts at
+        the same rate as the old one".</li>
+      <li><strong>Alternative H₁</strong>: what you suspect instead ("the rates differ"). Two-sided alternatives allow
+        a difference in either direction; one-sided alternatives must be chosen <em>before</em> seeing data.</li>
+      <li><strong>Test statistic</strong>: a number measuring how far the data are from what H₀ predicts (a t value, a
+        chi-square value, a difference in means).</li>
+      <li><strong>p-value</strong>: the probability, <em>computed assuming H₀ is true</em>, of getting a test statistic
+        at least as extreme as the one observed.</li>
+      <li><strong>Significance level α</strong> (often 0.05), fixed in advance: reject H₀ if p &lt; α.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 190" role="img" aria-label="Null distribution of a test statistic with both tails beyond the observed value shaded as the two-sided p-value">
+        <path d="M20 160 C 120 160, 170 30, 260 30 C 350 30, 400 160, 500 160" fill="none" stroke="var(--viz-1)" stroke-width="2"/>
+        <path d="M410 160 L410 141 C 440 152, 470 158, 500 160 Z" fill="var(--viz-4)" fill-opacity="0.45"/>
+        <path d="M110 160 L110 141 C 80 152, 50 158, 20 160 Z" fill="var(--viz-4)" fill-opacity="0.45"/>
+        <line x1="20" y1="160" x2="500" y2="160" stroke="var(--fg-muted)"/>
+        <line x1="410" y1="40" x2="410" y2="165" stroke="var(--viz-2)" stroke-width="2"/>
+        <text x="372" y="34" fill="var(--viz-2)" font-size="11">observed t = 2.3</text>
+        <line x1="110" y1="60" x2="110" y2="165" stroke="var(--viz-2)" stroke-dasharray="3 3"/>
+        <text x="80" y="54" fill="var(--viz-2)" font-size="11">-2.3</text>
+        <text x="200" y="100" fill="var(--viz-1)" font-size="11">distribution of t if H₀ is true</text>
+        <text x="420" y="130" fill="var(--viz-4)" font-size="11">tail area</text>
+        <text x="30" y="130" fill="var(--viz-4)" font-size="11">tail area</text>
+        <text x="20" y="182" fill="var(--fg-muted)" font-size="11">two-sided p-value = both shaded areas = P(|T| ≥ 2.3 | H₀)</text>
+      </svg>
+      <figcaption>The p-value is a tail area of the null distribution beyond what you observed.</figcaption>
+    </figure>
+    <aside class="callout danger" data-title="What a p-value is NOT"><p>A p-value is <strong>not</strong> the
+      probability that H₀ is true, <strong>not</strong> the probability your result is a fluke, and
+      <strong>not</strong> a measure of how large or important an effect is. p = 0.03 means: <em>if</em> there were no
+      real difference, data this extreme would show up about 3% of the time. A tiny, useless effect can have a tiny
+      p-value with enough data, and an important effect can have p = 0.2 in a small study. "Not significant" means
+      "not enough evidence", not "no effect".</p></aside>
+    <p>Two kinds of mistakes are possible. A <strong>Type I error</strong> (false positive) rejects a true H₀; its rate
+      is α. A <strong>Type II error</strong> (false negative) misses a real effect; its rate is β, and
+      <strong>power</strong> = 1 - β is the probability of detecting an effect of a given size. Power grows with
+      sample size and effect size, so plan the sample size <em>before</em> the study.</p>
+    <h3>A permutation test: the logic without formulas</h3>
+    <p>If H₀ says the group labels do not matter, then shuffling the labels should produce differences as large as the
+      observed one fairly often. Count how often: that fraction <em>is</em> a p-value.</p>
+    <div class="runnable" data-title="Permutation test for a difference in means">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(8)
+control = np.array([12.1, 9.8, 11.4, 10.2, 13.0, 9.5, 10.9, 11.8, 10.4, 12.6])
+treated = np.array([13.4, 12.2, 14.1, 11.9, 13.8, 12.7, 15.0, 12.9, 11.6, 14.4])
+observed = treated.mean() - control.mean()
+
+pooled = np.concatenate([control, treated])
+count = 0
+trials = 20_000
+for _ in range(trials):
+    shuffled = rng.permutation(pooled)
+    diff = shuffled[10:].mean() - shuffled[:10].mean()
+    count += abs(diff) >= abs(observed)
+print(f"observed difference {observed:.2f}; permutation p-value ~ {count / trials:.4f}")
+</textarea>
+    </div>
+    <h3>t-tests and chi-square tests in scipy</h3>
+    <table>
+      <thead><tr><th>Question</th><th>Test</th><th><code>scipy.stats</code></th></tr></thead>
+      <tbody>
+        <tr><td>Is a mean different from a value?</td><td>one-sample t-test</td><td><code>ttest_1samp(x, popmean)</code></td></tr>
+        <tr><td>Do two independent groups differ in mean?</td><td>Welch's t-test (no equal-variance assumption)</td><td><code>ttest_ind(a, b, equal_var=False)</code></td></tr>
+        <tr><td>Before/after on the same subjects?</td><td>paired t-test</td><td><code>ttest_rel(before, after)</code></td></tr>
+        <tr><td>Are two categorical variables independent?</td><td>chi-square test of independence</td><td><code>chi2_contingency(table)</code></td></tr>
+        <tr><td>Two groups, skewed data or ranks?</td><td>Mann-Whitney U</td><td><code>mannwhitneyu(a, b)</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Welch's t-test, a paired test, and chi-square">
+<textarea>
+import numpy as np
+from scipy import stats
+
+control = np.array([12.1, 9.8, 11.4, 10.2, 13.0, 9.5, 10.9, 11.8, 10.4, 12.6])
+treated = np.array([13.4, 12.2, 14.1, 11.9, 13.8, 12.7, 15.0, 12.9, 11.6, 14.4])
+res = stats.ttest_ind(treated, control, equal_var=False)
+print(f"Welch t = {res.statistic:.3f}, p = {res.pvalue:.5f}")
+print("95% CI for the difference:", np.round(res.confidence_interval(0.95), 2))
+
+before = np.array([82, 75, 91, 68, 77, 85, 79, 88])
+after = np.array([85, 79, 92, 70, 82, 86, 80, 93])
+print(f"paired t-test p = {stats.ttest_rel(after, before).pvalue:.4f} "
+      f"(independent test would give p = {stats.ttest_ind(after, before).pvalue:.3f})")
+
+#                 bought  did not buy
+table = np.array([[45, 155],     # saw ad A
+                  [72, 128]])    # saw ad B
+chi2, p, dof, expected = stats.chi2_contingency(table)
+print(f"chi-square = {chi2:.2f}, dof = {dof}, p = {p:.4f}")
+print("expected counts if independent:\n", expected.round(1))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a p-value is P(data at least this extreme | H₀), nothing more. Fix α and the
+      alternative in advance; pair tests with confidence intervals and effect sizes.</p>
+  </section>
+
+  <section class="lesson-section" id="ab-testing">
+    <h2>A/B testing and the multiple-comparison trap</h2>
+    <p>An <strong>A/B test</strong> is a randomized controlled experiment: users are randomly assigned to version A
+      (control) or B (treatment), and a metric decided beforehand (conversion rate, revenue per visitor) is compared.
+      Randomization balances confounders on average, so a difference can be attributed to the change. The workflow:</p>
+    <ol>
+      <li>Choose one <strong>primary metric</strong> and the <strong>minimum detectable effect</strong> worth acting on.</li>
+      <li>Compute the <strong>sample size</strong> for the desired power (commonly 80%) at your α.</li>
+      <li>Randomize, run until the planned sample size is reached (do not stop early when it looks good).</li>
+      <li>Test, report the effect with a CI, and check guardrail metrics (errors, latency, refunds).</li>
+    </ol>
+    <div class="runnable" data-title="Worked A/B test: two proportions">
+<textarea>
+import numpy as np
+from scipy import stats
+
+# Results after the planned 2 x 4,000 visitors
+n_a, conv_a = 4000, 380      # 9.50% converted on the old checkout
+n_b, conv_b = 4000, 440      # 11.00% on the new checkout
+
+p_a, p_b = conv_a / n_a, conv_b / n_b
+diff = p_b - p_a
+pooled = (conv_a + conv_b) / (n_a + n_b)
+se_null = np.sqrt(pooled * (1 - pooled) * (1 / n_a + 1 / n_b))
+z = diff / se_null
+p_value = 2 * stats.norm.sf(abs(z))
+
+se = np.sqrt(p_a * (1 - p_a) / n_a + p_b * (1 - p_b) / n_b)
+low, high = diff - 1.96 * se, diff + 1.96 * se
+print(f"A {p_a:.2%}  B {p_b:.2%}  difference {diff:+.2%}  (relative lift {diff / p_a:+.1%})")
+print(f"z = {z:.2f}, two-sided p = {p_value:.4f}")
+print(f"95% CI for the difference: [{low:+.2%}, {high:+.2%}]")
+
+chi2, p_chi, _, _ = stats.chi2_contingency([[conv_a, n_a - conv_a], [conv_b, n_b - conv_b]], correction=False)
+print(f"chi-square check: {chi2:.2f} = z^2 {z * z:.2f}, p = {p_chi:.4f}")
+</textarea>
+    </div>
+    <p>Reading the result: the new checkout converted 1.5 percentage points better; if the versions truly converted
+      equally, a difference this large would occur in under 3% of experiments (p ≈ 0.027); and the plausible range
+      for the true lift is about +0.2 to +2.8 points. Whether to ship depends on that range versus the cost of the
+      change, not on p alone.</p>
+    <h3>Multiple comparisons</h3>
+    <p>Each test at α = 0.05 has a 5% false-positive rate when nothing is going on. Run 20 independent tests (20
+      metrics, 20 segments, or checking results every day) and the chance of at least one false positive is
+      1 - 0.95²⁰ ≈ 64%. This is how "the new button increases revenue for left-handed users on Tuesdays" gets
+      discovered. Defenses:</p>
+    <ul>
+      <li>Pre-register one primary metric and a fixed sample size; label everything else exploratory.</li>
+      <li><strong>Bonferroni</strong>: test each of m hypotheses at α/m (simple, conservative).
+        <strong>Holm</strong>: a step-down version with more power. <strong>Benjamini-Hochberg</strong> controls the
+        false discovery rate when you test many hypotheses.</li>
+      <li>Do not peek and stop at the first p &lt; 0.05; use a fixed horizon or a sequential method designed for it.</li>
+    </ul>
+    <div class="runnable" data-title="Twenty A/A tests: no real effect, yet 'significant' results appear">
+<textarea>
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(99)
+false_positive_runs = 0
+experiments = 2000
+for _ in range(experiments):
+    pvals = []
+    for metric in range(20):                       # 20 metrics, no true difference in any
+        a = rng.normal(0, 1, 200)
+        b = rng.normal(0, 1, 200)
+        pvals.append(stats.ttest_ind(a, b).pvalue)
+    false_positive_runs += min(pvals) < 0.05
+print(f"P(at least one p < 0.05 among 20 null tests) ~ {false_positive_runs / experiments:.2f}")
+print(f"theory: 1 - 0.95**20 = {1 - 0.95 ** 20:.2f}")
+print(f"Bonferroni threshold for 20 tests: {0.05 / 20}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> randomize, fix the metric and sample size in advance, report the difference with a
+      CI, and correct for multiple comparisons (or avoid them).</p>
+  </section>
+
+  <section class="lesson-section" id="effect-sizes">
+    <h2>Effect sizes: how big, not just whether</h2>
+    <p>Statistical significance answers "is there evidence of <em>some</em> difference?" An <strong>effect
+      size</strong> answers "how big is it?" Always report both. Common effect sizes:</p>
+    <ul>
+      <li><strong>Raw difference</strong> in meaningful units (minutes saved, percentage points of conversion), with a
+        CI. Usually the most useful for decisions.</li>
+      <li><strong>Relative lift</strong>: difference divided by the baseline (+15.8% conversion).</li>
+      <li><strong>Cohen's d</strong>: the difference in means divided by the pooled standard deviation, a unitless
+        size. Rough conventions: 0.2 small, 0.5 medium, 0.8 large (context matters more than the labels).</li>
+    </ul>
+    <div class="runnable" data-title="Significant is not the same as important">
+<textarea>
+import numpy as np
+from scipy import stats
+
+def cohens_d(a, b):
+    na, nb = len(a), len(b)
+    pooled = np.sqrt(((na - 1) * np.var(a, ddof=1) + (nb - 1) * np.var(b, ddof=1)) / (na + nb - 2))
+    return (np.mean(b) - np.mean(a)) / pooled
+
+rng = np.random.default_rng(6)
+big_a, big_b = rng.normal(100, 15, 200_000), rng.normal(100.3, 15, 200_000)   # tiny true effect, huge n
+small_a, small_b = rng.normal(100, 15, 15), rng.normal(110, 15, 15)            # large true effect, tiny n
+
+for label, a, b in [("huge study, tiny effect", big_a, big_b), ("tiny study, big effect", small_a, small_b)]:
+    p = stats.ttest_ind(a, b, equal_var=False).pvalue
+    print(f"{label:24}  diff {np.mean(b) - np.mean(a):6.2f}  d = {cohens_d(a, b):5.2f}  p = {p:.2g}")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>A good statistical write-up reads like: "The new checkout increased conversion from
+      9.5% to 11.0% (+1.5 percentage points, 95% CI +0.2 to +2.8; two-proportion z-test p = 0.027, n = 8,000). At
+      current traffic this is about 600 extra orders per month." Effect, uncertainty, test, sample size, and what it
+      means for the business.</p></aside>
+    <p><strong>Remember:</strong> report the effect size with its CI in real units first; the p-value is supporting
+      evidence, not the headline.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises use the standard library, NumPy, and SciPy; they run in the browser. Use the seeds given so the
+      results are reproducible.</p>
+
+    <div class="exercise" data-id="m54-e1" data-title="Summary statistics">
+      <div class="exercise-prompt">
+        <p>Write <code>summarize(values)</code> returning a dict with keys <code>mean</code>, <code>median</code>,
+          <code>stdev</code> (sample, n - 1), <code>iqr</code> (Q3 - Q1 using
+          <code>statistics.quantiles(values, n=4)</code>), and <code>range</code> (max - min).</p>
+      </div>
+<textarea class="starter">
+import statistics
+
+def summarize(values):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import statistics
+
+_data = [2, 4, 4, 4, 5, 5, 7, 9, 30]
+
+def test_keys():
+    assert set(summarize(_data)) == {"mean", "median", "stdev", "iqr", "range"}, "return exactly these keys"
+
+def test_values():
+    s = summarize(_data)
+    assert abs(s["mean"] - 70 / 9) < 1e-9, f"mean was {s['mean']}"
+    assert s["median"] == 5, f"median was {s['median']}"
+    assert abs(s["stdev"] - statistics.stdev(_data)) < 1e-9, "use the sample standard deviation (n - 1)"
+    q1, _, q3 = statistics.quantiles(_data, n=4)
+    assert abs(s["iqr"] - (q3 - q1)) < 1e-9, f"iqr was {s['iqr']}"
+    assert s["range"] == 28, f"range was {s['range']}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>q1, q2, q3 = statistics.quantiles(values, n=4)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import statistics
+
+def summarize(values):
+    q1, _, q3 = statistics.quantiles(values, n=4)
+    return {
+        "mean": statistics.mean(values),
+        "median": statistics.median(values),
+        "stdev": statistics.stdev(values),
+        "iqr": q3 - q1,
+        "range": max(values) - min(values),
+    }</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m54-e2" data-title="Monte Carlo π">
+      <div class="exercise-prompt">
+        <p>Write <code>estimate_pi(n, seed)</code> that draws <code>n</code> points uniformly in the unit square using
+          <code>numpy.random.default_rng(seed)</code> and returns 4 times the fraction with
+          <code>x*x + y*y &lt;= 1</code>, as a Python <code>float</code>. Draw x values and y values as two separate
+          calls to <code>rng.random(n)</code>, x first.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def estimate_pi(n, seed):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+import numpy as np
+
+def test_close_to_pi():
+    est = estimate_pi(400_000, seed=1)
+    assert isinstance(est, float), "return a Python float"
+    assert abs(est - math.pi) < 0.01, f"estimate {est} is too far from pi"
+
+def test_reproducible():
+    assert estimate_pi(10_000, seed=7) == estimate_pi(10_000, seed=7), "the same seed must give the same answer"
+
+def test_exact_draws():
+    rng = np.random.default_rng(3)
+    x, y = rng.random(1000), rng.random(1000)
+    assert estimate_pi(1000, seed=3) == 4 * float(np.mean(x * x + y * y <= 1)), "draw x then y with rng.random(n)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A boolean array's mean is the fraction of <code>True</code>
+        values. Wrap the result in <code>float(...)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def estimate_pi(n, seed):
+    rng = np.random.default_rng(seed)
+    x, y = rng.random(n), rng.random(n)
+    return 4 * float(np.mean(x * x + y * y &lt;= 1))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m54-e3" data-title="Birthday paradox, exactly and by simulation">
+      <div class="exercise-prompt">
+        <p>Write <code>p_shared(n, days=365)</code> returning the exact probability that at least two of
+          <code>n</code> people share a birthday (assume all days equally likely), and
+          <code>simulate_shared(n, trials, seed, days=365)</code> that estimates the same probability by simulating
+          <code>trials</code> groups with <code>numpy.random.default_rng(seed)</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def p_shared(n, days=365):
+    ...
+
+def simulate_shared(n, trials, seed, days=365):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_exact_values():
+    assert abs(p_shared(23) - 0.507297) < 1e-5, f"p_shared(23) was {p_shared(23)}"
+    assert p_shared(1) == 0, "one person cannot share"
+    assert p_shared(366) == 1, "366 people must share (pigeonhole)"
+    assert abs(p_shared(2, days=4) - 0.25) < 1e-12, "two people, four days: 1/4"
+
+def test_simulation_close():
+    sim = simulate_shared(23, trials=20_000, seed=0)
+    assert abs(sim - p_shared(23)) < 0.02, f"simulation {sim} should be within 0.02 of the exact value"
+
+def test_simulation_reproducible():
+    assert simulate_shared(10, 5000, seed=4) == simulate_shared(10, 5000, seed=4), "same seed, same estimate"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Exact: multiply <code>(days - k) / days</code> for
+        <code>k</code> in <code>range(n)</code> (it becomes 0 once n exceeds days). Simulation: draw a
+        <code>(trials, n)</code> array of integers, sort each row, and check whether any adjacent pair is equal.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def p_shared(n, days=365):
+    p_distinct = 1.0
+    for k in range(n):
+        p_distinct *= max(days - k, 0) / days
+    return 1 - p_distinct
+
+def simulate_shared(n, trials, seed, days=365):
+    rng = np.random.default_rng(seed)
+    birthdays = np.sort(rng.integers(0, days, size=(trials, n)), axis=1)
+    return float((np.diff(birthdays, axis=1) == 0).any(axis=1).mean())</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m54-e4" data-title="Bootstrap confidence interval">
+      <div class="exercise-prompt">
+        <p>Write <code>bootstrap_ci(data, stat, n_boot=2000, confidence=0.95, seed=0)</code>. Using
+          <code>numpy.random.default_rng(seed)</code>, draw <code>n_boot</code> resamples of the data <em>with
+          replacement</em> (each the same size as <code>data</code>), apply <code>stat</code> to each, and return the
+          percentile interval <code>(low, high)</code> as floats.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def bootstrap_ci(data, stat, n_boot=2000, confidence=0.95, seed=0):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+from scipy import stats
+
+_rng = np.random.default_rng(42)
+_data = _rng.normal(50, 10, 400)
+
+def test_contains_estimate():
+    low, high = bootstrap_ci(_data, np.mean)
+    assert low < _data.mean() < high, "the interval should contain the sample mean"
+
+def test_matches_t_interval():
+    low, high = bootstrap_ci(_data, np.mean, n_boot=4000, seed=1)
+    t_low, t_high = stats.t.interval(0.95, len(_data) - 1, loc=_data.mean(), scale=stats.sem(_data))
+    assert abs(low - t_low) < 0.25 and abs(high - t_high) < 0.25, f"for normal data the bootstrap should be close to the t-interval ({t_low:.2f}, {t_high:.2f}); got ({low:.2f}, {high:.2f})"
+
+def test_reproducible_and_width():
+    assert bootstrap_ci(_data, np.median, seed=3) == bootstrap_ci(_data, np.median, seed=3), "same seed, same interval"
+    narrow = bootstrap_ci(_data, np.mean, confidence=0.80)
+    wide = bootstrap_ci(_data, np.mean, confidence=0.99)
+    assert wide[1] - wide[0] > narrow[1] - narrow[0], "higher confidence must give a wider interval"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>rng.choice(data, size=len(data), replace=True)</code> in a
+        loop (or a list comprehension); then <code>np.percentile(values, [tail, 100 - tail])</code> with
+        <code>tail = (1 - confidence) / 2 * 100</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def bootstrap_ci(data, stat, n_boot=2000, confidence=0.95, seed=0):
+    rng = np.random.default_rng(seed)
+    data = np.asarray(data)
+    values = [stat(rng.choice(data, size=data.size, replace=True)) for _ in range(n_boot)]
+    tail = (1 - confidence) / 2 * 100
+    low, high = np.percentile(values, [tail, 100 - tail])
+    return float(low), float(high)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m54-e5" data-title="Two-proportion z-test for an A/B test">
+      <div class="exercise-prompt">
+        <p>Write <code>ab_test(conv_a, n_a, conv_b, n_b)</code> returning a dict with <code>diff</code>
+          (p_b - p_a), <code>z</code> (using the pooled proportion under H₀), and <code>p_value</code> (two-sided, from
+          the standard normal: <code>2 * stats.norm.sf(abs(z))</code>).</p>
+      </div>
+<textarea class="starter">
+import math
+from scipy import stats
+
+def ab_test(conv_a, n_a, conv_b, n_b):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from scipy import stats
+
+def test_worked_example():
+    r = ab_test(380, 4000, 440, 4000)
+    assert abs(r["diff"] - 0.015) < 1e-12, f"diff was {r['diff']}"
+    assert abs(r["z"] - 2.2112) < 1e-3, f"z was {r['z']}"
+    assert abs(r["p_value"] - 0.02702) < 1e-4, f"p was {r['p_value']}"
+
+def test_matches_chi_square():
+    r = ab_test(120, 1000, 150, 1100)
+    chi2, p, _, _ = stats.chi2_contingency([[120, 880], [150, 950]], correction=False)
+    assert abs(r["z"] ** 2 - chi2) < 1e-9, "z squared equals the uncorrected chi-square statistic"
+    assert abs(r["p_value"] - p) < 1e-9, "and the p-values agree"
+
+def test_no_difference():
+    r = ab_test(50, 500, 50, 500)
+    assert r["z"] == 0 and abs(r["p_value"] - 1) < 1e-12, "identical rates give z = 0, p = 1"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>pooled = (conv_a + conv_b) / (n_a + n_b);
+        se = sqrt(pooled * (1 - pooled) * (1/n_a + 1/n_b)); z = diff / se.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+from scipy import stats
+
+def ab_test(conv_a, n_a, conv_b, n_b):
+    p_a, p_b = conv_a / n_a, conv_b / n_b
+    pooled = (conv_a + conv_b) / (n_a + n_b)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / n_a + 1 / n_b))
+    z = (p_b - p_a) / se
+    return {"diff": p_b - p_a, "z": z, "p_value": float(2 * stats.norm.sf(abs(z)))}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m54-e6" data-title="Cohen's d">
+      <div class="exercise-prompt">
+        <p>Write <code>cohens_d(a, b)</code>: the difference in means (b minus a) divided by the pooled sample standard
+          deviation, sqrt(((n_a - 1) s_a² + (n_b - 1) s_b²) / (n_a + n_b - 2)), where s² are sample variances
+          (n - 1).</p>
+      </div>
+<textarea class="starter">
+import statistics
+
+def cohens_d(a, b):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_value():
+    a = [10, 12, 11, 13, 9, 11]
+    b = [14, 15, 13, 16, 14, 15]
+    assert abs(cohens_d(a, b) - 2.8113) < 1e-3, f"got {cohens_d(a, b)}"
+
+def test_sign_and_zero():
+    a = [1, 2, 3, 4]
+    assert abs(cohens_d(a, a)) < 1e-12, "identical groups: d = 0"
+    assert cohens_d([5, 6, 7], [1, 2, 3]) < 0, "b smaller than a gives a negative d"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>statistics.variance</code> is the sample variance.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import statistics
+
+def cohens_d(a, b):
+    na, nb = len(a), len(b)
+    pooled = ((na - 1) * statistics.variance(a) + (nb - 1) * statistics.variance(b)) / (na + nb - 2)
+    return (statistics.mean(b) - statistics.mean(a)) / pooled ** 0.5</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: analyze a simulated A/B test and recommend</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">A/B test analysis and recommendation</span></div>
+      <div class="widget-body">
+        <p>A subscription site tested a new pricing page. You will simulate realistic experiment data with a known
+          truth, analyze it as if the truth were unknown, and write a one-page recommendation.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init ab-analysis &amp;&amp; cd ab-analysis
+pixi add python=3.14 numpy scipy pandas matplotlib
+pixi run python simulate.py      # writes visitors.csv (seeded)
+pixi run python analyze.py       # prints results, saves figures
+</code></pre>
+        <p><strong>Simulate</strong> 20,000 visitors randomly assigned to A or B, with device type (mobile/desktop),
+          converted (0/1, baseline 4.0%, true lift +0.6 points on desktop only), and revenue for converters
+          (lognormal). <strong>Analyze</strong>: the primary metric (conversion), a guardrail (revenue per converter),
+          and a pre-planned segment (device).</p>
+        <ul class="checklist" data-id="m54-mini">
+          <li>A sample-size calculation (by formula or simulation) shows the test had at least 80% power for the planned effect</li>
+          <li>Conversion is compared with a two-proportion z-test and a 95% CI for the difference</li>
+          <li>Revenue per converter is compared with Welch's t-test and a bootstrap CI for the difference in medians</li>
+          <li>The device segments are tested with a Holm or Bonferroni correction</li>
+          <li>Effect sizes (absolute and relative lift) appear next to every p-value</li>
+          <li>A figure shows conversion rates with CI error bars per group and segment</li>
+          <li>A <code>RECOMMENDATION.md</code> states the decision, the evidence, the uncertainty, and the risks in plain language</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> simulate "peeking" (testing every day and stopping at the first p &lt; 0.05)
+          1,000 times under no true effect and report the actual false-positive rate; replace the z-test with a
+          Bayesian Beta-Binomial model and report P(B &gt; A).</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m54-quiz">
+<script type="application/json">
+{"title": "Statistics quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "A dataset of house prices has a few mansions. Which summary of a 'typical' price is most robust?", "options": ["Mean", "Median", "Standard deviation", "Maximum"], "answer": 1, "explanation": "<p>The median depends only on the middle of the sorted data, so a few extreme values barely move it. The mean is pulled toward the mansions.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nimport pandas as pd\nx = [1, 2, 3, 4]\nprint(np.std(x) == pd.Series(x).std())", "answer": "False", "explanation": "<p>NumPy defaults to <code>ddof=0</code> (population); pandas defaults to <code>ddof=1</code> (sample). Always pass ddof explicitly.</p>"},
+  {"type": "single", "prompt": "Cities with more firefighters have more fire damage. What is the most likely explanation?", "options": ["Firefighters cause damage", "A confounder: bigger fires bring both more firefighters and more damage", "Random chance only", "The correlation must be negative"], "answer": 1, "explanation": "<p>Fire size drives both. Correlation alone cannot establish causation.</p>"},
+  {"type": "single", "prompt": "Why pass a seed to <code>np.random.default_rng</code> in an analysis?", "options": ["It makes numbers more random", "It makes the simulation reproducible", "It is required for floats", "It speeds up sampling"], "answer": 1, "explanation": "<p>The same seed produces the same pseudo-random sequence, so results can be re-run, tested, and audited.</p>"},
+  {"type": "single", "prompt": "Which <code>scipy.stats</code> method answers 'which value has 95% of the distribution below it'?", "options": ["pdf", "cdf", "ppf", "rvs"], "answer": 2, "explanation": "<p>ppf (percent point function) is the inverse of the CDF.</p>"},
+  {"type": "single", "prompt": "Calls to a help desk arrive independently at an average of 6 per hour. Which distribution models the number of calls in an hour?", "options": ["Normal", "Binomial", "Poisson", "Uniform"], "answer": 2, "explanation": "<p>Counts of independent events in a fixed interval at a constant rate are Poisson; the waiting time between them is exponential.</p>"},
+  {"type": "single", "prompt": "What does the central limit theorem say?", "options": ["Every dataset is normally distributed", "Sample means are approximately normal for large n, with standard error σ/√n", "Large samples remove bias", "Averages of small samples are exact"], "answer": 1, "explanation": "<p>The CLT concerns the distribution of the sample mean, not the raw data. It says nothing about bias.</p>"},
+  {"type": "text", "prompt": "The standard error of a mean is 4 with n = 100. Roughly what is it with n = 400? (number only)", "answer": ["2", "2.0"], "explanation": "<p>SE = σ/√n. Quadrupling n halves the SE: 4/2 = 2.</p>"},
+  {"type": "single", "prompt": "An online poll gets 500,000 responses. What does the large size fix?", "options": ["Selection bias", "Random sampling error", "Non-response bias", "Leading questions"], "answer": 1, "explanation": "<p>Large n shrinks random error. Bias from who chooses to respond remains no matter how large the sample.</p>"},
+  {"type": "single", "prompt": "A 95% confidence interval for a mean is [12.1, 15.3]. Which statement is correct?", "options": ["There is a 95% probability the true mean is in [12.1, 15.3]", "95% of the data lies in [12.1, 15.3]", "The method produces intervals that contain the true mean in about 95% of repeated samples", "The sample mean is wrong 5% of the time"], "answer": 2, "explanation": "<p>Confidence describes the long-run behavior of the interval-building procedure.</p>"},
+  {"type": "single", "prompt": "A test gives p = 0.03. What does that mean?", "options": ["H₀ has a 3% chance of being true", "If H₀ were true, data at least this extreme would occur about 3% of the time", "The effect is large", "There is a 97% chance the alternative is true"], "answer": 1, "explanation": "<p>A p-value is computed assuming H₀; it is not a probability about H₀ itself and says nothing about effect size.</p>"},
+  {"type": "multi", "prompt": "Which practices protect an A/B test from false positives?", "options": ["Fix the primary metric and sample size before starting", "Stop as soon as p &lt; 0.05", "Apply a Bonferroni or Holm correction when testing many segments", "Test 30 metrics and report the best"], "answer": [0, 2], "explanation": "<p>Peeking and cherry-picking inflate the false-positive rate; pre-registration and corrections control it.</p>"},
+  {"type": "single", "prompt": "With 2 million users per arm, a test finds p = 0.0001 for a 0.01-point conversion lift. What should you conclude?", "options": ["Ship immediately: highly significant", "The effect is real but tiny; decide on whether it is worth the cost, using the effect size and its CI", "The test is broken", "Collect more data"], "answer": 1, "explanation": "<p>Huge samples make tiny effects significant. Practical importance comes from the effect size.</p>"},
+  {"type": "text", "prompt": "Which resampling method builds a confidence interval by repeatedly sampling the data with replacement?", "answer": ["bootstrap", "the bootstrap", "bootstrapping"], "explanation": "<p>The bootstrap approximates the sampling distribution of any statistic by resampling the observed data.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Center, spread, position: median and IQR are robust; know <code>ddof</code>.</li>
+      <li>Correlation is association; confounders and reverse causation are everywhere.</li>
+      <li>Simulate to estimate probabilities; seed your generators.</li>
+      <li><code>scipy.stats</code>: pmf/pdf, cdf/sf, ppf, rvs for normal, binomial, Poisson, exponential, uniform.</li>
+      <li>LLN: averages converge. CLT: averages are approximately normal with SE σ/√n.</li>
+      <li>More data reduces random error, not bias; randomize.</li>
+      <li>CIs: t-interval for means, bootstrap for anything; 95% is the method's hit rate.</li>
+      <li>p-value = P(data at least this extreme | H₀). Fix α and hypotheses first; correct for multiple tests; report effect sizes.</li>
+    </ul>
+    <div class="flashcards" data-title="Statistics essentials">
+<script type="application/json">
+[{"front": "Mean vs median", "back": "Mean uses every value and is pulled by outliers; median is the middle value and is robust."},
+ {"front": "ddof=1", "back": "Divide by n - 1: the sample variance/std that estimates a population's spread. pandas default; NumPy default is ddof=0."},
+ {"front": "Monte Carlo method", "back": "Estimate a probability or quantity by simulating many random trials and averaging."},
+ {"front": "pdf vs cdf vs ppf", "back": "pdf: density at x; cdf: P(X <= x); ppf: the x for a given cumulative probability (inverse cdf)."},
+ {"front": "Poisson vs exponential", "back": "Poisson counts events per interval; exponential is the waiting time between those events."},
+ {"front": "Law of large numbers", "back": "Averages of many independent observations converge to the expected value."},
+ {"front": "Central limit theorem", "back": "Sample means are approximately normal for large n, centered at μ with standard error σ/√n."},
+ {"front": "Bias vs sampling error", "back": "Sampling error is random and shrinks with n; bias is systematic and does not."},
+ {"front": "95% confidence interval", "back": "Built by a method that captures the true parameter in about 95% of repeated samples."},
+ {"front": "p-value", "back": "Probability, assuming H₀ is true, of a result at least as extreme as observed. Not P(H₀ true)."},
+ {"front": "Multiple comparisons", "back": "Many tests inflate false positives (20 tests at 0.05: ~64% chance of one). Correct with Bonferroni/Holm or pre-register."},
+ {"front": "Cohen's d", "back": "Difference in means divided by the pooled standard deviation; a unitless effect size."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/statistics.html"><code>statistics</code> module documentation</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/reference/stats.html"><code>scipy.stats</code> reference</a> and
+        <a href="https://numpy.org/doc/stable/reference/random/generator.html">NumPy random Generator</a></li>
+      <li><a href="https://www.amstat.org/asa/files/pdfs/p-valuestatement.pdf">The ASA statement on p-values</a></li>
+      <li><a href="https://greenteapress.com/wp/think-stats-3e/">Think Stats</a> by Allen Downey (free online, Python-based)</li>
+      <li><a href="https://www.openintro.org/book/os/">OpenIntro Statistics</a> (free textbook)</li>
+      <li>Next: <a href="../projects/p07-eda-report.html">Project 7: City Data EDA Report</a>, then
+        <a href="m55-ml-foundations.html">M55 Machine Learning Foundations</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

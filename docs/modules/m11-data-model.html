@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M11 · The Python Data Model · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m11">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 11</p>
+    <h1>The Python Data Model</h1>
+    <p class="lede">Why does <code>len()</code> work on lists, strings, and dicts alike? Why can you write <code>a + b</code> for numbers and for strings? Because Python's syntax is a set of hooks called <em>special methods</em>. Implement them and your own classes behave exactly like built-ins.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m10-classes.html">M10 Classes &amp; Objects</a></span></div>
+    <ul class="objectives">
+      <li>Explain how syntax such as <code>len(x)</code>, <code>a + b</code>, and <code>x[i]</code> maps to special ("dunder") methods</li>
+      <li>Write useful <code>__repr__</code> and <code>__str__</code> methods and know when each is used</li>
+      <li>Implement <code>__eq__</code> and <code>__hash__</code> while honoring the hash contract</li>
+      <li>Add ordering with <code>functools.total_ordering</code> and return <code>NotImplemented</code> correctly</li>
+      <li>Overload arithmetic operators, including reflected and in-place forms</li>
+      <li>Make container-like classes with <code>__len__</code>, <code>__getitem__</code>, <code>__contains__</code>, <code>__iter__</code>, and <code>__bool__</code></li>
+      <li>Make instances callable with <code>__call__</code> and preview the context-manager protocol</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="everything-object">
+    <h2>Everything is an object</h2>
+    <p>In Python, every value is an <dfn>object</dfn>: a chunk of memory with three properties. Its <dfn>identity</dfn> (<code>id(x)</code>) never changes while the object exists. Its <dfn>type</dfn> (<code>type(x)</code>) decides which operations it supports. Its <dfn>value</dfn> is the data it holds. That includes numbers and strings, but also functions, classes, modules, and even types themselves.</p>
+    <div class="runnable" data-title="Everything has a type">
+<textarea>
+import math
+
+def greet():
+    return "hi"
+
+class Dog:
+    pass
+
+for thing in (42, "text", [1, 2], greet, Dog, math, type, None):
+    print(f"{thing!r:<40.40} -> {type(thing).__name__}")
+</textarea>
+    </div>
+    <p>The <dfn>data model</dfn> is the part of the language reference that describes how objects plug into Python's syntax. The central idea: <strong>syntax calls special methods on the object's type.</strong> Special methods have names surrounded by double underscores, like <code>__len__</code>. People call them <dfn>dunder methods</dfn> ("double underscore").</p>
+    <table>
+      <thead><tr><th>You write</th><th>Python calls (roughly)</th></tr></thead>
+      <tbody>
+        <tr><td><code>len(x)</code></td><td><code>type(x).__len__(x)</code></td></tr>
+        <tr><td><code>a + b</code></td><td><code>type(a).__add__(a, b)</code>, then maybe <code>type(b).__radd__(b, a)</code></td></tr>
+        <tr><td><code>x[k]</code></td><td><code>type(x).__getitem__(x, k)</code></td></tr>
+        <tr><td><code>k in x</code></td><td><code>type(x).__contains__(x, k)</code></td></tr>
+        <tr><td><code>for item in x</code></td><td><code>iter(x)</code> → <code>type(x).__iter__(x)</code></td></tr>
+        <tr><td><code>if x:</code></td><td><code>type(x).__bool__(x)</code> (or <code>__len__</code>)</td></tr>
+        <tr><td><code>repr(x)</code>, <code>str(x)</code></td><td><code>__repr__</code>, <code>__str__</code></td></tr>
+        <tr><td><code>x(args)</code></td><td><code>type(x).__call__(x, args)</code></td></tr>
+        <tr><td><code>with x:</code></td><td><code>__enter__</code> and <code>__exit__</code></td></tr>
+      </tbody>
+    </table>
+    <p>Notice "<code>type(x)</code>": special methods are looked up on the <em>class</em>, not the instance. Assigning <code>obj.__len__ = ...</code> on one instance has no effect on <code>len(obj)</code>. And you almost never call dunders directly; write <code>len(x)</code>, not <code>x.__len__()</code>. The built-in functions do extra work (for example, <code>len</code> checks the result is a non-negative int).</p>
+    <div class="runnable" data-title="Syntax is method calls" data-predict>
+<textarea>
+nums = [3, 1, 2]
+print(len(nums) == type(nums).__len__(nums))
+print((5).__add__(3), "ab".__mul__(2))
+print(int.__add__(1, "x"))
+</textarea>
+    </div>
+    <p>That last line prints <code>NotImplemented</code>: a special singleton value that a binary method returns to say "I don't know how to handle this operand." You will learn exactly what Python does with it in the operator sections.</p>
+    <aside class="callout pro"><p>This uniformity is the reason Python feels consistent. Libraries like NumPy, pandas, and SQLAlchemy feel native (<code>array * 2</code>, <code>df["col"]</code>, <code>User.age &gt; 18</code>) because they implement these same hooks. Learning the data model is learning how every serious Python library is built.</p></aside>
+    <p><strong>Remember:</strong> every value is an object, and syntax is a call to a special method on the object's type.</p>
+  </section>
+
+  <section class="lesson-section" id="repr-str">
+    <h2><code>__repr__</code> and <code>__str__</code></h2>
+    <p>Without help, your objects print as something like <code>&lt;__main__.Point object at 0x10a3f2d50&gt;</code>. That tells you nothing while debugging. Two methods fix this:</p>
+    <ul>
+      <li><code>__repr__</code>: the <dfn>developer representation</dfn>, returned by <code>repr(x)</code>. It should be unambiguous, and ideally look like a Python expression that recreates the object: <code>Point(x=1, y=2)</code>. The REPL, debuggers, logs, and containers (a list prints the <code>repr</code> of each element) all use it.</li>
+      <li><code>__str__</code>: the <dfn>user-facing representation</dfn>, returned by <code>str(x)</code> and used by <code>print()</code> and f-strings. If you don't define it, Python falls back to <code>__repr__</code>.</li>
+    </ul>
+    <div class="runnable" data-title="repr vs str">
+<textarea>
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __repr__(self):
+        # !r uses repr() of each field, so strings get quotes
+        return f"{type(self).__name__}(x={self.x!r}, y={self.y!r})"
+
+    def __str__(self):
+        return f"({self.x}, {self.y})"
+
+p = Point(1, 2)
+print(p)              # str
+print(repr(p))        # repr
+print([p, p])         # containers use repr of their items
+print(f"{p} and {p!r}")
+print(f"{p = }")      # the = specifier shows the expression and its repr
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Always write <code>__repr__</code>. Only write <code>__str__</code> when users need a different, friendlier format. Using <code>type(self).__name__</code> instead of a hard-coded class name makes the repr correct for subclasses too.</p></aside>
+    <p><strong>Remember:</strong> <code>__repr__</code> is for developers (unambiguous, recreatable); <code>__str__</code> is for end users and falls back to <code>__repr__</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="eq-hash">
+    <h2>Equality and hashing: the contract</h2>
+    <p>By default, <code>a == b</code> for your objects is the same as <code>a is b</code>: two separately created points are never equal, even with identical coordinates. Define <code>__eq__</code> to compare by value:</p>
+    <pre><code class="language-python">class Point:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+    def __eq__(self, other):
+        if not isinstance(other, Point):
+            return NotImplemented          # let Python try other.__eq__, then fall back to identity
+        return (self.x, self.y) == (other.x, other.y)</code></pre>
+    <p>Returning <code>NotImplemented</code> (not <code>False</code>, and not raising) for unknown types is important: it gives the other operand a chance to answer, and if neither knows, Python falls back to an identity check, so <code>Point(1, 2) == "hello"</code> is simply <code>False</code>. You also get <code>!=</code> for free: the default <code>__ne__</code> inverts <code>__eq__</code>.</p>
+    <h3>Why <code>__hash__</code> must follow</h3>
+    <p>Dictionaries and sets find keys by their <dfn>hash</dfn>: an integer computed by <code>hash(x)</code> that decides which bucket to look in (you will build a hash table in Part 3). The lookup first jumps to the bucket by hash, then confirms with <code>==</code>. This only works if Python can rely on the <dfn>hash contract</dfn>:</p>
+    <aside class="callout warn" data-title="The hash contract"><p>If <code>a == b</code>, then <code>hash(a) == hash(b)</code> must be true. (Unequal objects may share a hash; that is a collision, which is allowed but slower.) And an object's hash must never change while it is in a set or dict, so hashable objects should be immutable in every field that takes part in equality.</p></aside>
+    <p>To protect you, Python sets <code>__hash__ = None</code> automatically when a class defines <code>__eq__</code> without <code>__hash__</code>. Instances become <dfn>unhashable</dfn>: putting them in a set raises <code>TypeError</code>. That is a deliberate safety net, not a bug. Step through the trace to see a set lookup succeed only after both methods are defined consistently:</p>
+    <div class="tracer" data-title="Equality, hashing, and set lookup">
+<textarea>
+class Point:
+    def __init__(self, x, y):
+        self._x = x
+        self._y = y
+
+    def __eq__(self, other):
+        if not isinstance(other, Point):
+            return NotImplemented
+        return (self._x, self._y) == (other._x, other._y)
+
+    def __hash__(self):
+        return hash((self._x, self._y))
+
+a = Point(1, 2)
+b = Point(1, 2)
+same_object = a is b
+equal = a == b
+hashes_match = hash(a) == hash(b)
+seen = {a}
+found = b in seen
+</textarea>
+    </div>
+    <p>The idiomatic hash combines exactly the fields used in <code>__eq__</code> into a tuple and hashes that. The fields are stored as <code>_x</code>/<code>_y</code> (with no setters) to signal that they must not change.</p>
+    <div class="runnable" data-title="What goes wrong without the contract">
+<textarea>
+class Key:
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        return isinstance(other, Key) and self.v == other.v
+
+print(Key.__hash__)            # None: Python made it unhashable
+try:
+    {Key(1)}
+except TypeError as exc:
+    print("TypeError:", exc)
+
+class Mutable:
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        return isinstance(other, Mutable) and self.v == other.v
+    def __hash__(self):
+        return hash(self.v)
+
+m = Mutable(1)
+s = {m}
+m.v = 99                       # hash changes while inside the set!
+print(m in s)                  # False: lost in the wrong bucket
+print(list(s)[0] is m)         # ...yet it is still there
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> define <code>__eq__</code> and <code>__hash__</code> together, hash the same fields you compare, keep those fields immutable, and return <code>NotImplemented</code> for unknown types.</p>
+  </section>
+
+  <section class="lesson-section" id="ordering">
+    <h2>Ordering and <code>functools.total_ordering</code></h2>
+    <p><code>sorted()</code>, <code>min()</code>, <code>max()</code>, and comparisons like <code>a &lt; b</code> use the <dfn>rich comparison</dfn> methods: <code>__lt__</code> (<code>&lt;</code>), <code>__le__</code> (<code>&lt;=</code>), <code>__gt__</code> (<code>&gt;</code>), and <code>__ge__</code> (<code>&gt;=</code>). Writing all four is repetitive and error-prone. The <code>functools.total_ordering</code> class decorator fills in the rest if you supply <code>__eq__</code> and one ordering method.</p>
+    <div class="runnable" data-title="Sorting semantic versions">
+<textarea>
+from functools import total_ordering
+
+@total_ordering
+class Version:
+    def __init__(self, text):
+        self.parts = tuple(int(p) for p in text.split("."))
+
+    def __repr__(self):
+        return f"Version({'.'.join(map(str, self.parts))!r})"
+
+    def __eq__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts == other.parts
+
+    def __hash__(self):
+        return hash(self.parts)
+
+    def __lt__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts < other.parts     # tuples compare element by element
+
+releases = [Version("3.14.0"), Version("3.9.18"), Version("3.13.2"), Version("3.14.1")]
+print(sorted(releases))
+print(max(releases), Version("3.9.0") >= Version("3.10.0"))
+try:
+    Version("1.0") < "2.0"
+except TypeError as exc:
+    print("TypeError:", exc)
+</textarea>
+    </div>
+    <p>Two lessons hide here. First, comparing as <em>tuples of ints</em> gives the right answer (<code>3.9 &lt; 3.13</code>), while comparing the strings would not (<code>"3.9" &gt; "3.13"</code>). Second, returning <code>NotImplemented</code> for an unknown type lets Python try the reflected comparison (<code>"2.0".__gt__(v)</code>); when that is also <code>NotImplemented</code>, Python raises a clear <code>TypeError</code>.</p>
+    <aside class="callout tip"><p>Often you don't need ordering methods at all: <code>sorted(items, key=lambda v: v.parts)</code> sorts by a key without changing the class. Implement ordering when the type has one obvious natural order. <code>@dataclass(order=True)</code> (<a href="m13-dataclasses.html">M13</a>) can also generate it.</p></aside>
+    <p><strong>Remember:</strong> supply <code>__eq__</code> plus <code>__lt__</code> and decorate with <code>@total_ordering</code>; compare tuples of fields; return <code>NotImplemented</code> for foreign types.</p>
+  </section>
+
+  <section class="lesson-section" id="arithmetic">
+    <h2>Arithmetic operators and reflected operations</h2>
+    <p>Operator overloading means defining what <code>+</code>, <code>-</code>, <code>*</code>, and friends do for your type. Each binary operator has three methods:</p>
+    <table>
+      <thead><tr><th>Operator</th><th>Normal</th><th>Reflected (right side)</th><th>In-place</th></tr></thead>
+      <tbody>
+        <tr><td><code>+</code></td><td><code>__add__</code></td><td><code>__radd__</code></td><td><code>__iadd__</code> (<code>+=</code>)</td></tr>
+        <tr><td><code>-</code></td><td><code>__sub__</code></td><td><code>__rsub__</code></td><td><code>__isub__</code></td></tr>
+        <tr><td><code>*</code></td><td><code>__mul__</code></td><td><code>__rmul__</code></td><td><code>__imul__</code></td></tr>
+        <tr><td><code>/</code></td><td><code>__truediv__</code></td><td><code>__rtruediv__</code></td><td><code>__itruediv__</code></td></tr>
+        <tr><td><code>@</code></td><td><code>__matmul__</code></td><td><code>__rmatmul__</code></td><td><code>__imatmul__</code></td></tr>
+      </tbody>
+    </table>
+    <p>Unary operators have single methods: <code>__neg__</code> (<code>-v</code>), <code>__pos__</code>, <code>__abs__</code> (<code>abs(v)</code>).</p>
+    <h3>How Python evaluates <code>a + b</code></h3>
+    <ol>
+      <li>Call <code>type(a).__add__(a, b)</code>. If it returns a value other than <code>NotImplemented</code>, that is the result.</li>
+      <li>Otherwise call <code>type(b).__radd__(b, a)</code>, the <dfn>reflected</dfn> method. If it returns a real value, done.</li>
+      <li>If both return <code>NotImplemented</code> (or don't exist), raise <code>TypeError: unsupported operand type(s)</code>.</li>
+    </ol>
+    <p>(One refinement: if <code>b</code>'s type is a <em>subclass</em> of <code>a</code>'s type and overrides the reflected method, Python tries <code>b</code>'s reflected method first, so subclasses can take control.)</p>
+    <p>This is why <code>3 * v</code> can work for your vector: <code>int.__mul__(3, v)</code> has no idea what a vector is and returns <code>NotImplemented</code>, so Python asks <code>v.__rmul__(3)</code>.</p>
+    <div class="tracer" data-title="Dispatch through __add__ and __rmul__">
+<textarea>
+class Vector2:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __add__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return Vector2(self.x + other.x, self.y + other.y)
+
+    def __mul__(self, k):
+        if not isinstance(k, (int, float)):
+            return NotImplemented
+        return Vector2(self.x * k, self.y * k)
+
+    def __rmul__(self, k):
+        return self * k
+
+a = Vector2(1, 2)
+b = Vector2(10, 20)
+c = a + b
+d = 3 * a
+e = a * 0.5
+</textarea>
+    </div>
+    <p>Here is a complete, well-behaved <code>Vector2</code>. Experiment with it: try <code>v - "x"</code>, <code>abs(v)</code>, and <code>v += w</code>.</p>
+    <div class="runnable" data-title="A full Vector2">
+<textarea>
+import math
+
+class Vector2:
+    __match_args__ = ("x", "y")
+
+    def __init__(self, x=0.0, y=0.0):
+        self.x = x
+        self.y = y
+
+    def __repr__(self):
+        return f"Vector2({self.x!r}, {self.y!r})"
+
+    def __eq__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return (self.x, self.y) == (other.x, other.y)
+
+    __hash__ = None   # mutable fields: explicitly unhashable
+
+    def __add__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return Vector2(self.x + other.x, self.y + other.y)
+
+    def __sub__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return Vector2(self.x - other.x, self.y - other.y)
+
+    def __mul__(self, k):
+        if not isinstance(k, (int, float)):
+            return NotImplemented
+        return Vector2(self.x * k, self.y * k)
+
+    __rmul__ = __mul__   # scalar * vector is the same as vector * scalar
+
+    def __matmul__(self, other):     # dot product with @
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return self.x * other.x + self.y * other.y
+
+    def __neg__(self):
+        return Vector2(-self.x, -self.y)
+
+    def __abs__(self):
+        return math.hypot(self.x, self.y)
+
+    def __bool__(self):
+        return bool(self.x or self.y)
+
+v, w = Vector2(3, 4), Vector2(1, 1)
+print(v + w, v - w, 2 * v, v * 2, -v)
+print(abs(v), v @ w, bool(Vector2()))
+alias = v
+v += w            # no __iadd__: falls back to v = v + w (a NEW object)
+print(v, alias, v is alias)
+try:
+    v + 1
+except TypeError as exc:
+    print("TypeError:", exc)
+</textarea>
+    </div>
+    <p>Look at the <code>+=</code> line. Without <code>__iadd__</code>, Python computes <code>v + w</code> and rebinds <code>v</code> to the new object, leaving <code>alias</code> pointing at the old one. Mutable built-ins such as <code>list</code> define <code>__iadd__</code> to mutate in place (and return <code>self</code>), which is why <code>+=</code> on a list affects every alias. For value-like types, not defining <code>__iadd__</code> is usually the safer choice.</p>
+    <aside class="callout danger"><p>Returning <code>NotImplemented</code> and raising <code>NotImplementedError</code> are different things. <code>NotImplemented</code> is a value that operator methods return to let Python try the other operand. <code>NotImplementedError</code> is an exception you raise in a method that a subclass must override (<a href="m12-inheritance.html">M12</a>). Raising it from <code>__add__</code> would block the reflected method.</p></aside>
+    <p><strong>Remember:</strong> <code>a + b</code> tries <code>a.__add__(b)</code>, then <code>b.__radd__(a)</code>; return <code>NotImplemented</code> for types you don't support; <code>+=</code> falls back to <code>+</code> and rebinding.</p>
+  </section>
+
+  <section class="lesson-section" id="containers">
+    <h2>The sequence and container protocols</h2>
+    <p>A <dfn>protocol</dfn> in Python is an informal set of methods that, when present, let an object work in a certain context. You don't inherit from anything; you just implement the methods. This is <dfn>duck typing</dfn>: "if it walks like a duck and quacks like a duck, it's a duck." (M12 shows how to formalize protocols with <code>typing.Protocol</code>.)</p>
+    <table>
+      <thead><tr><th>Method</th><th>Enables</th><th>Fallback when missing</th></tr></thead>
+      <tbody>
+        <tr><td><code>__len__</code></td><td><code>len(x)</code>, truthiness</td><td><code>TypeError</code></td></tr>
+        <tr><td><code>__getitem__</code></td><td><code>x[i]</code>, <code>x[a:b]</code>, <code>x["key"]</code></td><td><code>TypeError</code></td></tr>
+        <tr><td><code>__iter__</code></td><td><code>for</code>, <code>list(x)</code>, unpacking</td><td>calls <code>__getitem__(0)</code>, <code>(1)</code>, … until <code>IndexError</code></td></tr>
+        <tr><td><code>__contains__</code></td><td><code>item in x</code></td><td>iterates and compares with <code>==</code></td></tr>
+        <tr><td><code>__reversed__</code></td><td><code>reversed(x)</code></td><td>uses <code>__len__</code> + <code>__getitem__</code></td></tr>
+      </tbody>
+    </table>
+    <p>The fallbacks are generous: a class with just <code>__len__</code> and <code>__getitem__</code> is already iterable, supports <code>in</code>, and works with <code>reversed()</code>. You add <code>__iter__</code> and <code>__contains__</code> when you can do them more efficiently or more correctly.</p>
+    <div class="runnable" data-title="A playing-card deck in 15 lines">
+<textarea>
+import random
+
+class Deck:
+    RANKS = [str(n) for n in range(2, 11)] + list("JQKA")
+    SUITS = "♠♥♦♣"
+
+    def __init__(self):
+        self._cards = [r + s for s in self.SUITS for r in self.RANKS]
+
+    def __len__(self):
+        return len(self._cards)
+
+    def __getitem__(self, position):
+        return self._cards[position]    # delegate: ints AND slices just work
+
+deck = Deck()
+print(len(deck), deck[0], deck[-1])
+print(deck[:3], deck[12::13])          # slicing for free
+print("Q♥" in deck, "Z♠" in deck)      # 'in' via the iteration fallback
+print(list(reversed(deck))[:2])
+random.seed(1)
+print(random.choice(deck))             # stdlib functions accept any sequence
+</textarea>
+    </div>
+    <p><code>__getitem__</code> receives whatever is inside the brackets. For <code>deck[1:5]</code> that is a <code>slice</code> object, <code>slice(1, 5, None)</code>; because we delegate to a list, slicing works automatically. If you want slices to return your own type rather than a list, check <code>isinstance(position, slice)</code> and wrap the result.</p>
+    <p>For mappings, <code>__getitem__</code> takes keys instead of positions, and should raise <code>KeyError</code> for a missing key (sequences raise <code>IndexError</code>). Those exception types matter: the iteration fallback stops on <code>IndexError</code>, and <code>dict.get</code>-style code catches <code>KeyError</code>.</p>
+    <div class="runnable" data-title="Predict: iteration via __getitem__" data-predict>
+<textarea>
+class Squares:
+    def __getitem__(self, i):
+        if i >= 4:
+            raise IndexError(i)
+        return i * i
+
+s = Squares()
+print(list(s), 9 in s, 5 in s)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>When you want a complete, correct container, inherit from the abstract base classes in <code>collections.abc</code> (such as <code>Sequence</code> or <code>Mapping</code>). You implement two or three core methods, and the ABC supplies <code>index</code>, <code>count</code>, <code>__contains__</code>, <code>__iter__</code>, <code>__reversed__</code>, <code>keys</code>, <code>items</code>, and more. M12 covers ABCs.</p></aside>
+    <p><strong>Remember:</strong> <code>__len__</code> + <code>__getitem__</code> gets you a lot; add <code>__iter__</code> and <code>__contains__</code> for efficiency; raise <code>IndexError</code> for sequences and <code>KeyError</code> for mappings.</p>
+  </section>
+
+  <section class="lesson-section" id="truthiness">
+    <h2>Truthiness with <code>__bool__</code></h2>
+    <p>Every object can be tested in <code>if</code>, <code>while</code>, <code>and</code>, <code>or</code>, and <code>not</code>. Python decides its truth value in this order:</p>
+    <ol>
+      <li>If the type defines <code>__bool__</code>, call it. It must return <code>True</code> or <code>False</code>.</li>
+      <li>Otherwise, if it defines <code>__len__</code>, the object is false when the length is 0.</li>
+      <li>Otherwise the object is always true.</li>
+    </ol>
+    <p>That's why empty lists, strings, and dicts are falsy: they define <code>__len__</code>. Your <code>Deck</code> above is falsy once empty, with no extra work.</p>
+    <div class="runnable" data-title="Predict truthiness" data-predict>
+<textarea>
+class Empty:
+    pass
+
+class Box:
+    def __init__(self, items):
+        self.items = items
+    def __len__(self):
+        return len(self.items)
+
+class Account:
+    def __init__(self, balance):
+        self.balance = balance
+    def __bool__(self):
+        return self.balance > 0
+
+print(bool(Empty()), bool(Box([])), bool(Box([1])), bool(Account(0)), bool(Account(5)))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Be careful with <code>if obj:</code> when <code>obj</code> might be <code>None</code> <em>or</em> a legitimately empty value. <code>if result:</code> treats an empty container the same as <code>None</code>. When you mean "was a value provided?", write <code>if result is not None:</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>__bool__</code> first, then <code>__len__</code>, then always true.</p>
+  </section>
+
+  <section class="lesson-section" id="callable-context">
+    <h2>Callable objects and context managers (preview)</h2>
+    <h3><code>__call__</code></h3>
+    <p>Functions are objects whose type defines <code>__call__</code>. Your own objects can be callable too. This is useful when you need a function that <em>remembers state</em> or is <em>configured once and used many times</em>:</p>
+    <div class="runnable" data-title="An object that acts like a function">
+<textarea>
+class RateLimiter:
+    """Allow at most `limit` calls; then refuse."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.calls = 0
+
+    def __call__(self, message):
+        if self.calls >= self.limit:
+            return f"refused: {message}"
+        self.calls += 1
+        return f"sent: {message}"
+
+send = RateLimiter(2)
+print(callable(send))
+for msg in ["a", "b", "c"]:
+    print(send(msg))
+print(sorted(["bb", "a", "ccc"], key=len))   # key accepts any callable
+</textarea>
+    </div>
+    <p>Anything that accepts a function (like <code>key=</code> for <code>sorted</code>, or callbacks) accepts a callable object. In <a href="m15-decorators.html">M15</a> you will see closures, which are often a lighter-weight alternative.</p>
+    <h3><code>__enter__</code> and <code>__exit__</code></h3>
+    <p>You have used <code>with open(...) as f:</code> since <a href="m09-files-io.html">M09</a>. The <code>with</code> statement is another protocol: it calls <code>__enter__</code> at the start (its return value is bound by <code>as</code>), and <code>__exit__(exc_type, exc, tb)</code> at the end, <em>even if an exception was raised</em>. If <code>__exit__</code> returns a true value, the exception is suppressed; normally it returns <code>None</code>/<code>False</code> so errors propagate.</p>
+    <div class="runnable" data-title="A timing context manager">
+<textarea>
+import time
+
+class Timer:
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self                         # bound by 'as'
+
+    def __exit__(self, exc_type, exc, tb):
+        self.elapsed = time.perf_counter() - self.start
+        print(f"took {self.elapsed:.4f}s; exception: {exc_type.__name__ if exc_type else None}")
+        return False                        # don't swallow exceptions
+
+with Timer() as t:
+    total = sum(range(200_000))
+try:
+    with Timer():
+        1 / 0
+except ZeroDivisionError:
+    print("the error still propagated")
+</textarea>
+    </div>
+    <p>M15 goes deeper, including <code>contextlib.contextmanager</code>, which builds context managers from generators.</p>
+    <p><strong>Remember:</strong> <code>__call__</code> makes instances callable; <code>__enter__</code>/<code>__exit__</code> power <code>with</code>, and <code>__exit__</code> always runs.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m11-e1" data-title="repr and str for a Book">
+      <div class="exercise-prompt">
+        <p>Give <code>Book(title, year)</code> a <code>__repr__</code> returning exactly <code>Book('Dune', 1965)</code> (use <code>!r</code> so the title is quoted, and <code>type(self).__name__</code> for the class name) and a <code>__str__</code> returning <code>Dune (1965)</code>.</p>
+      </div>
+<textarea class="starter">
+class Book:
+    def __init__(self, title, year):
+        self.title = title
+        self.year = year
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_repr():
+    assert repr(Book("Dune", 1965)) == "Book('Dune', 1965)", f"got {repr(Book('Dune', 1965))}"
+
+def test_str():
+    assert str(Book("Dune", 1965)) == "Dune (1965)", "str should be 'Dune (1965)'"
+
+def test_list_uses_repr():
+    assert str([Book("A", 1)]) == "[Book('A', 1)]", "lists show the repr of their items"
+
+def test_subclass_name():
+    class Novel(Book):
+        pass
+    assert repr(Novel("X", 2)) == "Novel('X', 2)", "use type(self).__name__"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>f"{type(self).__name__}({self.title!r}, {self.year!r})"</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Book:
+    def __init__(self, title, year):
+        self.title = title
+        self.year = year
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.title!r}, {self.year!r})"
+
+    def __str__(self):
+        return f"{self.title} ({self.year})"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m11-e2" data-title="Hashable, orderable Version">
+      <div class="exercise-prompt">
+        <p>Write <code>Version(text)</code> that parses <code>"1.10.2"</code> into a tuple of ints stored as <code>parts</code>. Implement <code>__eq__</code>, <code>__hash__</code>, and <code>__lt__</code> (returning <code>NotImplemented</code> for non-Versions) and use <code>functools.total_ordering</code> so all comparisons work. Also add <code>__repr__</code> returning <code>Version('1.10.2')</code>.</p>
+      </div>
+<textarea class="starter">
+from functools import total_ordering
+
+class Version:
+    def __init__(self, text):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_parse():
+    assert Version("1.10.2").parts == (1, 10, 2), "parts should be a tuple of ints"
+
+def test_equality_and_hash():
+    assert Version("1.2") == Version("1.2"), "equal versions"
+    assert len({Version("1.2"), Version("1.2"), Version("1.3")}) == 2, "equal versions must hash the same"
+    assert (Version("1.2") == "1.2") is False, "comparing with a str is simply False"
+
+def test_ordering():
+    vs = [Version("1.10.0"), Version("1.9.9"), Version("1.2")]
+    assert [v.parts for v in sorted(vs)] == [(1, 2), (1, 9, 9), (1, 10, 0)], "numeric, not string, ordering"
+    assert Version("2.0") >= Version("1.99") and Version("1.0") <= Version("1.0"), "total_ordering fills in >= and <="
+
+def test_not_implemented():
+    assert Version("1.0").__lt__("x") is NotImplemented, "__lt__ must return NotImplemented for other types"
+    try:
+        Version("1.0") < 3
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("Version < int should raise TypeError")
+
+def test_repr():
+    assert repr(Version("1.10.2")) == "Version('1.10.2')", "repr format"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compare and hash <code>self.parts</code>. For the repr, rebuild the text with <code>".".join(map(str, self.parts))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import total_ordering
+
+@total_ordering
+class Version:
+    def __init__(self, text):
+        self.parts = tuple(int(p) for p in text.split("."))
+
+    def __repr__(self):
+        return f"Version({'.'.join(map(str, self.parts))!r})"
+
+    def __eq__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts == other.parts
+
+    def __hash__(self):
+        return hash(self.parts)
+
+    def __lt__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts &lt; other.parts</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m11-e3" data-title="Vector2 arithmetic">
+      <div class="exercise-prompt">
+        <p>Implement <code>Vector2(x, y)</code> with: <code>__eq__</code>; <code>+</code> and <code>-</code> between vectors; <code>*</code> with an int or float on <em>either</em> side; unary <code>-</code>; <code>abs()</code> (length); and <code>__repr__</code> returning <code>Vector2(3, 4)</code>. Every binary method must return <code>NotImplemented</code> for unsupported operands, so <code>Vector2(1, 2) + 5</code> raises <code>TypeError</code>.</p>
+      </div>
+<textarea class="starter">
+import math
+
+class Vector2:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_add_sub():
+    assert Vector2(1, 2) + Vector2(3, 4) == Vector2(4, 6), "vector addition"
+    assert Vector2(5, 5) - Vector2(1, 2) == Vector2(4, 3), "vector subtraction"
+
+def test_scalar_both_sides():
+    assert Vector2(1, 2) * 3 == Vector2(3, 6), "v * 3"
+    assert 3 * Vector2(1, 2) == Vector2(3, 6), "3 * v needs __rmul__"
+    assert 0.5 * Vector2(2, 4) == Vector2(1.0, 2.0), "floats work too"
+
+def test_unary():
+    assert -Vector2(1, -2) == Vector2(-1, 2), "negation"
+    assert math.isclose(abs(Vector2(3, 4)), 5.0), "abs is the length"
+
+def test_unsupported():
+    for bad in (lambda: Vector2(1, 2) + 5, lambda: Vector2(1, 2) * "x", lambda: "x" * Vector2(1, 2)):
+        try:
+            bad()
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("unsupported operands must raise TypeError")
+    assert Vector2(1, 2).__add__(5) is NotImplemented, "__add__ should return NotImplemented"
+
+def test_eq_other_types_and_repr():
+    assert (Vector2(1, 2) == (1, 2)) is False, "a vector is not equal to a tuple"
+    assert repr(Vector2(3, 4)) == "Vector2(3, 4)", "repr format"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check <code>isinstance(k, (int, float))</code> in <code>__mul__</code>, and set <code>__rmul__ = __mul__</code>. Beware: <code>bool</code> is a subclass of <code>int</code>, which is fine here.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+class Vector2:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __repr__(self):
+        return f"Vector2({self.x!r}, {self.y!r})"
+
+    def __eq__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return (self.x, self.y) == (other.x, other.y)
+
+    __hash__ = None
+
+    def __add__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return Vector2(self.x + other.x, self.y + other.y)
+
+    def __sub__(self, other):
+        if not isinstance(other, Vector2):
+            return NotImplemented
+        return Vector2(self.x - other.x, self.y - other.y)
+
+    def __mul__(self, k):
+        if not isinstance(k, (int, float)):
+            return NotImplemented
+        return Vector2(self.x * k, self.y * k)
+
+    __rmul__ = __mul__
+
+    def __neg__(self):
+        return Vector2(-self.x, -self.y)
+
+    def __abs__(self):
+        return math.hypot(self.x, self.y)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m11-e4" data-title="A Sentence container">
+      <div class="exercise-prompt">
+        <p>Write <code>Sentence(text)</code> that splits the text into words (<code>text.split()</code>). Implement <code>__len__</code> (number of words), <code>__getitem__</code> (indexing and slicing: a slice returns a new <code>Sentence</code> of those words), <code>__iter__</code> (yields words), <code>__contains__</code> (case-insensitive word membership), <code>__bool__</code> (false when there are no words), and <code>__repr__</code> returning <code>Sentence('the words')</code>.</p>
+      </div>
+<textarea class="starter">
+class Sentence:
+    def __init__(self, text):
+        self.words = text.split()
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_len_index():
+    s = Sentence("The quick brown fox")
+    assert len(s) == 4, "four words"
+    assert s[0] == "The" and s[-1] == "fox", "indexing returns words"
+
+def test_slice_returns_sentence():
+    part = Sentence("a b c d")[1:3]
+    assert isinstance(part, Sentence), "a slice should return a Sentence"
+    assert list(part) == ["b", "c"], "slice contents"
+
+def test_iter_and_contains():
+    s = Sentence("Hello big World")
+    assert list(s) == ["Hello", "big", "World"], "iteration yields words"
+    assert "world" in s and "HELLO" in s, "membership is case-insensitive"
+    assert "wor" not in s, "membership is by whole word"
+
+def test_bool_and_repr():
+    assert not Sentence("   "), "no words is falsy"
+    assert Sentence("hi"), "words are truthy"
+    assert repr(Sentence("a  b")) == "Sentence('a b')", "repr joins words with single spaces"
+
+def test_index_error():
+    try:
+        Sentence("one")[5]
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("out-of-range index should raise IndexError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>__getitem__</code>, check <code>isinstance(index, slice)</code>; build the new Sentence from <code>" ".join(self.words[index])</code>. For <code>__iter__</code>, return <code>iter(self.words)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Sentence:
+    def __init__(self, text):
+        self.words = text.split()
+
+    def __repr__(self):
+        return f"Sentence({' '.join(self.words)!r})"
+
+    def __len__(self):
+        return len(self.words)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return Sentence(" ".join(self.words[index]))
+        return self.words[index]
+
+    def __iter__(self):
+        return iter(self.words)
+
+    def __contains__(self, word):
+        target = word.lower()
+        return any(w.lower() == target for w in self.words)
+
+    def __bool__(self):
+        return bool(self.words)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m11-e5" data-title="A callable Polynomial">
+      <div class="exercise-prompt">
+        <p>Write <code>Polynomial(*coeffs)</code> where coefficients are given from the constant term upward: <code>Polynomial(1, 0, 2)</code> means 1 + 0x + 2x². Implement <code>__call__(x)</code> to evaluate it, <code>__add__</code> for two polynomials (pad the shorter one with zeros), <code>__eq__</code> (compare coefficients after dropping trailing zeros), and <code>__bool__</code> (false for the zero polynomial).</p>
+      </div>
+<textarea class="starter">
+class Polynomial:
+    def __init__(self, *coeffs):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_call():
+    p = Polynomial(1, 0, 2)
+    assert p(0) == 1 and p(3) == 19, "1 + 2*3**2 = 19"
+    assert callable(p), "instances must be callable"
+
+def test_add():
+    assert Polynomial(1, 2) + Polynomial(0, 0, 3) == Polynomial(1, 2, 3), "pad and add"
+    assert (Polynomial(1) + Polynomial(1, 5))(2) == 12, "2 + 5*2"
+
+def test_eq_trailing_zeros():
+    assert Polynomial(1, 2, 0, 0) == Polynomial(1, 2), "trailing zeros don't matter"
+    assert (Polynomial(1) == 1) is False, "not equal to an int"
+
+def test_bool():
+    assert not Polynomial(), "empty polynomial is zero"
+    assert not Polynomial(0, 0), "all-zero polynomial is falsy"
+    assert Polynomial(0, 1), "x is truthy"
+    assert Polynomial(1, -1) + Polynomial(-1, 1) == Polynomial(), "sum can be zero"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Normalize in <code>__init__</code>: convert to a list and pop trailing zeros. Then equality is plain list comparison and <code>__bool__</code> is <code>bool(self.coeffs)</code>. Evaluate with <code>sum(c * x ** i for i, c in enumerate(self.coeffs))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from itertools import zip_longest
+
+class Polynomial:
+    def __init__(self, *coeffs):
+        self.coeffs = list(coeffs)
+        while self.coeffs and self.coeffs[-1] == 0:
+            self.coeffs.pop()
+
+    def __repr__(self):
+        return f"Polynomial{tuple(self.coeffs)!r}"
+
+    def __call__(self, x):
+        return sum(c * x ** i for i, c in enumerate(self.coeffs))
+
+    def __add__(self, other):
+        if not isinstance(other, Polynomial):
+            return NotImplemented
+        return Polynomial(*(a + b for a, b in zip_longest(self.coeffs, other.coeffs, fillvalue=0)))
+
+    def __eq__(self, other):
+        if not isinstance(other, Polynomial):
+            return NotImplemented
+        return self.coeffs == other.coeffs
+
+    __hash__ = None
+
+    def __bool__(self):
+        return bool(self.coeffs)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a currency-safe Money type</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Money with currency-safe arithmetic</span></div>
+      <div class="widget-body">
+        <p>Floating-point dollars and silent currency mix-ups cause real financial bugs. Build an immutable <code>Money</code> value type that behaves like a number but refuses to add euros to dollars.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init money
+cd money
+mkdir -p src
+pixi run python src/money.py</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>Money(amount, currency)</code> stores the amount as <code>decimal.Decimal</code> (accept <code>str</code>, <code>int</code>, or <code>Decimal</code>; reject <code>float</code> with <code>TypeError</code> to avoid rounding surprises), quantized to two decimal places, and the currency as an uppercase 3-letter code.</li>
+          <li>Read-only properties <code>amount</code> and <code>currency</code>; no setters (the type is immutable).</li>
+          <li><code>__repr__</code> → <code>Money('12.50', 'USD')</code>; <code>__str__</code> → <code>12.50 USD</code>.</li>
+          <li><code>__eq__</code> and <code>__hash__</code> on <code>(amount, currency)</code>, so Money works as a dict key.</li>
+          <li><code>@total_ordering</code> with <code>__lt__</code> that raises <code>ValueError</code> for different currencies.</li>
+          <li><code>+</code> and <code>-</code> between Money of the same currency; different currencies raise a custom <code>CurrencyMismatchError</code>; any other type returns <code>NotImplemented</code>.</li>
+          <li><code>*</code> by an int or Decimal on either side (<code>__mul__</code> and <code>__rmul__</code>); unary <code>-</code>; <code>abs()</code>; <code>__bool__</code> false for zero.</li>
+          <li><code>sum(wallet, start=Money(0, "USD"))</code> works.</li>
+          <li><code>allocate(ratios)</code> splits money into parts that add up exactly to the original (for example, 100.00 split 1:1:1 is 33.34, 33.33, 33.33).</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m11-mini">
+          <li><code>Money("0.10", "usd") + Money("0.20", "USD") == Money("0.30", "USD")</code> is <code>True</code></li>
+          <li><code>Money("1", "USD") + Money("1", "EUR")</code> raises <code>CurrencyMismatchError</code></li>
+          <li><code>Money("1", "USD") + 1</code> raises <code>TypeError</code> (because <code>__add__</code> returned <code>NotImplemented</code>)</li>
+          <li><code>3 * Money("1.50", "USD")</code> and <code>Money("1.50", "USD") * 3</code> both give <code>4.50 USD</code></li>
+          <li>Money values can be dict keys and set members, and assigning <code>m.amount = ...</code> raises <code>AttributeError</code></li>
+          <li><code>sorted()</code> works for a list of one currency</li>
+          <li>The parts from <code>allocate</code> always sum to the original amount</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add <code>__format__</code> so <code>f"{m:,}"</code> prints thousands separators.</li>
+          <li>Add <code>__truediv__</code> for Money / Money (a ratio) and Money / int (a Money), rejecting Money / Money of different currencies.</li>
+          <li>Write pytest tests for each criterion (<code>pixi add pytest</code>, then <code>pixi run pytest</code>); you will learn pytest fully in <a href="m17-testing.html">M17</a>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m11-quiz">
+<script type="application/json">
+{"title": "Data model quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does <code>len(x)</code> call?", "options": ["<code>x.length()</code>", "<code>type(x).__len__(x)</code>", "<code>x.__dict__['__len__']</code>", "<code>x.size</code>"], "answer": 1, "explanation": "<p>Special methods are looked up on the type, not the instance. <code>len</code> also validates the result is a non-negative int.</p>"},
+  {"type": "single", "prompt": "If a class defines <code>__repr__</code> but not <code>__str__</code>, what does <code>print(obj)</code> show?", "options": ["The default <code>&lt;object at 0x...&gt;</code>", "The <code>__repr__</code> result", "An error", "An empty string"], "answer": 1, "explanation": "<p><code>object.__str__</code> falls back to <code>repr()</code>, so defining <code>__repr__</code> alone improves both.</p>"},
+  {"type": "single", "prompt": "You define <code>__eq__</code> but not <code>__hash__</code>. What happens?", "options": ["Instances hash by identity as before", "Python sets <code>__hash__</code> to <code>None</code>, making instances unhashable", "A <code>SyntaxError</code>", "Python generates a hash from all attributes"], "answer": 1, "explanation": "<p>This prevents breaking the contract that equal objects must have equal hashes.</p>"},
+  {"type": "text", "prompt": "Complete the hash contract: if <code>a == b</code> then ____ must also be true.", "answer": ["hash(a) == hash(b)", "hash(a)==hash(b)"], "explanation": "<p>Equal objects must hash equally; unequal objects may collide.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class A:\n    def __add__(self, other):\n        return NotImplemented\n    def __radd__(self, other):\n        return 'radd'\n\nprint(1 + A())", "answer": "radd", "explanation": "<p><code>int.__add__(1, a)</code> returns <code>NotImplemented</code>, so Python calls <code>A.__radd__(a, 1)</code>.</p>"},
+  {"type": "single", "prompt": "An operator method receives an operand type it doesn't support. What should it do?", "options": ["Return <code>False</code>", "Raise <code>NotImplementedError</code>", "Return <code>NotImplemented</code>", "Return <code>None</code>"], "answer": 2, "explanation": "<p>Returning the <code>NotImplemented</code> singleton lets Python try the reflected method on the other operand and raise a clean <code>TypeError</code> if nothing works.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class V:\n    def __init__(self, n):\n        self.n = n\n    def __add__(self, o):\n        return V(self.n + o.n)\n\na = V(1)\nb = a\na += V(2)\nprint(a.n, b.n, a is b)", "answer": "3 1 False", "explanation": "<p>Without <code>__iadd__</code>, <code>a += x</code> becomes <code>a = a + x</code>: a new object is bound to <code>a</code>; <code>b</code> still refers to the original.</p>"},
+  {"type": "multi", "prompt": "A class defines only <code>__len__</code> and <code>__getitem__</code> (raising <code>IndexError</code> past the end). Which work?", "options": ["<code>len(obj)</code>", "<code>for x in obj</code>", "<code>3 in obj</code>", "<code>obj[1:3]</code> if <code>__getitem__</code> delegates to a list", "<code>hash(obj)</code> by value"], "answer": [0, 1, 2, 3], "explanation": "<p>Iteration falls back to <code>__getitem__</code>, <code>in</code> falls back to iteration, and slices are passed to <code>__getitem__</code> as <code>slice</code> objects. Hashing stays identity-based unless you define it.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class Box:\n    def __len__(self):\n        return 0\n\nprint('yes' if Box() else 'no')", "answer": "no", "explanation": "<p>Without <code>__bool__</code>, truthiness uses <code>__len__</code>; a length of 0 is falsy.</p>"},
+  {"type": "single", "prompt": "What does <code>functools.total_ordering</code> require you to define?", "options": ["All six comparison methods", "<code>__eq__</code> and one of <code>__lt__</code>, <code>__le__</code>, <code>__gt__</code>, <code>__ge__</code>", "Only <code>__hash__</code>", "<code>__cmp__</code>"], "answer": 1, "explanation": "<p>It derives the missing ordering methods from <code>__eq__</code> plus one ordering method.</p>"},
+  {"type": "text", "prompt": "Which special method makes an instance callable like a function?", "answer": ["__call__"], "explanation": "<p><code>obj(args)</code> calls <code>type(obj).__call__(obj, args)</code>.</p>"},
+  {"type": "single", "prompt": "When does <code>__exit__</code> run in a <code>with</code> block?", "options": ["Only if no exception occurs", "Only if an exception occurs", "Always, when the block is left", "Only if <code>__enter__</code> returns <code>self</code>"], "answer": 2, "explanation": "<p><code>__exit__</code> always runs; it receives the exception details (or three <code>None</code>s) and returns true only to suppress the exception.</p>"},
+  {"type": "single", "prompt": "Why should a hashable class keep its compared fields immutable?", "options": ["Mutable fields are slower", "If the hash changes while the object is in a set or dict, lookups go to the wrong bucket and fail", "Python forbids it", "<code>__repr__</code> would break"], "answer": 1, "explanation": "<p>Containers store items by the hash they had when inserted. A changed hash makes the item unfindable.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Every value is an object with identity, type, and value; syntax calls special methods on the type.</li>
+      <li>Write <code>__repr__</code> always (unambiguous, for developers); add <code>__str__</code> for user-friendly output.</li>
+      <li><code>__eq__</code> and <code>__hash__</code> go together; equal objects must hash equally; keep hashed fields immutable.</li>
+      <li><code>@total_ordering</code> plus <code>__eq__</code> and <code>__lt__</code> gives all comparisons.</li>
+      <li><code>a + b</code> tries <code>__add__</code>, then the reflected <code>__radd__</code>; return <code>NotImplemented</code> for unsupported types.</li>
+      <li><code>+=</code> uses <code>__iadd__</code> if present, otherwise <code>+</code> and rebinding.</li>
+      <li>Container protocol: <code>__len__</code>, <code>__getitem__</code>, <code>__iter__</code>, <code>__contains__</code>, with generous fallbacks.</li>
+      <li>Truthiness: <code>__bool__</code>, else <code>__len__</code>, else true.</li>
+      <li><code>__call__</code> makes objects callable; <code>__enter__</code>/<code>__exit__</code> drive the <code>with</code> statement.</li>
+    </ul>
+    <div class="flashcards" data-title="Data model">
+<script type="application/json">
+[
+  {"front": "What is a dunder method?", "back": "A special method like <code>__len__</code> that Python calls to implement syntax and built-ins."},
+  {"front": "<code>__repr__</code> vs <code>__str__</code>", "back": "repr: unambiguous, for developers, used by containers and the REPL. str: for users, used by print; falls back to repr."},
+  {"front": "The hash contract", "back": "<code>a == b</code> implies <code>hash(a) == hash(b)</code>, and an object's hash must not change while it's in a set/dict."},
+  {"front": "Defining <code>__eq__</code> alone does what to hashing?", "back": "Sets <code>__hash__ = None</code>: instances become unhashable."},
+  {"front": "<code>NotImplemented</code>", "back": "A singleton that binary dunder methods return to say 'try the other operand'."},
+  {"front": "Reflected method", "back": "<code>__radd__</code>, <code>__rmul__</code>, ...: called on the right operand when the left's method returns NotImplemented."},
+  {"front": "<code>@total_ordering</code>", "back": "Given <code>__eq__</code> and one of lt/le/gt/ge, generates the other ordering methods."},
+  {"front": "Iteration fallback", "back": "Without <code>__iter__</code>, Python calls <code>__getitem__(0)</code>, <code>(1)</code>, ... until <code>IndexError</code>."},
+  {"front": "Truthiness order", "back": "<code>__bool__</code>, then <code>__len__</code> (0 is false), otherwise true."},
+  {"front": "<code>__enter__</code> / <code>__exit__</code>", "back": "The context-manager protocol behind <code>with</code>. <code>__exit__</code> always runs and can suppress an exception by returning true."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html">Language reference: Data model</a> (the definitive list of special methods)</li>
+      <li><a href="https://docs.python.org/3/library/functools.html#functools.total_ordering"><code>functools.total_ordering</code></a></li>
+      <li><a href="https://docs.python.org/3/library/numbers.html#implementing-the-arithmetic-operations">Implementing the arithmetic operations</a> (the <code>numbers</code> module guide)</li>
+      <li><a href="https://docs.python.org/3/library/collections.abc.html"><code>collections.abc</code></a> and its table of mixin methods</li>
+      <li><a href="https://docs.python.org/3/library/decimal.html"><code>decimal</code></a> for the Money mini-project</li>
+      <li>Next: <a href="m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

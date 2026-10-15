@@ -1,0 +1,1002 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M12 · Inheritance, Composition &amp; Protocols · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m12">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 12</p>
+    <h1>Inheritance, Composition &amp; Protocols</h1>
+    <p class="lede">Classes rarely live alone. This module is about how types relate: reusing behavior with inheritance, combining objects with composition, and describing "anything that can do X" with abstract base classes and protocols. Choosing well between these is one of the core design skills of a professional.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m10-classes.html">M10 Classes</a>, <a href="m11-data-model.html">M11 Data Model</a></span></div>
+    <ul class="objectives">
+      <li>Create subclasses, override methods, and extend behavior with <code>super()</code></li>
+      <li>Explain the method resolution order (MRO) and read <code>__mro__</code> for multiple inheritance</li>
+      <li>Define abstract base classes with <code>abc.ABC</code> and <code>@abstractmethod</code></li>
+      <li>Describe interfaces structurally with <code>typing.Protocol</code></li>
+      <li>Use mixins for small reusable capabilities</li>
+      <li>Refactor inheritance into composition and justify the choice with the Liskov substitution principle</li>
+      <li>Choose between <code>isinstance</code> checks and duck typing</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="inheritance">
+    <h2>Inheritance and overriding</h2>
+    <p><dfn>Inheritance</dfn> lets a new class, the <dfn>subclass</dfn> (or child), start from an existing class, the <dfn>base class</dfn> (or parent, or superclass), and then add or change behavior. It models an "is-a" relationship: a <code>Dog</code> <em>is an</em> <code>Animal</code>. You write the base class in parentheses:</p>
+    <pre><code class="language-python">class Animal:
+    def __init__(self, name):
+        self.name = name
+
+    def speak(self):
+        return "..."
+
+    def describe(self):
+        return f"{self.name} says {self.speak()}"
+
+class Dog(Animal):          # Dog inherits everything from Animal
+    def speak(self):         # ...and overrides one method
+        return "Woof"</code></pre>
+    <p>Recall the attribute lookup rule from <a href="m10-classes.html#methods">M10</a>: instance first, then the class. Inheritance extends the chain: instance, then the class, then its base, then <em>its</em> base, ending at <code>object</code>, the root of every class. When <code>Animal.describe</code> calls <code>self.speak()</code>, the lookup starts at <code>type(self)</code>, which is <code>Dog</code>, so the dog's version runs. This is <dfn>polymorphism</dfn>: one call site, different behavior depending on the object's actual type.</p>
+    <div class="runnable" data-title="Overriding and polymorphism">
+<textarea>
+class Animal:
+    def __init__(self, name):
+        self.name = name
+
+    def speak(self):
+        return "..."
+
+    def describe(self):
+        return f"{self.name} says {self.speak()}"
+
+class Dog(Animal):
+    def speak(self):
+        return "Woof"
+
+class Cat(Animal):
+    def speak(self):
+        return "Meow"
+
+for pet in [Dog("Rex"), Cat("Tom"), Animal("Generic")]:
+    print(pet.describe())          # same call, different behavior
+
+print(isinstance(Dog("x"), Animal), issubclass(Cat, Animal), issubclass(Dog, Cat))
+print(Dog.__bases__, Animal.__bases__)
+</textarea>
+    </div>
+    <p><code>describe</code> is a small example of the <dfn>template method</dfn> pattern: the base class defines the overall algorithm and calls a "hook" method that subclasses fill in.</p>
+    <aside class="callout note"><p>Every class you define without a base actually inherits from <code>object</code>. That's where the default <code>__repr__</code>, <code>__eq__</code> (identity), and <code>__hash__</code> you met in M11 come from.</p></aside>
+    <p><strong>Remember:</strong> a subclass inherits everything and overrides what it needs; method lookup always starts from the object's actual type.</p>
+  </section>
+
+  <section class="lesson-section" id="super">
+    <h2>Extending behavior with <code>super()</code></h2>
+    <p>Overriding replaces a method completely. Often you want to <em>extend</em> it instead: do what the parent does, plus a bit more. <code>super()</code> returns a proxy object that looks up methods starting <em>after</em> the current class in the inheritance chain. The most common use is in <code>__init__</code>:</p>
+    <pre><code class="language-python">class Account:
+    def __init__(self, owner, balance=0):
+        self.owner = owner
+        self.balance = balance
+
+    def withdraw(self, amount):
+        if amount &gt; self.balance:
+            raise ValueError("insufficient funds")
+        self.balance -= amount
+
+class SavingsAccount(Account):
+    def __init__(self, owner, balance=0, rate=0.02):
+        super().__init__(owner, balance)   # let Account set its fields
+        self.rate = rate                   # then add our own
+
+    def withdraw(self, amount):
+        if amount &gt; 500:
+            raise ValueError("savings withdrawals are limited to 500")
+        super().withdraw(amount)           # reuse the parent's rules</code></pre>
+    <p>Forgetting to call <code>super().__init__</code> is a classic bug: the subclass's instances never get the parent's attributes, and you see an <code>AttributeError</code> far from the cause. Step through the chain:</p>
+    <div class="tracer" data-title="super() calls flow up the chain">
+<textarea>
+class Account:
+    def __init__(self, owner, balance=0):
+        self.owner = owner
+        self.balance = balance
+
+    def withdraw(self, amount):
+        if amount > self.balance:
+            raise ValueError("insufficient funds")
+        self.balance -= amount
+        return self.balance
+
+class SavingsAccount(Account):
+    def __init__(self, owner, balance=0, rate=0.02):
+        super().__init__(owner, balance)
+        self.rate = rate
+
+    def withdraw(self, amount):
+        if amount > 500:
+            raise ValueError("limit is 500")
+        return super().withdraw(amount)
+
+acct = SavingsAccount("Ada", 1000)
+left = acct.withdraw(200)
+fields = sorted(vars(acct))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Zero-argument <code>super()</code> works inside methods defined in a class body; Python fills in the class and instance for you. The old spelling <code>super(SavingsAccount, self)</code> still works but is rarely needed.</p></aside>
+    <p><strong>Remember:</strong> <code>super().method(...)</code> calls the next implementation in the chain; always call <code>super().__init__</code> when you override <code>__init__</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="mro">
+    <h2>Multiple inheritance and the MRO</h2>
+    <p>Python lets a class have several bases: <code>class D(B, C):</code>. That raises a question: if both <code>B</code> and <code>C</code> define <code>hello</code>, which runs? The answer is the <dfn>method resolution order</dfn> (MRO): a single, linear list of classes that Python searches, in order, for every attribute lookup. You can read it from <code>D.__mro__</code> or <code>D.mro()</code>.</p>
+    <p>Python computes the MRO with the <dfn>C3 linearization</dfn> algorithm, which guarantees three things:</p>
+    <ol>
+      <li>A class always comes before its bases.</li>
+      <li>Bases appear in the order you listed them (<code>B</code> before <code>C</code> in <code>class D(B, C)</code>).</li>
+      <li>Each class appears exactly once, even in a "diamond" where two parents share a grandparent.</li>
+    </ol>
+    <pre class="mermaid">
+classDiagram
+  direction BT
+  class A { +hello() }
+  class B { +hello() }
+  class C { +hello() }
+  class D
+  B --|> A
+  C --|> A
+  D --|> B
+  D --|> C
+    </pre>
+    <p>For this diamond, the MRO is <code>D → B → C → A → object</code>. Note that <code>C</code> comes before <code>A</code> even though <code>A</code> is <code>B</code>'s parent: C3 delays a class until every class that inherits from it has been listed.</p>
+    <div class="runnable" data-title="Cooperative super() in a diamond">
+<textarea>
+class A:
+    def hello(self):
+        return ["A"]
+
+class B(A):
+    def hello(self):
+        return ["B"] + super().hello()
+
+class C(A):
+    def hello(self):
+        return ["C"] + super().hello()
+
+class D(B, C):
+    def hello(self):
+        return ["D"] + super().hello()
+
+print([cls.__name__ for cls in D.__mro__])
+print(D().hello())        # every class runs exactly once, in MRO order
+print([cls.__name__ for cls in B.__mro__])   # B alone: B -> A
+</textarea>
+    </div>
+    <p>This shows the deeper truth about <code>super()</code>: it does <strong>not</strong> mean "my parent". It means "the next class in the MRO <em>of the object's type</em>". Inside <code>B.hello</code>, when <code>self</code> is a <code>D</code>, <code>super()</code> refers to <code>C</code>, a class <code>B</code> doesn't even know about. That is what makes <dfn>cooperative multiple inheritance</dfn> possible: if every class calls <code>super()</code>, each implementation in the chain runs once.</p>
+    <div class="runnable" data-title="Predict: an MRO Python refuses" data-predict>
+<textarea>
+class Base:
+    pass
+
+class Child(Base):
+    pass
+
+try:
+    class Broken(Base, Child):   # Base listed before its own subclass
+        pass
+except TypeError as exc:
+    print("TypeError")
+print([c.__name__ for c in type("Ok", (Child, Base), {}).__mro__])
+</textarea>
+    </div>
+    <p><code>class Broken(Base, Child)</code> asks for <code>Base</code> before <code>Child</code>, but rule 1 says <code>Child</code> must precede its base. No order satisfies both, so Python raises <code>TypeError: Cannot create a consistent method resolution order (MRO)</code>.</p>
+    <aside class="callout warn"><p>Cooperative <code>__init__</code> with multiple inheritance is tricky because each class may need different arguments. The usual technique is to accept <code>**kwargs</code>, take what you need, and pass the rest on: <code>super().__init__(**kwargs)</code>. If that sounds complicated, it is; it's a strong hint to prefer mixins without <code>__init__</code>, or composition.</p></aside>
+    <p><strong>Remember:</strong> attribute lookup follows <code>__mro__</code>; <code>super()</code> means "next in the MRO of <code>type(self)</code>", not "my parent".</p>
+  </section>
+
+  <section class="lesson-section" id="abc">
+    <h2>Abstract base classes</h2>
+    <p>Sometimes a base class exists only to define what its subclasses must do. A generic <code>Shape</code> has no area; only circles and squares do. An <dfn>abstract base class</dfn> (ABC) makes that explicit. Mark the required methods with <code>@abstractmethod</code>, and Python refuses to create instances of any class that still has unimplemented abstract methods. Mistakes surface when the object is <em>created</em>, not later, deep inside some call.</p>
+    <div class="runnable" data-title="An abstract Shape">
+<textarea>
+import math
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self):
+        """Return the area."""
+
+    @abstractmethod
+    def perimeter(self):
+        """Return the perimeter."""
+
+    def describe(self):                  # concrete methods are allowed
+        return f"{type(self).__name__}: area={self.area():.2f}, perimeter={self.perimeter():.2f}"
+
+class Circle(Shape):
+    def __init__(self, r):
+        self.r = r
+    def area(self):
+        return math.pi * self.r ** 2
+    def perimeter(self):
+        return 2 * math.pi * self.r
+
+class Square(Shape):                     # forgot perimeter!
+    def __init__(self, side):
+        self.side = side
+    def area(self):
+        return self.side ** 2
+
+print(Circle(1).describe())
+for make in (lambda: Shape(), lambda: Square(2)):
+    try:
+        make()
+    except TypeError as exc:
+        print("TypeError:", exc)
+</textarea>
+    </div>
+    <p>The standard library ships many ABCs in <code>collections.abc</code>: <code>Iterable</code>, <code>Sequence</code>, <code>Mapping</code>, <code>Callable</code>, and more. Inheriting from one gives you <dfn>mixin methods</dfn> for free; for example, a <code>Sequence</code> subclass that implements <code>__getitem__</code> and <code>__len__</code> receives <code>__contains__</code>, <code>__iter__</code>, <code>__reversed__</code>, <code>index</code>, and <code>count</code>.</p>
+    <div class="runnable" data-title="collections.abc fills in the rest">
+<textarea>
+from collections.abc import Sequence
+
+class Countdown(Sequence):
+    def __init__(self, start):
+        self.start = start
+    def __len__(self):
+        return self.start
+    def __getitem__(self, i):
+        if not 0 <= i < self.start:
+            raise IndexError(i)
+        return self.start - i
+
+c = Countdown(5)
+print(list(c), 3 in c, c.index(2), c.count(9), list(reversed(c)))
+print(isinstance(c, Sequence))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> an ABC with <code>@abstractmethod</code> declares required methods and blocks instantiation until they're implemented; <code>collections.abc</code> ABCs also supply ready-made methods.</p>
+  </section>
+
+  <section class="lesson-section" id="protocols">
+    <h2>Protocols: duck typing, formalized</h2>
+    <p>ABCs use <dfn>nominal typing</dfn>: an object counts as a <code>Shape</code> only if its class explicitly inherits from <code>Shape</code>. Python's everyday style is <dfn>duck typing</dfn>: any object with an <code>area()</code> method can be used where an area is needed, no inheritance required. <code>typing.Protocol</code> lets you write down that implicit contract so type checkers such as mypy can verify it. This is <dfn>structural typing</dfn>: compatibility is determined by structure (which methods exist), not by ancestry.</p>
+    <div class="runnable" data-title="A Protocol: no inheritance needed">
+<textarea>
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class HasArea(Protocol):
+    def area(self) -> float: ...
+
+class Rug:                         # never mentions HasArea
+    def __init__(self, w, h):
+        self.w, self.h = w, h
+    def area(self) -> float:
+        return self.w * self.h
+
+class Pond:
+    def __init__(self, r):
+        self.r = r
+    def area(self) -> float:
+        return 3.14159 * self.r ** 2
+
+def total_area(items: list[HasArea]) -> float:
+    return sum(item.area() for item in items)
+
+print(total_area([Rug(2, 3), Pond(1)]))
+print(isinstance(Rug(1, 1), HasArea), isinstance("text", HasArea))
+</textarea>
+    </div>
+    <p>Neither <code>Rug</code> nor <code>Pond</code> inherits from <code>HasArea</code>, yet both satisfy it. The protocol matters in two places:</p>
+    <ul>
+      <li><strong>Statically</strong>: when you run <code>pixi run mypy</code>, passing an object without <code>area</code> to <code>total_area</code> is reported as an error before the program runs. You will use this heavily in <a href="m16-typing.html">M16</a>.</li>
+      <li><strong>At runtime</strong>, only if decorated with <code>@runtime_checkable</code>: <code>isinstance(x, HasArea)</code> checks that the methods <em>exist</em>. It does not check their signatures or return types.</li>
+    </ul>
+    <table>
+      <thead><tr><th></th><th>ABC (<code>abc.ABC</code>)</th><th>Protocol (<code>typing.Protocol</code>)</th></tr></thead>
+      <tbody>
+        <tr><td>Relationship</td><td>Nominal: must inherit (or register)</td><td>Structural: just have the methods</td></tr>
+        <tr><td>Checked</td><td>At instantiation (missing abstract methods)</td><td>By the type checker; optionally <code>isinstance</code></td></tr>
+        <tr><td>Can share code</td><td>Yes, concrete methods are inherited</td><td>Not usefully for implementers that don't inherit</td></tr>
+        <tr><td>Best for</td><td>A family of classes you control</td><td>Accepting third-party or unrelated objects</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout pro"><p>Define protocols where they are <em>consumed</em>, describing only the methods your function actually uses. A function that only calls <code>.read()</code> should accept a <code>SupportsRead</code> protocol, not a concrete file class. This keeps code decoupled and makes testing with simple fakes trivial.</p></aside>
+    <p><strong>Remember:</strong> a Protocol describes required methods structurally; any object with them qualifies, no inheritance needed.</p>
+  </section>
+
+  <section class="lesson-section" id="mixins">
+    <h2>Mixins</h2>
+    <p>A <dfn>mixin</dfn> is a small class that provides one focused capability and is meant to be combined with other classes through multiple inheritance. It isn't a complete thing on its own (you'd never instantiate <code>JsonMixin</code> by itself) and typically has no <code>__init__</code>. By convention its name ends in <code>Mixin</code>, and mixins are listed <em>before</em> the main base class so their methods take priority in the MRO.</p>
+    <div class="runnable" data-title="Two mixins, one class">
+<textarea>
+import json
+
+class ReprMixin:
+    """A generic __repr__ built from the instance's public attributes."""
+    def __repr__(self):
+        fields = ", ".join(f"{k}={v!r}" for k, v in vars(self).items() if not k.startswith("_"))
+        return f"{type(self).__name__}({fields})"
+
+class JsonMixin:
+    """Serialize public attributes to JSON."""
+    def to_json(self):
+        return json.dumps({k: v for k, v in vars(self).items() if not k.startswith("_")})
+
+class Entity:
+    def __init__(self, id):
+        self.id = id
+
+class User(ReprMixin, JsonMixin, Entity):
+    def __init__(self, id, name):
+        super().__init__(id)
+        self.name = name
+        self._password_hash = "x9f..."
+
+u = User(1, "ada")
+print(repr(u))
+print(u.to_json())
+print([c.__name__ for c in User.__mro__])
+</textarea>
+    </div>
+    <p>The standard library uses mixins too: <code>socketserver.ThreadingMixIn</code>, and the <code>collections.abc</code> classes you just met act as mixins for container methods.</p>
+    <aside class="callout warn"><p>Keep mixins small, stateless, and independent of each other. A mixin that needs specific attributes from its host class should document them (or declare them in a Protocol). If you find yourself stacking five mixins with cooperative <code>__init__</code> methods, step back and consider composition.</p></aside>
+    <p><strong>Remember:</strong> a mixin adds one capability, has no state of its own, and goes left of the main base.</p>
+  </section>
+
+  <section class="lesson-section" id="composition">
+    <h2>Composition over inheritance</h2>
+    <p><dfn>Composition</dfn> builds a class by holding other objects as attributes and delegating work to them: a "has-a" relationship. A <code>Car</code> <em>has an</em> <code>Engine</code>; it isn't one. The famous design advice "favor composition over inheritance" (from the <em>Design Patterns</em> book) exists because inheritance couples the child to every detail of the parent, including methods it doesn't want.</p>
+    <p>Here is a realistic refactoring. A developer wants a stack and inherits from <code>list</code> to save typing:</p>
+    <div class="tabs">
+      <div class="tab" data-label="Before: inheritance">
+<pre><code class="language-python">class Stack(list):
+    def push(self, item):
+        self.append(item)
+
+    def peek(self):
+        return self[-1]
+
+s = Stack()
+s.push(1); s.push(2)
+s.insert(0, 99)      # oops: breaks stack discipline
+s.sort()             # also allowed
+print(isinstance(s, list))   # True: callers may treat it as a list</code></pre>
+        <p>The stack has inherited every list method (<code>insert</code>, <code>sort</code>, <code>extend</code>, <code>remove</code>, <code>reverse</code>, plus operators like <code>__setitem__</code> and <code>+</code>), and every one of which can break the "last in, first out" invariant. You can't remove them without fighting the language.</p>
+      </div>
+      <div class="tab" data-label="After: composition">
+<pre><code class="language-python">class Stack:
+    def __init__(self):
+        self._items = []          # has-a list, hidden
+
+    def push(self, item):
+        self._items.append(item)  # delegate
+
+    def pop(self):
+        if not self._items:
+            raise IndexError("pop from empty stack")
+        return self._items.pop()
+
+    def peek(self):
+        if not self._items:
+            raise IndexError("peek at empty stack")
+        return self._items[-1]
+
+    def __len__(self):
+        return len(self._items)</code></pre>
+        <p>The public interface is exactly the operations a stack should have. The list is an implementation detail you could swap for <code>collections.deque</code> without changing any caller.</p>
+      </div>
+    </div>
+    <p>Composition also beats inheritance when behavior varies along several independent axes. Suppose reports can be formatted as text or HTML, and delivered by email or file. Inheritance needs a class for every combination (<code>TextEmailReport</code>, <code>HtmlFileReport</code>, ...): <em>m × n</em> classes. Composition needs <em>m + n</em> small classes, combined at runtime:</p>
+    <div class="runnable" data-title="Plug in strategies instead of subclassing">
+<textarea>
+class TextFormatter:
+    def format(self, rows):
+        return "\n".join(f"{k}: {v}" for k, v in rows)
+
+class HtmlFormatter:
+    def format(self, rows):
+        body = "".join(f"<li>{k}: {v}</li>" for k, v in rows)
+        return f"<ul>{body}</ul>"
+
+class PrintSink:
+    def deliver(self, text):
+        print(text)
+
+class Report:
+    def __init__(self, formatter, sink):
+        self.formatter = formatter     # has-a formatter
+        self.sink = sink               # has-a sink
+
+    def publish(self, rows):
+        self.sink.deliver(self.formatter.format(rows))
+
+rows = [("sales", 120), ("returns", 4)]
+Report(TextFormatter(), PrintSink()).publish(rows)
+Report(HtmlFormatter(), PrintSink()).publish(rows)
+</textarea>
+    </div>
+    <p>This is the <dfn>strategy pattern</dfn>. Each collaborator is small and testable alone, and in tests you can pass a fake sink that records output instead of printing.</p>
+    <aside class="callout think"><p>Use the "is-a" test honestly. Is a <code>Stack</code> a list, in the sense that every list operation makes sense on it? Is an <code>Employee</code> a <code>Person</code>, or does a person <em>have</em> an employment role that can change over time?</p></aside>
+    <p><strong>Remember:</strong> inherit for genuine "is-a" with full substitutability; compose ("has-a") to reuse behavior without inheriting an interface you don't want.</p>
+  </section>
+
+  <section class="lesson-section" id="liskov">
+    <h2>The Liskov substitution principle</h2>
+    <p>Barbara Liskov's principle (the "L" in SOLID) gives the precise test for when inheritance is correct: <strong>anywhere code expects a base-class object, a subclass object must work without the code noticing.</strong> A subclass may accept more and promise more, but it must not demand more or deliver less. Concretely, an override must not:</p>
+    <ul>
+      <li>require stricter inputs (raise on arguments the parent accepted);</li>
+      <li>return something the caller can't use the same way;</li>
+      <li>break invariants the parent guaranteed;</li>
+      <li>raise new kinds of exceptions callers couldn't anticipate.</li>
+    </ul>
+    <p>The classic violation is <code>Square(Rectangle)</code>. Mathematically a square is a rectangle, but a <em>mutable</em> rectangle promises that setting the width leaves the height alone:</p>
+    <div class="runnable" data-title="Predict: Square breaks Rectangle's promise" data-predict>
+<textarea>
+class Rectangle:
+    def __init__(self, w, h):
+        self.w, self.h = w, h
+    def set_width(self, w):
+        self.w = w
+    def area(self):
+        return self.w * self.h
+
+class Square(Rectangle):
+    def __init__(self, side):
+        super().__init__(side, side)
+    def set_width(self, w):        # keeps the square square...
+        self.w = self.h = w
+
+def stretch(rect):
+    """Doubles the width; callers expect the area to double."""
+    before = rect.area()
+    rect.set_width(rect.w * 2)
+    return rect.area() / before
+
+print(stretch(Rectangle(2, 3)), stretch(Square(2)))
+</textarea>
+    </div>
+    <p><code>stretch</code> is correct for every <code>Rectangle</code>, but a <code>Square</code> quadruples instead of doubling. The fix isn't a cleverer override; it's a different design: make shapes immutable (then "set width" returns a new shape, and the problem disappears), or make <code>Square</code> and <code>Rectangle</code> siblings under a common <code>Shape</code> ABC.</p>
+    <p><strong>Remember:</strong> a subclass must be usable anywhere its base is expected. If you need to weaken a parent's promise, don't inherit.</p>
+  </section>
+
+  <section class="lesson-section" id="duck-typing">
+    <h2><code>isinstance</code> vs duck typing</h2>
+    <p>When a function receives an object, should it check the type first? Python culture leans toward <dfn>EAFP</dfn>, "easier to ask forgiveness than permission": just use the object and handle the exception if it doesn't fit. The opposite style, <dfn>LBYL</dfn> ("look before you leap"), checks first.</p>
+    <div class="two-col">
+      <div>
+        <h4>Too strict (LBYL on concrete types)</h4>
+<pre><code class="language-python">def total(values):
+    if not isinstance(values, list):
+        raise TypeError("need a list")
+    return sum(values)
+
+total((1, 2))   # rejected, though it would work</code></pre>
+      </div>
+      <div>
+        <h4>Duck typing (EAFP)</h4>
+<pre><code class="language-python">def total(values):
+    return sum(values)   # any iterable of numbers
+
+total((1, 2)); total({3, 4}); total(range(5))</code></pre>
+      </div>
+    </div>
+    <p>Guidelines professionals follow:</p>
+    <ul>
+      <li>Prefer duck typing; check against the <em>least specific</em> abstraction you need, such as <code>collections.abc.Iterable</code> or a Protocol, not <code>list</code>.</li>
+      <li><code>isinstance</code> is the right tool when behavior genuinely differs by type: inside <code>__eq__</code>/<code>__add__</code> (M11), when parsing heterogeneous data (a JSON value may be a dict, list, or str), and at system boundaries where you validate input. <code>match</code> with class patterns (<a href="m04-control-flow.html">M04</a>) is often the clearest way to branch by type.</li>
+      <li>Never use <code>type(x) == SomeClass</code>; it rejects subclasses and breaks Liskov. Use <code>isinstance</code>.</li>
+      <li>Let static type hints and protocols do most "type checking" before the program runs (M16).</li>
+    </ul>
+    <div class="runnable" data-title="Branching by type with match">
+<textarea>
+def describe(value):
+    match value:
+        case bool():
+            return "a bool"            # check bool before int: bool is a subclass of int
+        case int() | float():
+            return "a number"
+        case str():
+            return "text"
+        case list() | tuple():
+            return f"a sequence of {len(value)}"
+        case dict():
+            return f"a mapping with keys {sorted(value)}"
+        case _:
+            return f"something else: {type(value).__name__}"
+
+for v in (True, 3, 2.5, "hi", [1, 2], {"b": 1, "a": 2}, None):
+    print(repr(v), "->", describe(v))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> use objects by what they can do; reserve <code>isinstance</code> (against abstract types) for real type-dependent branching and input validation.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m12-e1" data-title="Override a hook method">
+      <div class="exercise-prompt">
+        <p>Given the base class <code>Employee</code>, write subclasses <code>Manager</code> and <code>Intern</code> that override <code>bonus_rate()</code>: managers get <code>0.2</code>, interns <code>0.0</code>. Do not override <code>bonus()</code>; it must use the hook. <code>Manager</code> also takes a list of <code>reports</code> (other employees) as a third initializer argument and must call <code>super().__init__</code>.</p>
+      </div>
+<textarea class="starter">
+class Employee:
+    def __init__(self, name, salary):
+        self.name = name
+        self.salary = salary
+
+    def bonus_rate(self):
+        return 0.1
+
+    def bonus(self):
+        return self.salary * self.bonus_rate()
+
+# write Manager and Intern
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_rates():
+    assert math.isclose(Employee("a", 1000).bonus(), 100), "base rate 10%"
+    assert math.isclose(Manager("b", 1000, []).bonus(), 200), "manager rate 20%"
+    assert Intern("c", 1000).bonus() == 0, "interns get no bonus"
+
+def test_inheritance():
+    assert issubclass(Manager, Employee) and issubclass(Intern, Employee), "both must inherit from Employee"
+    assert "bonus" not in Manager.__dict__ and "bonus" not in Intern.__dict__, "don't override bonus()"
+
+def test_manager_init():
+    i = Intern("i", 10)
+    m = Manager("m", 5000, [i])
+    assert m.name == "m" and m.salary == 5000, "call super().__init__ to set name and salary"
+    assert m.reports == [i], "store reports"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>class Manager(Employee):</code> with <code>def __init__(self, name, salary, reports): super().__init__(name, salary); self.reports = reports</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Employee:
+    def __init__(self, name, salary):
+        self.name = name
+        self.salary = salary
+
+    def bonus_rate(self):
+        return 0.1
+
+    def bonus(self):
+        return self.salary * self.bonus_rate()
+
+
+class Manager(Employee):
+    def __init__(self, name, salary, reports):
+        super().__init__(name, salary)
+        self.reports = reports
+
+    def bonus_rate(self):
+        return 0.2
+
+
+class Intern(Employee):
+    def bonus_rate(self):
+        return 0.0</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m12-e2" data-title="Extend with super()">
+      <div class="exercise-prompt">
+        <p>Write <code>LimitedAccount(Account)</code> that takes an extra <code>daily_limit</code>. Its <code>withdraw(amount)</code> raises <code>ValueError</code> if the total withdrawn today (tracked in <code>withdrawn_today</code>, starting at 0) would exceed the limit; otherwise it calls the parent's <code>withdraw</code> (which still rejects overdrafts) and then adds to <code>withdrawn_today</code>.</p>
+      </div>
+<textarea class="starter">
+class Account:
+    def __init__(self, owner, balance=0):
+        self.owner = owner
+        self.balance = balance
+
+    def withdraw(self, amount):
+        if amount > self.balance:
+            raise ValueError("insufficient funds")
+        self.balance -= amount
+
+# write LimitedAccount
+</textarea>
+      <script type="text/x-python" class="tests">
+def _raises(fn):
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+def test_init():
+    a = LimitedAccount("ada", 1000, 300)
+    assert (a.owner, a.balance, a.daily_limit, a.withdrawn_today) == ("ada", 1000, 300, 0), "set all fields"
+
+def test_limit():
+    a = LimitedAccount("ada", 1000, 300)
+    a.withdraw(200)
+    assert a.balance == 800 and a.withdrawn_today == 200, "first withdrawal works"
+    assert _raises(lambda: a.withdraw(150)), "200 + 150 exceeds the 300 limit"
+    assert a.balance == 800 and a.withdrawn_today == 200, "a refused withdrawal changes nothing"
+
+def test_parent_rules_still_apply():
+    a = LimitedAccount("ada", 50, 300)
+    assert _raises(lambda: a.withdraw(100)), "overdraft still rejected by Account.withdraw"
+    assert a.withdrawn_today == 0, "failed withdrawal must not count toward the limit"
+
+def test_uses_super():
+    assert issubclass(LimitedAccount, Account), "inherit from Account"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check the limit first, then call <code>super().withdraw(amount)</code>, and only after it succeeds update <code>withdrawn_today</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Account:
+    def __init__(self, owner, balance=0):
+        self.owner = owner
+        self.balance = balance
+
+    def withdraw(self, amount):
+        if amount &gt; self.balance:
+            raise ValueError("insufficient funds")
+        self.balance -= amount
+
+
+class LimitedAccount(Account):
+    def __init__(self, owner, balance=0, daily_limit=500):
+        super().__init__(owner, balance)
+        self.daily_limit = daily_limit
+        self.withdrawn_today = 0
+
+    def withdraw(self, amount):
+        if self.withdrawn_today + amount &gt; self.daily_limit:
+            raise ValueError("daily limit exceeded")
+        super().withdraw(amount)
+        self.withdrawn_today += amount</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m12-e3" data-title="Cooperative mixins and the MRO">
+      <div class="exercise-prompt">
+        <p>Write a base class <code>Widget</code> whose <code>classes()</code> returns <code>["widget"]</code>, and two mixins <code>RoundedMixin</code> and <code>ShadowMixin</code> whose <code>classes()</code> return their own tag (<code>"rounded"</code>, <code>"shadow"</code>) followed by <code>super().classes()</code>. Then define <code>Card(RoundedMixin, ShadowMixin, Widget)</code> and <code>Badge(ShadowMixin, Widget)</code>. <code>Card().classes()</code> must be <code>["rounded", "shadow", "widget"]</code>.</p>
+      </div>
+<textarea class="starter">
+class Widget:
+    def classes(self):
+        return ["widget"]
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_card():
+    assert Card().classes() == ["rounded", "shadow", "widget"], f"got {Card().classes()}"
+
+def test_badge():
+    assert Badge().classes() == ["shadow", "widget"], f"got {Badge().classes()}"
+
+def test_mro():
+    names = [c.__name__ for c in Card.__mro__]
+    assert names == ["Card", "RoundedMixin", "ShadowMixin", "Widget", "object"], f"MRO was {names}"
+
+def test_mixins_dont_inherit_widget():
+    assert Widget not in RoundedMixin.__mro__, "mixins should be standalone (inherit only from object)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Each mixin's method is <code>return ["rounded"] + super().classes()</code>. The mixin doesn't know who comes next; the MRO of <code>Card</code> decides.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Widget:
+    def classes(self):
+        return ["widget"]
+
+
+class RoundedMixin:
+    def classes(self):
+        return ["rounded", *super().classes()]
+
+
+class ShadowMixin:
+    def classes(self):
+        return ["shadow", *super().classes()]
+
+
+class Card(RoundedMixin, ShadowMixin, Widget):
+    pass
+
+
+class Badge(ShadowMixin, Widget):
+    pass</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m12-e4" data-title="An abstract Shape family">
+      <div class="exercise-prompt">
+        <p>Define an ABC <code>Shape</code> with abstract methods <code>area()</code> and <code>perimeter()</code>, and a concrete method <code>ratio()</code> returning <code>area / perimeter</code>. Implement <code>Circle(r)</code> and <code>Rect(w, h)</code>. Instantiating <code>Shape</code> directly, or a subclass missing a method, must raise <code>TypeError</code>.</p>
+      </div>
+<textarea class="starter">
+import math
+from abc import ABC, abstractmethod
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_concrete():
+    assert math.isclose(Circle(1).area(), math.pi), "circle area"
+    assert math.isclose(Rect(2, 3).perimeter(), 10), "rect perimeter"
+    assert math.isclose(Rect(2, 2).ratio(), 0.5), "ratio = 4 / 8"
+
+def test_abstract():
+    try:
+        Shape()
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("Shape() must raise TypeError")
+
+def test_incomplete_subclass():
+    class Bad(Shape):
+        def area(self):
+            return 1
+    try:
+        Bad()
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("a subclass missing perimeter() must not be instantiable")
+
+def test_is_abc():
+    assert issubclass(Circle, Shape) and issubclass(Rect, Shape), "both inherit from Shape"
+    assert getattr(Shape.area, "__isabstractmethod__", False), "area must be an @abstractmethod"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>class Shape(ABC):</code> with <code>@abstractmethod</code> on each required method. The body can be a docstring.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+from abc import ABC, abstractmethod
+
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self):
+        """Return the area."""
+
+    @abstractmethod
+    def perimeter(self):
+        """Return the perimeter."""
+
+    def ratio(self):
+        return self.area() / self.perimeter()
+
+
+class Circle(Shape):
+    def __init__(self, r):
+        self.r = r
+
+    def area(self):
+        return math.pi * self.r ** 2
+
+    def perimeter(self):
+        return 2 * math.pi * self.r
+
+
+class Rect(Shape):
+    def __init__(self, w, h):
+        self.w = w
+        self.h = h
+
+    def area(self):
+        return self.w * self.h
+
+    def perimeter(self):
+        return 2 * (self.w + self.h)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m12-e5" data-title="A Protocol for anything closeable">
+      <div class="exercise-prompt">
+        <p>Define a <code>@runtime_checkable</code> Protocol <code>Closeable</code> with a single method <code>close(self) -&gt; None</code>. Then write <code>close_all(items)</code> that calls <code>close()</code> on every item that satisfies the protocol, skips the rest, and returns the number of items closed. Unrelated classes (that never inherit from <code>Closeable</code>) must count.</p>
+      </div>
+<textarea class="starter">
+from typing import Protocol, runtime_checkable
+</textarea>
+      <script type="text/x-python" class="tests">
+class _Res:
+    def __init__(self):
+        self.closed = False
+    def close(self):
+        self.closed = True
+
+def test_structural():
+    assert isinstance(_Res(), Closeable), "any object with close() satisfies Closeable"
+    assert not isinstance(42, Closeable), "an int has no close()"
+    assert Closeable not in type(_Res()).__mro__, "no inheritance needed"
+
+def test_close_all():
+    a, b = _Res(), _Res()
+    n = close_all([a, "text", b, 3])
+    assert n == 2, "two closeable items"
+    assert a.closed and b.closed, "both resources were closed"
+
+def test_empty():
+    assert close_all([]) == 0, "nothing to close"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The protocol body is <code>def close(self) -&gt; None: ...</code>. In <code>close_all</code>, use <code>isinstance(item, Closeable)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Closeable(Protocol):
+    def close(self) -&gt; None: ...
+
+
+def close_all(items):
+    count = 0
+    for item in items:
+        if isinstance(item, Closeable):
+            item.close()
+            count += 1
+    return count</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m12-e6" data-title="Refactor to composition">
+      <div class="exercise-prompt">
+        <p>The <code>History</code> class below inherits from <code>list</code>, so callers can <code>insert</code>, <code>sort</code>, or assign into it and corrupt the log. Rewrite it using composition: keep the entries in a private list and expose only <code>record(event)</code>, <code>latest(n=1)</code> (the last <code>n</code> events, newest last, as a new list), <code>__len__</code>, and <code>__iter__</code>. It must not be a <code>list</code> and must not have <code>insert</code> or <code>sort</code>.</p>
+      </div>
+<textarea class="starter">
+class History(list):
+    def record(self, event):
+        self.append(event)
+
+    def latest(self, n=1):
+        return self[-n:]
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_behaviour():
+    h = History()
+    for e in "abc":
+        h.record(e)
+    assert len(h) == 3 and list(h) == ["a", "b", "c"], "record, len, and iteration"
+    assert h.latest() == ["c"] and h.latest(2) == ["b", "c"], "latest(n)"
+
+def test_not_a_list():
+    h = History()
+    assert not isinstance(h, list), "History must not inherit from list"
+    assert not hasattr(h, "insert") and not hasattr(h, "sort"), "don't expose list methods"
+
+def test_latest_is_copy():
+    h = History()
+    h.record("x")
+    h.latest().clear()
+    assert len(h) == 1, "latest() must return a new list"
+
+def test_independent():
+    a, b = History(), History()
+    a.record(1)
+    assert len(b) == 0, "each History has its own storage"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Create <code>self._events = []</code> in <code>__init__</code>. Slicing a list already returns a new list. Watch out: <code>latest(0)</code> with <code>self._events[-0:]</code> returns everything; handle it if you like.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class History:
+    def __init__(self):
+        self._events = []
+
+    def record(self, event):
+        self._events.append(event)
+
+    def latest(self, n=1):
+        return self._events[-n:] if n &gt; 0 else []
+
+    def __len__(self):
+        return len(self._events)
+
+    def __iter__(self):
+        return iter(self._events)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a shape plugin system</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Pluggable shapes with a registry</span></div>
+      <div class="widget-body">
+        <p>Many real applications (static-site generators, pytest, data tools) let users add new behavior by writing a class, without editing the core program. Build a small version: a geometry calculator where each shape is a plugin discovered from a registry.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init shapes
+cd shapes
+mkdir -p src/shapes
+pixi run python -m shapes.cli circle 2     # run from src/ or set up the package as in M08</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>shapes/base.py</code>: an ABC <code>Shape</code> with abstract <code>area()</code> and <code>perimeter()</code>, a class attribute <code>name</code>, and a class method <code>from_args(cls, args: list[str])</code> that subclasses override to parse command-line numbers.</li>
+          <li>A registry: <code>REGISTRY: dict[str, type[Shape]]</code> filled automatically. Use <code>__init_subclass__(cls, **kwargs)</code> in <code>Shape</code> (call <code>super().__init_subclass__(**kwargs)</code>) to register every concrete subclass under its <code>name</code>. Reject duplicate names with <code>ValueError</code>.</li>
+          <li><code>shapes/plugins.py</code>: <code>Circle</code>, <code>Rectangle</code>, and <code>Triangle</code> (validate the triangle inequality in <code>__init__</code>).</li>
+          <li>A <code>Describable</code> Protocol with <code>describe() -&gt; str</code>, and a <code>ReprMixin</code> giving every shape a useful <code>__repr__</code>.</li>
+          <li>A <code>Drawing</code> class that <em>composes</em> a list of shapes (it is not a list) with <code>add()</code>, <code>total_area()</code>, <code>largest()</code>, and <code>__len__</code>.</li>
+          <li><code>shapes/cli.py</code> with <code>main()</code>: <code>shape-name numbers...</code> looks up the plugin, builds it via <code>from_args</code>, and prints its description.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m12-mini">
+          <li>Defining a new <code>Shape</code> subclass in a new file registers it without editing the registry code</li>
+          <li><code>Shape()</code> and incomplete subclasses can't be instantiated</li>
+          <li>Two plugins with the same <code>name</code> raise <code>ValueError</code></li>
+          <li><code>Drawing</code> uses composition and does not expose list methods like <code>insert</code></li>
+          <li>Every shape satisfies the <code>Describable</code> protocol (<code>isinstance</code> with <code>@runtime_checkable</code>)</li>
+          <li>You can explain the MRO of one shape class (print <code>Circle.__mro__</code>)</li>
+          <li>Invalid input (unknown shape, wrong number of arguments, impossible triangle) prints a clear error rather than a traceback</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a <code>Square</code> plugin. Should it subclass <code>Rectangle</code>? Use the Liskov principle to decide, and write down why.</li>
+          <li>Discover plugins from a folder at runtime with <code>importlib.import_module</code>.</li>
+          <li>Run <code>pixi add mypy</code> and <code>pixi run mypy src</code> to check your Protocol usage statically.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m12-quiz">
+<script type="application/json">
+{"title": "Inheritance, composition & protocols quiz", "passScore": 0.7, "questions": [
+  {"type": "output", "prompt": "What does this print?", "code": "class A:\n    def who(self):\n        return 'A'\n    def greet(self):\n        return 'I am ' + self.who()\n\nclass B(A):\n    def who(self):\n        return 'B'\n\nprint(B().greet())", "answer": "I am B", "explanation": "<p><code>self.who()</code> is looked up starting from <code>type(self)</code>, which is <code>B</code>. This is polymorphism.</p>"},
+  {"type": "single", "prompt": "A subclass overrides <code>__init__</code> but forgets <code>super().__init__(...)</code>. What typically happens?", "options": ["Python calls the parent initializer automatically", "Attributes set by the parent's <code>__init__</code> are missing, causing <code>AttributeError</code> later", "A <code>SyntaxError</code>", "The subclass cannot be instantiated"], "answer": 1, "explanation": "<p>Python never calls the parent's <code>__init__</code> implicitly once you override it.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class A: pass\nclass B(A): pass\nclass C(A): pass\nclass D(B, C): pass\n\nprint(''.join(c.__name__ for c in D.__mro__[:-1]))", "answer": "DBCA", "explanation": "<p>C3 linearization: D, then its bases in order (B, C), then their shared base A, then object (excluded by the slice).</p>"},
+  {"type": "single", "prompt": "Inside <code>B.method</code>, what does <code>super()</code> refer to?", "options": ["Always <code>B</code>'s first listed base", "The next class after <code>B</code> in the MRO of <code>type(self)</code>", "<code>object</code>", "The class that called the method"], "answer": 1, "explanation": "<p>That's why in a diamond, <code>B</code>'s <code>super()</code> can lead to its sibling <code>C</code>.</p>"},
+  {"type": "single", "prompt": "What happens when you instantiate a subclass of an ABC that hasn't implemented all abstract methods?", "options": ["It works; missing methods return None", "<code>TypeError</code> at instantiation", "<code>NotImplementedError</code> when the method is called", "<code>AttributeError</code>"], "answer": 1, "explanation": "<p>ABCs check at creation time, so mistakes surface early.</p>"},
+  {"type": "multi", "prompt": "Which are true of <code>typing.Protocol</code>?", "options": ["Implementers don't need to inherit from it", "Type checkers verify compatibility structurally", "<code>isinstance</code> works on any Protocol without extra decoration", "With <code>@runtime_checkable</code>, <code>isinstance</code> checks that methods exist but not their signatures"], "answer": [0, 1, 3], "explanation": "<p>Runtime <code>isinstance</code> requires <code>@runtime_checkable</code> and only checks presence of members.</p>"},
+  {"type": "text", "prompt": "What is the name for typing based on which methods an object has rather than which classes it inherits from?", "answer": ["structural typing", "structural", "duck typing"], "explanation": "<p>Structural typing (formalized duck typing) contrasts with nominal typing, where explicit inheritance determines compatibility.</p>"},
+  {"type": "single", "prompt": "Why is <code>class Stack(list)</code> a poor design?", "options": ["Lists are slow", "The stack inherits list methods like <code>insert</code> and <code>sort</code> that break LIFO discipline", "You can't subclass built-ins", "It uses too much memory"], "answer": 1, "explanation": "<p>Inheritance exposes the whole parent interface. Composition lets you expose only push/pop/peek.</p>"},
+  {"type": "single", "prompt": "The Liskov substitution principle says…", "options": ["Subclasses should override every method", "Objects of a subclass must be usable wherever the base class is expected, without breaking correctness", "Use multiple inheritance sparingly", "Classes should have one responsibility"], "answer": 1, "explanation": "<p>A subclass may not strengthen preconditions or weaken guarantees of its base class.</p>"},
+  {"type": "single", "prompt": "Where should a mixin usually go in the bases list?", "options": ["Last, after the main base class", "First, before the main base class", "It doesn't matter", "Mixins can't be used with other bases"], "answer": 1, "explanation": "<p>Listing mixins first places them earlier in the MRO, so their methods take precedence and their <code>super()</code> calls reach the main base.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(isinstance(True, int), type(True) == int)", "answer": "True False", "explanation": "<p><code>bool</code> subclasses <code>int</code>. <code>isinstance</code> respects subclasses; <code>type(x) == C</code> doesn't, which is why it's discouraged.</p>"},
+  {"type": "multi", "prompt": "Which are good reasons to use composition instead of inheritance?", "options": ["You want to expose only part of another class's interface", "Behavior varies along several independent axes", "The relationship is genuinely 'is-a' with full substitutability", "You want to swap a collaborator at runtime or in tests"], "answer": [0, 1, 3], "explanation": "<p>A true, substitutable is-a relationship is the case where inheritance fits.</p>"},
+  {"type": "text", "prompt": "What does the acronym EAFP stand for?", "answer": ["easier to ask forgiveness than permission", "easier to ask for forgiveness than permission"], "explanation": "<p>Try the operation and handle the exception, rather than checking types in advance (LBYL).</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Inheritance models "is-a"; subclasses inherit everything and override selectively; lookups start at <code>type(self)</code>.</li>
+      <li><code>super()</code> calls the next class in the MRO; always call <code>super().__init__</code> in an overriding initializer.</li>
+      <li>The MRO (C3) is a linear order: children before parents, bases in listed order, each class once. Read <code>Cls.__mro__</code>.</li>
+      <li>ABCs with <code>@abstractmethod</code> enforce required methods at instantiation; <code>collections.abc</code> adds mixin methods.</li>
+      <li><code>typing.Protocol</code> describes interfaces structurally; <code>@runtime_checkable</code> enables a shallow <code>isinstance</code>.</li>
+      <li>Mixins add a single capability, hold no state, and go before the main base.</li>
+      <li>Prefer composition ("has-a") when you'd inherit unwanted methods or need to combine independent behaviors.</li>
+      <li>Liskov: a subclass must work everywhere its base does.</li>
+      <li>Duck typing first; <code>isinstance</code> against abstractions when behavior truly depends on type; never <code>type(x) == C</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="Inheritance & protocols">
+<script type="application/json">
+[
+  {"front": "Polymorphism", "back": "One call (<code>obj.speak()</code>) runs different code depending on the object's actual type."},
+  {"front": "What does <code>super()</code> return?", "back": "A proxy that looks up attributes in the classes after the current one in <code>type(self).__mro__</code>."},
+  {"front": "MRO", "back": "Method resolution order: the linear list of classes searched for attributes. Computed by C3 linearization."},
+  {"front": "Diamond <code>D(B, C)</code>, both from <code>A</code>: MRO?", "back": "D, B, C, A, object."},
+  {"front": "ABC", "back": "Abstract base class (<code>abc.ABC</code>) with <code>@abstractmethod</code>s; subclasses missing them can't be instantiated."},
+  {"front": "Protocol", "back": "<code>typing.Protocol</code>: a structural interface. Anything with the right methods matches, no inheritance needed."},
+  {"front": "Mixin", "back": "A small, stateless class providing one capability, combined via multiple inheritance, listed first."},
+  {"front": "Composition", "back": "Building objects that hold and delegate to other objects (has-a), instead of inheriting (is-a)."},
+  {"front": "Liskov substitution principle", "back": "Subclass instances must be usable anywhere base-class instances are expected."},
+  {"front": "EAFP vs LBYL", "back": "Try it and handle exceptions vs check before acting. Python favors EAFP and duck typing."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/tutorial/classes.html#inheritance">Python Tutorial: Inheritance</a></li>
+      <li><a href="https://docs.python.org/3/howto/mro.html">The Python 2.3 Method Resolution Order</a> (the C3 algorithm explained)</li>
+      <li><a href="https://docs.python.org/3/library/abc.html"><code>abc</code></a> and <a href="https://docs.python.org/3/library/collections.abc.html"><code>collections.abc</code></a></li>
+      <li><a href="https://typing.python.org/en/latest/spec/protocol.html">Typing spec: Protocols</a> and <a href="https://peps.python.org/pep-0544/">PEP 544</a></li>
+      <li><a href="https://rhettinger.wordpress.com/2011/05/26/super-considered-super/">Raymond Hettinger: "Python's super() considered super!"</a></li>
+      <li>Next: <a href="m13-dataclasses.html">M13 Dataclasses, Enums &amp; Records</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

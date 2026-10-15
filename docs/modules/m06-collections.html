@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M06 · Collections · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m06">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 06</p>
+    <h1>Collections</h1>
+    <p class="lede">Real programs juggle many values at once: a shopping cart, a phone book, the set of users who
+      are online. Python's four built-in collections (list, tuple, dict, and set) cover almost every case, and
+      choosing the right one is one of the most important design decisions you make every day.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m05-functions.html">M05 Functions</a></span></div>
+    <ul class="objectives">
+      <li>Create, index, slice, and modify lists, and know which list operations are fast or slow</li>
+      <li>Use tuples for fixed records, with packing, unpacking, and star-unpacking</li>
+      <li>Store and look up data by key with dicts: create, read, update, delete, iterate, merge</li>
+      <li>Use sets for uniqueness, fast membership tests, and set algebra</li>
+      <li>Write list, dict, and set comprehensions, including conditional and nested ones</li>
+      <li>Sort with <code>key</code> and <code>reverse</code>, and iterate with <code>zip</code> and <code>enumerate</code></li>
+      <li>Explain aliasing, shallow copies, and deep copies, and pick the right one</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="lists">
+    <h2>Lists: ordered and changeable</h2>
+    <p>A <strong>list</strong> is an ordered sequence of items that can grow, shrink, and change in place. Write one
+      with square brackets. Items can be any type, though in practice a list usually holds items of one kind.</p>
+    <pre><code class="language-python">groceries = ["eggs", "milk", "bread"]
+empty = []
+mixed = [1, "two", 3.0, None]     # legal, but usually a sign a tuple or dict fits better</code></pre>
+    <p>Indexing and slicing work exactly as they did for strings in M03: <code>xs[0]</code> is the first item,
+      <code>xs[-1]</code> the last, <code>xs[1:3]</code> a new list with items 1 and 2, <code>xs[::-1]</code> a
+      reversed copy. The difference is that lists are <strong>mutable</strong>: you can assign to an index or a
+      slice.</p>
+    <div class="runnable" data-title="Indexing, slicing, and mutation">
+<textarea>
+nums = [10, 20, 30, 40, 50]
+print(nums[0], nums[-1], nums[1:3], nums[::2])
+
+nums[0] = 11            # replace one item
+nums[1:3] = [21, 31]    # replace a slice
+print(nums)
+
+nums.append(60)         # add to the end
+nums.insert(0, 0)       # add at a position
+nums.extend([70, 80])   # add many
+print(nums)
+
+last = nums.pop()       # remove and return the last item
+first = nums.pop(0)     # remove and return item 0
+nums.remove(31)         # remove the first item equal to 31
+del nums[0]             # delete by index
+print(last, first, nums)
+print(len(nums), 40 in nums, nums.index(40), nums.count(40))
+</textarea>
+    </div>
+    <p>Methods that change a list in place, such as <code>append</code>, <code>sort</code>, and
+      <code>reverse</code>, return <code>None</code>. This is deliberate: it reminds you that no new list was
+      made.</p>
+    <div class="runnable" data-title="Predict: in-place methods return None" data-predict>
+<textarea>
+scores = [3, 1, 2]
+result = scores.sort()
+print(result, scores)
+</textarea>
+    </div>
+    <h3>How fast are list operations?</h3>
+    <p>A list is stored as a contiguous array of references, with some spare capacity at the end. That design makes
+      some operations very fast and others slow. "O(1)" means the time does not depend on the list's length;
+      "O(n)" means it grows in proportion to the length (Part 3 makes this precise).</p>
+    <table class="rubric">
+      <thead><tr><th>Operation</th><th>Cost</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>xs[i]</code>, <code>xs[i] = v</code>, <code>len(xs)</code></td><td>O(1)</td><td>Jump straight to position <code>i</code>.</td></tr>
+        <tr><td><code>xs.append(v)</code>, <code>xs.pop()</code></td><td>O(1) amortized</td><td>Uses spare capacity at the end; occasionally grows.</td></tr>
+        <tr><td><code>xs.insert(0, v)</code>, <code>xs.pop(0)</code></td><td>O(n)</td><td>Every other item must shift by one.</td></tr>
+        <tr><td><code>v in xs</code>, <code>xs.index(v)</code>, <code>xs.remove(v)</code></td><td>O(n)</td><td>Checks items one by one.</td></tr>
+        <tr><td><code>xs.sort()</code></td><td>O(n log n)</td><td>Timsort.</td></tr>
+      </tbody>
+    </table>
+    <p>Watch what <code>append</code> really does: most appends drop into spare space, and once in a while the list
+      allocates a bigger block and copies everything across. Averaged over many appends the cost per append stays
+      constant.</p>
+    <div class="viz" data-viz="dynamic-array"></div>
+    <aside class="callout tip"><p><strong>Remember:</strong> lists are ordered and mutable. Appending and popping at
+      the end is cheap; inserting, removing, or searching near the front is O(n). In-place methods return
+      <code>None</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tuples">
+    <h2>Tuples: fixed records, packing, and unpacking</h2>
+    <p>A <strong>tuple</strong> is an ordered, <strong>immutable</strong> sequence. Once created it cannot change.
+      Use a tuple for a fixed group of related values (a record) where the position means something: a point
+      <code>(x, y)</code>, an RGB colour <code>(255, 128, 0)</code>, a row <code>("Ada", 36, "London")</code>. Use a
+      list for a variable-length collection of similar things.</p>
+    <p>It is the <em>comma</em> that makes a tuple; the parentheses are usually optional. This is called
+      <strong>packing</strong>. The reverse, <strong>unpacking</strong>, assigns each item to its own name.</p>
+    <div class="runnable" data-title="Packing and unpacking">
+<textarea>
+point = 3, 4             # packing: a tuple
+x, y = point             # unpacking
+print(point, x, y)
+
+single = (5,)            # one-item tuple needs a trailing comma
+not_tuple = (5)          # just the int 5 in parentheses
+print(type(single).__name__, type(not_tuple).__name__)
+
+a, b = 1, 2
+a, b = b, a              # swap: pack the right side, then unpack
+print(a, b)
+
+for name, age in [("Ada", 36), ("Grace", 45)]:   # unpacking in a for loop
+    print(f"{name} is {age}")
+</textarea>
+    </div>
+    <h3>Star-unpacking</h3>
+    <p>A starred name collects "everything else" into a list. It is handy for splitting off a head or a tail.</p>
+    <div class="runnable" data-title="Predict: star-unpacking" data-predict>
+<textarea>
+first, *middle, last = [1, 2, 3, 4, 5]
+head, *rest = "abc"
+*_, final = range(10)
+print(first, middle, last, head, rest, final)
+</textarea>
+    </div>
+    <p>Because they are immutable, tuples can be dictionary keys and set members (as long as everything inside is
+      also immutable), while lists cannot. Immutability also signals intent: readers know the record will not
+      change.</p>
+    <aside class="callout note"><p>Immutable does not mean "deeply frozen". A tuple holding a list cannot have the
+      list <em>replaced</em>, but the list itself can still be mutated: <code>t = ([1], 2); t[0].append(9)</code>
+      works. Such a tuple is not hashable.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> the comma makes the tuple. Unpack with
+      <code>a, b = pair</code>; collect extras with <code>*rest</code>. Use tuples for fixed-shape records and as
+      dict keys.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="dicts">
+    <h2>Dictionaries: look things up by key</h2>
+    <p>A <strong>dict</strong> maps <strong>keys</strong> to <strong>values</strong>. Instead of asking for "item
+      number 3", you ask for "the value stored under <code>"Ada"</code>". Looking up, adding, and deleting a key are
+      all O(1) on average, no matter how big the dict grows, because dicts are <em>hash tables</em>: Python computes
+      a number (the hash) from the key and uses it to jump straight to the right slot.</p>
+    <div class="runnable" data-title="Create, read, update, delete">
+<textarea>
+ages = {"Ada": 36, "Grace": 45}
+ages["Linus"] = 28            # create (or overwrite)
+ages["Ada"] += 1              # update
+print(ages["Grace"])          # read; a missing key raises KeyError
+del ages["Grace"]             # delete
+print(ages, len(ages), "Ada" in ages, "Grace" in ages)
+
+print(ages.get("Grace"))           # None instead of KeyError
+print(ages.get("Grace", 0))        # or a default you choose
+removed = ages.pop("Linus")        # remove and return
+print(removed, ages)
+</textarea>
+    </div>
+    <p>Keys must be <strong>hashable</strong>: strings, numbers, booleans, <code>None</code>, and tuples of hashable
+      things. Lists, dicts, and sets cannot be keys. Values can be anything. Since Python 3.7, dicts remember
+      <strong>insertion order</strong>, so iterating gives keys in the order they were added.</p>
+    <div class="viz" data-viz="hash-table" data-config='{"strategy": "python"}'></div>
+    <h3>Iterating</h3>
+    <pre><code class="language-python">for name in ages:                 # keys
+for value in ages.values():       # values
+for name, age in ages.items():    # (key, value) pairs: by far the most common</code></pre>
+    <aside class="callout warn"><p>Do not add or remove keys while looping over a dict; Python raises
+      <code>RuntimeError: dictionary changed size during iteration</code>. Loop over a copy
+      (<code>for k in list(d):</code>) or build a new dict.</p></aside>
+    <h3>Counting and grouping: <code>get</code> and <code>setdefault</code></h3>
+    <p>Two patterns appear constantly. <strong>Counting</strong> uses <code>get</code> with a default of 0.
+      <strong>Grouping</strong> uses <code>setdefault</code>, which returns the existing value for a key or inserts
+      and returns a default.</p>
+    <div class="runnable" data-title="Counting and grouping">
+<textarea>
+words = "the cat sat on the mat the end".split()
+
+counts = {}
+for w in words:
+    counts[w] = counts.get(w, 0) + 1
+print(counts)
+
+by_letter = {}
+for w in words:
+    by_letter.setdefault(w[0], []).append(w)
+print(by_letter)
+</textarea>
+    </div>
+    <h3>Merging</h3>
+    <p>The <code>|</code> operator merges two dicts into a new one; when keys clash, the right-hand side wins.
+      <code>|=</code> (like <code>update</code>) merges in place.</p>
+    <div class="runnable" data-title="Predict: merging dicts" data-predict>
+<textarea>
+defaults = {"theme": "light", "font": 12}
+user = {"font": 14}
+settings = defaults | user
+defaults |= {"lang": "en"}
+print(settings)
+print(defaults)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> dict lookup by key is O(1) on average. Use
+      <code>d.get(k, default)</code> to avoid <code>KeyError</code>, <code>setdefault</code> to group,
+      <code>.items()</code> to loop over pairs, and <code>|</code> to merge (right side wins).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="sets">
+    <h2>Sets: uniqueness and fast membership</h2>
+    <p>A <strong>set</strong> is an unordered collection of <em>unique</em>, hashable items. It is a dict with keys
+      and no values. Write one with braces (<code>{1, 2, 3}</code>), but note that <code>{}</code> is an empty
+      <em>dict</em>; an empty set is <code>set()</code>.</p>
+    <div class="runnable" data-title="Set operations">
+<textarea>
+python_devs = {"ada", "grace", "linus", "guido"}
+rust_devs = {"linus", "graydon", "ada"}
+
+print(python_devs & rust_devs)   # intersection: in both
+print(python_devs | rust_devs)   # union: in either
+print(python_devs - rust_devs)   # difference: in the first only
+print(python_devs ^ rust_devs)   # symmetric difference: in exactly one
+print({"ada"} <= python_devs)    # subset test
+
+tags = ["py", "web", "py", "data", "web"]
+print(set(tags), len(set(tags)))   # remove duplicates (order is not kept)
+seen = set()
+seen.add("x"); seen.add("x"); seen.discard("nope")
+print(seen)
+</textarea>
+    </div>
+    <p>The real superpower is speed. Checking <code>x in some_list</code> scans the list item by item, but
+      <code>x in some_set</code> computes a hash and checks one slot. Try it:</p>
+    <div class="runnable" data-title="Membership speed: list vs set">
+<textarea>
+import timeit
+
+n = 100_000
+as_list = list(range(n))
+as_set = set(as_list)
+target = n - 1    # worst case for the list: the last item
+
+t_list = timeit.timeit(lambda: target in as_list, number=200)
+t_set = timeit.timeit(lambda: target in as_set, number=200)
+print(f"list: {t_list:.4f}s   set: {t_set:.6f}s   set is ~{t_list / t_set:,.0f}x faster")
+</textarea>
+    </div>
+    <p>A <code>frozenset</code> is an immutable set, so it is hashable and can be a dict key or a member of another
+      set.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> reach for a set when you care about "is it there?" or
+      "remove duplicates". Membership is O(1) on average. <code>{}</code> is a dict; use <code>set()</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="comprehensions">
+    <h2>Comprehensions</h2>
+    <p>A <strong>comprehension</strong> builds a new collection from an iterable in one expression. It reads almost
+      like English: "the square of <code>n</code>, for each <code>n</code> in <code>nums</code>, if <code>n</code>
+      is even".</p>
+    <div class="two-col">
+      <div><pre><code class="language-python">squares = []
+for n in nums:
+    if n % 2 == 0:
+        squares.append(n * n)</code></pre></div>
+      <div><pre><code class="language-python">squares = [n * n for n in nums if n % 2 == 0]</code></pre></div>
+    </div>
+    <p>There are list (<code>[...]</code>), set (<code>{...}</code>), and dict (<code>{k: v ...}</code>)
+      comprehensions. Two different uses of <code>if</code> are easy to confuse:</p>
+    <ul>
+      <li><strong>Filter</strong> at the end: <code>[x for x in xs if x &gt; 0]</code> keeps only some items.</li>
+      <li><strong>Choose</strong> in the expression: <code>[x if x &gt; 0 else 0 for x in xs]</code> keeps every item
+        but transforms it with a conditional expression.</li>
+    </ul>
+    <div class="runnable" data-title="List, set, and dict comprehensions">
+<textarea>
+nums = [3, -1, 4, -1, 5, -9, 2, 6]
+
+print([n * n for n in nums])
+print([n for n in nums if n > 0])              # filter
+print([n if n > 0 else 0 for n in nums])       # choose
+print({abs(n) for n in nums})                  # set: duplicates vanish
+
+prices = {"apple": 0.5, "pear": 0.75, "fig": 2.0}
+print({fruit: round(p * 1.1, 2) for fruit, p in prices.items()})     # dict
+print({p: fruit for fruit, p in prices.items()})                      # invert
+print({fruit: p for fruit, p in prices.items() if p < 1})            # filter a dict
+</textarea>
+    </div>
+    <h3>Nested comprehensions</h3>
+    <p>Multiple <code>for</code> clauses run in the same order as nested loops, outermost first.</p>
+    <div class="runnable" data-title="Predict: flatten and build a grid" data-predict>
+<textarea>
+matrix = [[1, 2, 3], [4, 5, 6]]
+flat = [x for row in matrix for x in row]
+grid = [[r * c for c in range(3)] for r in range(1, 3)]
+print(flat)
+print(grid)
+</textarea>
+    </div>
+    <p>Wrapping a comprehension in parentheses instead of brackets makes a <em>generator expression</em>, which
+      produces items one at a time without building a list: <code>sum(n * n for n in range(1_000_000))</code>.
+      You will study these in <a href="m14-iterators.html">M14</a>.</p>
+    <aside class="callout py315">
+      <p><strong>Python 3.15 preview, PEP 798:</strong> unpacking inside comprehensions. <code>[*xs for xs in
+        lists]</code> flattens one level, and <code>{**d for d in dicts}</code> merges many dicts. In 3.14 you write
+        <code>[x for xs in lists for x in xs]</code> instead.</p>
+    </aside>
+    <div class="runnable" data-python="3.15" data-title="Unpacking in comprehensions (3.15)">
+<textarea>
+lists = [[1, 2], [3], [4, 5, 6]]
+print([*xs for xs in lists])          # [1, 2, 3, 4, 5, 6]
+
+layers = [{"a": 1}, {"b": 2}, {"a": 3}]
+print({**d for d in layers})          # {'a': 3, 'b': 2}
+print({*xs for xs in lists})          # a set of all items
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Comprehensions are for building collections. If a comprehension needs more than
+      two <code>for</code> clauses, or you want it only for its side effects (like printing), write a normal loop.
+      Readability wins.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>[expr for x in it if cond]</code>. A trailing
+      <code>if</code> filters; <code>a if c else b</code> inside the expression chooses. Nested <code>for</code>s
+      read left to right like nested loops.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="sorting">
+    <h2>Sorting, <code>zip</code>, and <code>enumerate</code></h2>
+    <p><code>sorted(iterable)</code> returns a <em>new</em> sorted list from any iterable. <code>list.sort()</code>
+      sorts a list <em>in place</em> and returns <code>None</code>. Both accept <code>key=</code> (a function that
+      produces the value to compare) and <code>reverse=True</code>.</p>
+    <div class="runnable" data-title="Sorting with keys">
+<textarea>
+students = [("Ada", 92), ("Linus", 85), ("Grace", 92), ("Guido", 78)]
+
+print(sorted(students, key=lambda s: s[1], reverse=True))
+# Ties: sort by score descending, then name ascending. Negate the number to flip just that part.
+print(sorted(students, key=lambda s: (-s[1], s[0])))
+
+words = ["banana", "Cherry", "apple"]
+print(sorted(words))                    # uppercase sorts before lowercase
+print(sorted(words, key=str.lower))     # case-insensitive
+print(sorted({"b": 2, "a": 3}.items(), key=lambda kv: kv[1]))   # dict items by value
+</textarea>
+    </div>
+    <p>Python's sort is <strong>stable</strong>: items that compare equal keep their original order. That is why
+      sorting by a tuple key, or sorting twice (secondary key first, then primary key), gives predictable results.</p>
+    <h3><code>enumerate</code> and <code>zip</code></h3>
+    <p><code>enumerate(xs, start=0)</code> gives <code>(index, item)</code> pairs, so you never need
+      <code>range(len(xs))</code>. <code>zip(a, b, ...)</code> walks several iterables in step, producing tuples, and
+      stops at the shortest one. Pass <code>strict=True</code> to raise <code>ValueError</code> if the lengths
+      differ, which catches bugs early.</p>
+    <div class="runnable" data-title="enumerate and zip">
+<textarea>
+names = ["Ada", "Grace", "Linus"]
+scores = [92, 88, 85]
+
+for rank, name in enumerate(names, start=1):
+    print(rank, name)
+
+for name, score in zip(names, scores):
+    print(f"{name:6} {score}")
+
+print(dict(zip(names, scores)))       # build a dict from two lists
+pairs = [("a", 1), ("b", 2)]
+letters, numbers = zip(*pairs)        # "unzip"
+print(letters, numbers)
+
+try:
+    list(zip(names, [1, 2], strict=True))
+except ValueError as e:
+    print("ValueError:", e)
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14 adds <code>strict=True</code> to <code>map()</code> as well:
+      <code>map(pow, bases, exps, strict=True)</code> raises <code>ValueError</code> when the iterables have
+      different lengths, matching <code>zip(strict=True)</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>sorted()</code> makes a new list,
+      <code>.sort()</code> works in place. Use tuple keys for multi-level sorts. Use <code>enumerate</code> for
+      indexes and <code>zip(..., strict=True)</code> for parallel sequences.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="copying">
+    <h2>Aliases, shallow copies, and deep copies</h2>
+    <p>Recall from M02 that assignment never copies; it binds another name to the <em>same</em> object. With
+      mutable collections this matters enormously.</p>
+    <ul>
+      <li><strong>Alias:</strong> <code>b = a</code>. Two names, one object. Mutating through either is visible
+        through both.</li>
+      <li><strong>Shallow copy:</strong> <code>b = a.copy()</code>, <code>list(a)</code>, <code>a[:]</code>,
+        <code>dict(a)</code>, <code>copy.copy(a)</code>. A new outer container whose slots refer to the
+        <em>same</em> inner objects.</li>
+      <li><strong>Deep copy:</strong> <code>copy.deepcopy(a)</code>. A new outer container and, recursively, new
+        copies of everything inside.</li>
+    </ul>
+    <p>Step through a shallow copy. The outer lists are different objects, but they share their contents:</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "copy"}'></div>
+    <p>With nested data, a shallow copy shares the inner lists, so changing an inner list shows up in both:</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "nested"}'></div>
+    <p>A deep copy duplicates every level:</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "deepcopy"}'></div>
+    <div class="runnable" data-title="Predict: shallow vs deep" data-predict>
+<textarea>
+import copy
+
+board = [[0, 0], [0, 0]]
+alias = board
+shallow = board.copy()
+deep = copy.deepcopy(board)
+
+board[0][0] = 1        # mutate an inner list
+board.append([9, 9])   # mutate the outer list
+print(alias)
+print(shallow)
+print(deep)
+</textarea>
+    </div>
+    <p>Use the tracer to confirm with object identity tags: <code>alias</code> shares the outer object's tag;
+      <code>shallow</code> has its own outer tag but its rows share tags with <code>board</code>'s rows.</p>
+    <div class="tracer" data-title="Identity under copying">
+<textarea>
+import copy
+board = [[0, 0], [0, 0]]
+alias = board
+shallow = board.copy()
+deep = copy.deepcopy(board)
+board[0][0] = 1
+</textarea>
+    </div>
+    <aside class="callout danger"><p>The classic bug: <code>grid = [[0] * 3] * 3</code> creates <em>one</em> row and
+      three references to it, so <code>grid[0][0] = 1</code> changes every row. Build independent rows with a
+      comprehension: <code>[[0] * 3 for _ in range(3)]</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> assignment aliases; <code>.copy()</code> copies one
+      level; <code>copy.deepcopy</code> copies all levels. Flat lists of immutable items only ever need a shallow
+      copy.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="collections-module">
+    <h2>A preview of the <code>collections</code> module</h2>
+    <p>The standard library's <code>collections</code> module provides specialized containers for jobs you just
+      did by hand. Part 3 studies the data structures behind them.</p>
+    <div class="runnable" data-title="Counter, defaultdict, deque, namedtuple">
+<textarea>
+from collections import Counter, defaultdict, deque, namedtuple
+
+words = "the cat sat on the mat the end".split()
+counts = Counter(words)
+print(counts.most_common(2))           # [('the', 3), ...]
+
+groups = defaultdict(list)             # missing keys start as []
+for w in words:
+    groups[len(w)].append(w)
+print(dict(groups))
+
+recent = deque(maxlen=3)               # fast at both ends; drops old items
+for page in ["home", "about", "blog", "contact"]:
+    recent.append(page)
+print(recent)
+
+Point = namedtuple("Point", "x y")     # a tuple with field names
+p = Point(3, 4)
+print(p.x, p.y, p)
+</textarea>
+    </div>
+    <div class="card-grid">
+      <div class="card"><h4>Choose a list</h4><p>Ordered items you will add to, iterate, or index by position.</p></div>
+      <div class="card"><h4>Choose a tuple</h4><p>A fixed record, or a hashable key made of several values.</p></div>
+      <div class="card"><h4>Choose a dict</h4><p>Look up values by a key, count, or group.</p></div>
+      <div class="card"><h4>Choose a set</h4><p>Uniqueness, membership tests, or set algebra.</p></div>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>Counter</code> counts, <code>defaultdict</code>
+      groups without <code>setdefault</code>, <code>deque</code> is a fast double-ended queue, and
+      <code>namedtuple</code> gives tuple fields names.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m06-e1" data-title="Remove duplicates, keep order">
+      <div class="exercise-prompt">
+        <p>Write <code>dedupe(items)</code> that returns a new list with duplicates removed, keeping the
+          <em>first</em> occurrence of each item in its original order. Do not modify <code>items</code>.</p>
+      </div>
+<textarea class="starter">
+def dedupe(items):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_order_kept():
+    assert dedupe([3, 1, 3, 2, 1]) == [3, 1, 2], "keep the first of each, in order"
+
+def test_strings_and_empty():
+    assert dedupe(list("banana")) == ["b", "a", "n"], "works for strings"
+    assert dedupe([]) == [], "empty in, empty out"
+
+def test_not_mutated():
+    data = [1, 1, 2]
+    dedupe(data)
+    assert data == [1, 1, 2], "the input list must not change"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a <code>set</code> of items already seen, or use the fact
+        that dicts keep insertion order: <code>dict.fromkeys(items)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def dedupe(items):
+    seen = set()
+    result = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m06-e2" data-title="Word frequencies">
+      <div class="exercise-prompt">
+        <p>Write <code>word_counts(text)</code> returning a dict of lower-case word → count. Split on whitespace and
+          strip the punctuation characters <code>.,!?;:"'</code> from both ends of each word. Ignore words that become
+          empty.</p>
+      </div>
+<textarea class="starter">
+def word_counts(text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    assert word_counts("the cat the hat") == {"the": 2, "cat": 1, "hat": 1}, "count each word"
+
+def test_case_and_punctuation():
+    got = word_counts("Hello, hello! HELLO? -- 'World'.")
+    assert got == {"hello": 3, "--": 1, "world": 1}, f"got {got}; lower-case and strip .,!?;:\"' only"
+
+def test_empty():
+    assert word_counts("  ... ") == {}, "punctuation-only words are ignored"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>word.strip('.,!?;:"\'').lower()</code>, then
+        <code>counts[w] = counts.get(w, 0) + 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def word_counts(text):
+    counts = {}
+    for raw in text.split():
+        word = raw.strip(".,!?;:\"'").lower()
+        if word:
+            counts[word] = counts.get(word, 0) + 1
+    return counts</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m06-e3" data-title="Invert a dictionary">
+      <div class="exercise-prompt">
+        <p>Write <code>invert(d)</code>. Several keys may share a value, so return a dict mapping each value to a
+          <em>sorted list</em> of the keys that had it. Example: <code>{"a": 1, "b": 2, "c": 1}</code> →
+          <code>{1: ["a", "c"], 2: ["b"]}</code>.</p>
+      </div>
+<textarea class="starter">
+def invert(d):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_invert():
+    assert invert({"a": 1, "b": 2, "c": 1}) == {1: ["a", "c"], 2: ["b"]}, "group keys by value"
+
+def test_sorted_lists():
+    assert invert({"z": 0, "m": 0, "a": 0}) == {0: ["a", "m", "z"]}, "keys must be sorted"
+
+def test_empty():
+    assert invert({}) == {}, "empty dict inverts to empty dict"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Group with <code>setdefault(value, []).append(key)</code>, then
+        sort each list.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def invert(d):
+    result = {}
+    for key, value in d.items():
+        result.setdefault(value, []).append(key)
+    return {value: sorted(keys) for value, keys in result.items()}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m06-e4" data-title="Leaderboard">
+      <div class="exercise-prompt">
+        <p>Write <code>top_n(scores, n)</code> where <code>scores</code> maps name → score. Return a list of the
+          top <code>n</code> <code>(name, score)</code> tuples, highest score first; ties are broken by name in
+          alphabetical order.</p>
+      </div>
+<textarea class="starter">
+def top_n(scores, n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_top():
+    scores = {"ada": 90, "bob": 75, "cy": 90, "dee": 99}
+    assert top_n(scores, 3) == [("dee", 99), ("ada", 90), ("cy", 90)], "highest first; ties alphabetical"
+
+def test_n_larger_than_len():
+    assert top_n({"a": 1}, 5) == [("a", 1)], "n larger than the dict returns everything"
+
+def test_zero():
+    assert top_n({"a": 1}, 0) == [], "n=0 returns an empty list"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:n]</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def top_n(scores, n):
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ranked[:n]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m06-e5" data-title="Transpose a matrix">
+      <div class="exercise-prompt">
+        <p>Write <code>transpose(matrix)</code> that turns rows into columns using a comprehension or
+          <code>zip</code>. The result must be a list of <em>lists</em>. All rows have the same length; an empty
+          matrix gives <code>[]</code>.</p>
+      </div>
+<textarea class="starter">
+def transpose(matrix):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_square():
+    assert transpose([[1, 2], [3, 4]]) == [[1, 3], [2, 4]], "2x2 transpose"
+
+def test_rectangular():
+    assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]], "2x3 becomes 3x2"
+
+def test_lists_not_tuples():
+    assert all(type(row) is list for row in transpose([[1, 2]])), "rows must be lists"
+
+def test_empty():
+    assert transpose([]) == [], "empty matrix"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>zip(*matrix)</code> yields the columns as tuples.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def transpose(matrix):
+    return [list(column) for column in zip(*matrix)]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m06-e6" data-title="Merge settings without side effects">
+      <div class="exercise-prompt">
+        <p>Write <code>merge_settings(defaults, overrides)</code> that returns a <em>new</em> dict. Nested dicts are
+          merged recursively; any other value in <code>overrides</code> replaces the default. Neither input may be
+          changed, and the result must not share nested dicts with <code>defaults</code>.</p>
+      </div>
+<textarea class="starter">
+def merge_settings(defaults, overrides):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import copy as _copy
+
+DEFAULTS = {"theme": "light", "editor": {"font": 12, "tabs": 4}, "plugins": ["git"]}
+
+def test_merge():
+    got = merge_settings(DEFAULTS, {"editor": {"font": 14}, "lang": "en"})
+    assert got == {"theme": "light", "editor": {"font": 14, "tabs": 4}, "plugins": ["git"], "lang": "en"}, f"got {got}"
+
+def test_inputs_unchanged():
+    d, o = _copy.deepcopy(DEFAULTS), {"editor": {"font": 20}}
+    merge_settings(d, o)
+    assert d == DEFAULTS and o == {"editor": {"font": 20}}, "inputs must not be modified"
+
+def test_no_shared_nested():
+    d = _copy.deepcopy(DEFAULTS)
+    got = merge_settings(d, {})
+    got["editor"]["font"] = 99
+    got["plugins"].append("lint")
+    assert d["editor"]["font"] == 12 and d["plugins"] == ["git"], "result must not share nested objects with defaults"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start from <code>copy.deepcopy(defaults)</code>. For each override,
+        recurse when both sides are dicts; otherwise assign a deep copy of the override value.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import copy
+
+def merge_settings(defaults, overrides):
+    result = copy.deepcopy(defaults)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_settings(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an in-memory contact book</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">contacts.py</span></div>
+      <div class="widget-body">
+        <p>Build a contact book stored entirely in memory as a dict mapping a lower-cased name to a contact record
+          (itself a dict with <code>name</code>, <code>phone</code>, <code>email</code>, and a set of
+          <code>tags</code>). Write it as functions that take the book as a parameter and return results, plus a
+          small menu loop in <code>main()</code>.</p>
+        <pre data-label="Terminal"><code class="language-bash">mkdir contacts &amp;&amp; cd contacts
+pixi init
+pixi add python=3.14
+pixi run python contacts.py</code></pre>
+        <p><strong>Functions:</strong> <code>add_contact(book, name, phone, email, tags=None)</code>,
+          <code>find(book, text)</code> (case-insensitive substring of name or email, results sorted by name),
+          <code>by_tag(book, tag)</code>, <code>remove(book, name)</code>, <code>all_tags(book)</code> (a sorted
+          list of every tag used), and <code>export_rows(book)</code> returning a list of tuples ready for a CSV
+          file in M09.</p>
+        <ul class="checklist" data-id="m06-mini">
+          <li>The book is a dict keyed by lower-cased name; adding an existing name raises <code>ValueError</code></li>
+          <li>Tags are stored as a <code>set</code>; no mutable default arguments</li>
+          <li><code>find</code> uses a comprehension and returns results sorted by name</li>
+          <li><code>all_tags</code> uses set union across all contacts</li>
+          <li>Returned records are copies, so callers cannot accidentally edit the book</li>
+          <li><code>main()</code> offers add / find / tag / remove / list / quit using <code>match</code> from M04</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> support several phone numbers per contact (a list of
+          <code>(label, number)</code> tuples); add <code>merge_books(a, b)</code> that combines two books without
+          changing either; add an undo command using a list of deep-copied snapshots.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m06-quiz">
+      <script type="application/json">
+      {"title": "Collections quiz", "passScore": 0.7, "questions": [
+        {"type": "output", "prompt": "What does this print?", "code": "xs = [1, 2, 3, 4, 5]\nprint(xs[1:4], xs[::-2])", "answer": "[2, 3, 4] [5, 3, 1]",
+         "explanation": "<p>A slice stops before its end index. A step of -2 walks backwards from the end, taking every second item.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "xs = [3, 1, 2]\nys = xs.sort()\nprint(ys)", "answer": "None",
+         "explanation": "<p>In-place methods such as <code>sort</code> return <code>None</code>. Use <code>sorted(xs)</code> for a new list.</p>"},
+        {"type": "single", "prompt": "Which list operation is O(n) rather than O(1)?", "options": ["<code>xs.append(v)</code>", "<code>xs[-1]</code>", "<code>xs.insert(0, v)</code>", "<code>len(xs)</code>"], "answer": 2,
+         "explanation": "<p>Inserting at the front shifts every existing item one place to the right.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "a, *b, c = range(5)\nprint(a, b, c)", "answer": "0 [1, 2, 3] 4",
+         "explanation": "<p>The starred name collects the middle items into a list.</p>"},
+        {"type": "single", "prompt": "What is <code>type((5))</code>?", "options": ["tuple", "int", "list", "SyntaxError"], "answer": 1,
+         "explanation": "<p>Parentheses alone just group. A one-item tuple needs a comma: <code>(5,)</code>.</p>"},
+        {"type": "multi", "prompt": "Which can be dictionary keys?", "options": ["<code>\"name\"</code>", "<code>(1, 2)</code>", "<code>[1, 2]</code>", "<code>frozenset({1})</code>", "<code>{\"a\": 1}</code>"], "answer": [0, 1, 3],
+         "explanation": "<p>Keys must be hashable. Strings, tuples of hashables, and frozensets are; lists and dicts are mutable and unhashable.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "a = {\"x\": 1, \"y\": 2}\nb = {\"y\": 20, \"z\": 30}\nprint(a | b)", "answer": "{'x': 1, 'y': 20, 'z': 30}",
+         "explanation": "<p>Merging keeps insertion order, and the right-hand dict wins on clashes.</p>"},
+        {"type": "single", "prompt": "What does <code>d.get(\"missing\")</code> return when the key is absent?", "options": ["Raises KeyError", "<code>None</code>", "<code>0</code>", "<code>False</code>"], "answer": 1,
+         "explanation": "<p><code>get</code> returns <code>None</code> (or the default you pass) instead of raising.</p>"},
+        {"type": "text", "prompt": "What expression creates an empty set? (<code>{}</code> is a dict.)", "answer": ["set()"],
+         "explanation": "<p><code>set()</code> is the only way; braces alone create an empty dict.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "print(sorted({1, 2, 3} ^ {2, 3, 4}))", "answer": "[1, 4]",
+         "explanation": "<p>Symmetric difference keeps items in exactly one of the sets.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "print([x * 2 for x in range(6) if x % 3 == 0])", "answer": "[0, 6]",
+         "explanation": "<p>Only 0 and 3 pass the filter; each is doubled.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "grid = [[0] * 2] * 2\ngrid[0][0] = 1\nprint(grid)", "answer": "[[1, 0], [1, 0]]",
+         "explanation": "<p>Multiplying the outer list repeats the <em>same</em> inner list reference. Use <code>[[0] * 2 for _ in range(2)]</code>.</p>"},
+        {"type": "single", "prompt": "After <code>b = a.copy()</code> on a list of lists, what does <code>b[0].append(9)</code> affect?", "options": ["Only <code>b</code>", "Both <code>a</code> and <code>b</code>, because the inner lists are shared", "Neither", "It raises an error"], "answer": 1,
+         "explanation": "<p>A shallow copy creates a new outer list whose items refer to the same inner lists. Use <code>copy.deepcopy</code> for independent inner lists.</p>"},
+        {"type": "multi", "prompt": "Which statements about <code>zip</code> are true?", "options": ["It stops at the shortest iterable by default", "<code>strict=True</code> raises if lengths differ", "It returns a list", "<code>zip(*pairs)</code> can unzip a list of pairs"], "answer": [0, 1, 3],
+         "explanation": "<p><code>zip</code> returns a lazy iterator, not a list. The other three statements are true.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Lists: ordered, mutable, cheap at the end, O(n) at the front and for searching.</li>
+      <li>Tuples: immutable records; packing with commas, unpacking with names, <code>*rest</code> for the remainder.</li>
+      <li>Dicts: O(1) average lookup by hashable key; <code>get</code>, <code>setdefault</code>, <code>items()</code>, <code>|</code>.</li>
+      <li>Sets: unique items, O(1) membership, union/intersection/difference.</li>
+      <li>Comprehensions build lists, sets, and dicts; trailing <code>if</code> filters, <code>a if c else b</code> chooses.</li>
+      <li><code>sorted(key=..., reverse=...)</code> is stable; use tuple keys for multi-level sorts; <code>zip</code>/<code>enumerate</code> replace index juggling.</li>
+      <li>Assignment aliases; <code>.copy()</code> is shallow; <code>copy.deepcopy</code> copies every level.</li>
+    </ul>
+    <div class="flashcards" data-title="Collections">
+      <script type="application/json">
+      [{"front": "list vs tuple", "back": "List: mutable, variable length. Tuple: immutable fixed record; hashable if its items are."},
+       {"front": "What makes a tuple?", "back": "The comma: <code>t = 1, 2</code>. One item: <code>(5,)</code>."},
+       {"front": "Cost of <code>x in list</code> vs <code>x in set</code>", "back": "O(n) scan vs O(1) average hash lookup."},
+       {"front": "Count with a dict", "back": "<code>d[k] = d.get(k, 0) + 1</code> or <code>collections.Counter</code>."},
+       {"front": "Group with a dict", "back": "<code>d.setdefault(k, []).append(v)</code> or <code>defaultdict(list)</code>."},
+       {"front": "<code>a | b</code> for dicts", "back": "A new merged dict; keys from <code>b</code> win."},
+       {"front": "Empty set", "back": "<code>set()</code>; <code>{}</code> is an empty dict."},
+       {"front": "Filter vs choose in a comprehension", "back": "<code>[x for x in xs if c]</code> filters; <code>[a if c else b for x in xs]</code> chooses."},
+       {"front": "<code>sorted</code> vs <code>list.sort</code>", "back": "<code>sorted</code> returns a new list from any iterable; <code>.sort()</code> sorts in place and returns None."},
+       {"front": "Shallow vs deep copy", "back": "Shallow: new outer container, shared inner objects. Deep: everything copied recursively."},
+       {"front": "<code>zip(strict=True)</code>", "back": "Raises ValueError if the iterables have different lengths."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/datastructures.html">Python tutorial: Data structures</a></li>
+      <li><a href="https://docs.python.org/3.14/library/stdtypes.html#sequence-types-list-tuple-range">Library reference: Sequence types</a> and <a href="https://docs.python.org/3.14/library/stdtypes.html#mapping-types-dict">Mapping types</a></li>
+      <li><a href="https://docs.python.org/3.14/howto/sorting.html">Sorting HOW TO</a></li>
+      <li><a href="https://docs.python.org/3.14/library/copy.html">copy: shallow and deep copy operations</a></li>
+      <li><a href="https://docs.python.org/3.14/library/collections.html">collections: container datatypes</a></li>
+      <li><a href="https://wiki.python.org/moin/TimeComplexity">Python wiki: Time complexity of built-in operations</a></li>
+      <li>Next: <a href="m07-exceptions.html">M07 Errors &amp; Exceptions</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

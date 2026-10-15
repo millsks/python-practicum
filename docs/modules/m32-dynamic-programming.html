@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M32 · Dynamic Programming · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m32">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 32</p>
+    <h1>Dynamic Programming</h1>
+    <p class="lede">Dynamic programming (DP) turns exponential brute force into polynomial time by solving each
+      subproblem once and reusing the answer. It powers spell checkers, <code>diff</code>, DNA alignment, route
+      planning, and budget optimizers, and it is the single most valuable technique for algorithmic interviews.</p>
+    <div class="lesson-meta"><span>⏱ ~3.5 hours</span><span>Prerequisites:
+      <a href="m28-recursion.html">M28 Recursion</a>, <a href="m30-searching.html">M30 Searching</a></span></div>
+    <ul class="objectives">
+      <li>Recognize a DP problem by its two signatures: optimal substructure and overlapping subproblems</li>
+      <li>Write the same solution top-down with <code>functools.cache</code> and bottom-up with a table</li>
+      <li>Design a DP state with a five-step recipe and state its time and space complexity</li>
+      <li>Solve the classics: stairs, coin change, 0/1 knapsack, LCS, edit distance, LIS, grid paths, word break</li>
+      <li>Shrink memory with rolling arrays and know when that breaks reconstruction</li>
+      <li>Reconstruct the actual solution (which items, which edits) from a filled table</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="recognizing-dp">
+    <h2>Recognizing a DP problem</h2>
+    <p>Recall Fibonacci from <a href="m28-recursion.html">M28</a>: <code>fib(n) = fib(n-1) + fib(n-2)</code>. The
+      direct recursive version is beautiful and hopeless: <code>fib(40)</code> makes over 300 million calls. The reason
+      is visible in the call tree below: <code>fib(3)</code> is computed again and again, in every branch that needs
+      it. Turn on memoization in the visualizer and watch the tree collapse into a single chain.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 6, "memo": false}'></div>
+    <p>A problem is a good fit for DP when it has both of these properties:</p>
+    <ul>
+      <li><strong>Optimal substructure:</strong> an optimal answer to the whole problem is built from optimal answers
+        to smaller subproblems. The cheapest way to reach step 10 ends with the cheapest way to reach step 9 or 8,
+        plus one last move.</li>
+      <li><strong>Overlapping subproblems:</strong> the same subproblems recur many times. Merge sort has optimal
+        substructure but its halves never overlap, so it is divide and conquer, not DP. Fibonacci's subproblems overlap
+        massively.</li>
+    </ul>
+    <p>Signals in a problem statement that suggest DP: "count the number of ways", "minimum/maximum cost", "is it
+      possible to", "longest/shortest subsequence", choices made in sequence where an early choice limits later
+      ones, and inputs small enough (n ≤ a few thousand, capacity ≤ 10<sup>5</sup>) that an O(n²) or O(n·W) table fits.</p>
+    <div class="runnable" data-title="Count the calls">
+<textarea>
+calls = 0
+
+def fib(n):
+    global calls
+    calls += 1
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+for n in (10, 20, 25):
+    calls = 0
+    value = fib(n)
+    print(f"fib({n}) = {value:>6}  took {calls:>7} calls")
+</textarea>
+    </div>
+    <aside class="callout think"><p>The number of calls for <code>fib(n)</code> itself grows like the Fibonacci
+      numbers, about 1.618<sup>n</sup>. How many <em>distinct</em> subproblems are there? Only n + 1. DP's whole job is
+      to pay for each distinct subproblem once.</p></aside>
+    <p><strong>Remember:</strong> exponential recursion plus repeated subproblems is the fingerprint of DP. Count the
+      distinct subproblems and the work per subproblem; their product is the DP's running time.</p>
+  </section>
+
+  <section class="lesson-section" id="memo-vs-tabulation">
+    <h2>Top-down memoization vs bottom-up tabulation</h2>
+    <p>There are two ways to make each subproblem run once.</p>
+    <p><strong>Top-down (memoization)</strong> keeps the recursive code and caches results. In Python that is one
+      decorator: <code>functools.cache</code> stores every result in a dict keyed by the arguments (which must therefore
+      be hashable). <code>functools.lru_cache(maxsize=N)</code> does the same with a size bound.</p>
+    <div class="runnable" data-title="Memoized Fibonacci">
+<textarea>
+from functools import cache
+
+@cache
+def fib(n: int) -> int:
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+print(fib(90))
+print(fib.cache_info())
+</textarea>
+    </div>
+    <p><strong>Bottom-up (tabulation)</strong> fills a table from the smallest subproblems upward, in an order that
+      guarantees every dependency is ready before it is needed. No recursion, no cache lookups, no recursion limit.</p>
+    <div class="tracer" data-title="Watch a table fill">
+<textarea>
+def fib_table(n):
+    table = [0] * (n + 1)
+    if n > 0:
+        table[1] = 1
+    for i in range(2, n + 1):
+        table[i] = table[i - 1] + table[i - 2]
+    return table[n]
+
+answer = fib_table(6)
+</textarea>
+    </div>
+    <table>
+      <thead><tr><th></th><th>Top-down (<code>@cache</code>)</th><th>Bottom-up (table)</th></tr></thead>
+      <tbody>
+        <tr><td>Code</td><td>closest to the recurrence; easy to write first</td><td>needs an explicit evaluation order</td></tr>
+        <tr><td>Work done</td><td>only the subproblems actually reached</td><td>every cell, needed or not</td></tr>
+        <tr><td>Overhead</td><td>function calls and dict lookups</td><td>tight loops over lists; usually 2–10× faster</td></tr>
+        <tr><td>Limits</td><td>recursion depth (default limit is about 1000 frames)</td><td>none beyond memory</td></tr>
+        <tr><td>Space tricks</td><td>hard</td><td>rolling arrays are easy</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout warn"><p><code>@cache</code> on a method caches <code>self</code> too, keeping objects alive
+      forever, and a cached function's arguments must be hashable: pass tuples, not lists. For deep recursions
+      (n = 10,000) prefer tabulation over raising <code>sys.setrecursionlimit</code>, which risks crashing the
+      interpreter.</p></aside>
+    <aside class="callout pro"><p>A professional workflow: write the top-down version first because it is closest to your
+      reasoning, test it on small inputs, then convert to bottom-up if you need speed, less memory, or no recursion
+      limit. Keep the top-down version as a test oracle.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="state-design">
+    <h2>Designing the state: a five-step recipe</h2>
+    <p>The hard part of DP is never the loop. It is deciding <em>what a subproblem is</em>. Use this recipe on every
+      problem, and write each step down before coding.</p>
+    <ol>
+      <li><strong>Define the state in words.</strong> "<code>dp[i]</code> = the minimum cost to stand on step
+        <code>i</code>." If you cannot say it in one sentence, the state is wrong. The state must capture
+        <em>everything about the past that affects the future</em>, and nothing more.</li>
+      <li><strong>Write the recurrence</strong> by considering the <em>last decision</em>. To stand on step
+        <code>i</code>, the last move came from <code>i-1</code> or <code>i-2</code>:
+        <code>dp[i] = min(dp[i-1], dp[i-2]) + cost[i]</code>.</li>
+      <li><strong>Base cases:</strong> the smallest states that the recurrence cannot reduce:
+        <code>dp[0] = cost[0]</code>, <code>dp[1] = cost[1]</code>.</li>
+      <li><strong>Evaluation order:</strong> every state must be computed after the states it depends on. Here,
+        increasing <code>i</code>.</li>
+      <li><strong>Where is the answer?</strong> Often <code>dp[n]</code>, sometimes <code>max(dp)</code>, sometimes
+        <code>min(dp[n-1], dp[n-2])</code>. Then ask: do I need the solution itself, not just its value? If so, plan
+        for reconstruction.</li>
+    </ol>
+    <p>The complexity falls out of the state: <em>(number of states) × (work per state)</em>. Climbing stairs has
+      n states and O(1) work each: O(n) time, O(n) space (O(1) with rolling variables).</p>
+    <div class="runnable" data-title="Climbing stairs: count the ways">
+<textarea>
+def ways_to_climb(n: int, steps=(1, 2)) -> int:
+    """dp[i] = number of distinct step sequences that land exactly on stair i."""
+    dp = [0] * (n + 1)
+    dp[0] = 1                       # one way to stand at the bottom: do nothing
+    for i in range(1, n + 1):
+        dp[i] = sum(dp[i - s] for s in steps if s <= i)
+    return dp[n]
+
+print([ways_to_climb(n) for n in range(1, 11)])   # Fibonacci again!
+print(ways_to_climb(10, steps=(1, 2, 3)))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: what does a wrong state cost?" data-predict>
+<textarea>
+from functools import cache
+
+@cache
+def paths(i, visited):
+    return 1 if i == 0 else paths(i - 1, visited | {i})
+
+# visited is a frozenset: legal but useless state that makes every call unique
+print(paths(5, frozenset()), paths.cache_info().currsize)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Common mistake: putting information into the state that the future does not need
+      (like the full path so far). Every extra dimension multiplies the number of states. If two different histories
+      lead to the same future possibilities, they must map to the <em>same</em> state.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="coin-change">
+    <h2>Coin change: minimum coins and number of ways</h2>
+    <p>Given coin denominations and an amount, two classic questions share one table shape.</p>
+    <p><strong>Minimum coins.</strong> State: <code>dp[a]</code> = fewest coins that sum to <code>a</code>. Last
+      decision: which coin was added last? <code>dp[a] = 1 + min(dp[a - c] for c in coins if c &lt;= a)</code>, with
+      <code>dp[0] = 0</code> and infinity meaning "impossible". O(amount × coins) time, O(amount) space.</p>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "coin-change", "coins": [1, 3, 4], "amount": 6}'></div>
+    <div class="runnable" data-title="Minimum coins, with reconstruction">
+<textarea>
+import math
+
+def min_coins(coins: list[int], amount: int) -> tuple[int, list[int]]:
+    dp = [0] + [math.inf] * amount
+    last = [0] * (amount + 1)                 # which coin achieved dp[a]
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c <= a and dp[a - c] + 1 < dp[a]:
+                dp[a], last[a] = dp[a - c] + 1, c
+    if dp[amount] == math.inf:
+        return -1, []
+    used, a = [], amount
+    while a:
+        used.append(last[a])
+        a -= last[a]
+    return dp[amount], used
+
+print(min_coins([1, 3, 4], 6))     # greedy would take 4 + 1 + 1
+print(min_coins([2], 3))
+</textarea>
+    </div>
+    <p><strong>Number of ways.</strong> State: <code>ways[a]</code> = number of multisets of coins summing to
+      <code>a</code>. Here the loop order matters enormously. Put coins in the <em>outer</em> loop and each combination
+      is counted once, because coins are introduced in a fixed order. Put amounts outside and you count ordered
+      sequences (1+2 and 2+1 separately).</p>
+    <div class="runnable" data-title="Predict: combinations vs permutations" data-predict>
+<textarea>
+def count(coins, amount, coins_outer):
+    ways = [1] + [0] * amount
+    if coins_outer:
+        for c in coins:
+            for a in range(c, amount + 1):
+                ways[a] += ways[a - c]
+    else:
+        for a in range(1, amount + 1):
+            for c in coins:
+                if c <= a:
+                    ways[a] += ways[a - c]
+    return ways[amount]
+
+print(count([1, 2, 5], 5, True), count([1, 2, 5], 5, False))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> the loop nesting <em>is</em> part of the state definition. "Ways using only the first
+      k coin types" is a different subproblem from "ways ending in any coin".</p>
+  </section>
+
+  <section class="lesson-section" id="knapsack">
+    <h2>0/1 knapsack</h2>
+    <p>You have items with weights and values and a bag of capacity W. Each item is taken or not (0/1). Brute force
+      tries 2<sup>n</sup> subsets. DP state: <code>best[i][w]</code> = the best value using only the first
+      <code>i</code> items with capacity <code>w</code>. Last decision: was item <code>i</code> taken?</p>
+    <pre><code class="language-python">best[i][w] = max(best[i-1][w],                         # skip item i
+                 best[i-1][w - weight[i]] + value[i])  # take it (only if weight[i] &lt;= w)</code></pre>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "knapsack", "items": [[1, 1], [3, 4], [4, 5], [5, 7]], "capacity": 7}'></div>
+    <p><strong>Why it is correct (optimal substructure):</strong> take any optimal packing of the first i items with
+      capacity w. If it skips item i, it is an optimal packing of the first i−1 items with capacity w (otherwise a
+      better one would improve it). If it takes item i, the rest is an optimal packing of i−1 items with capacity
+      w − weight[i]. The max over both cases is therefore optimal.</p>
+    <p>Time and space: O(n·W). This is <em>pseudo-polynomial</em>: polynomial in the numeric value W, but W can be
+      exponential in the number of digits used to write it. Knapsack is NP-hard in general; DP wins when W is modest.</p>
+    <div class="runnable" data-title="Knapsack with reconstruction">
+<textarea>
+def knapsack(items: list[tuple[int, int]], capacity: int) -> tuple[int, list[int]]:
+    n = len(items)
+    best = [[0] * (capacity + 1) for _ in range(n + 1)]
+    for i, (wt, val) in enumerate(items, start=1):
+        for w in range(capacity + 1):
+            best[i][w] = best[i - 1][w]
+            if wt <= w:
+                best[i][w] = max(best[i][w], best[i - 1][w - wt] + val)
+    chosen, w = [], capacity
+    for i in range(n, 0, -1):                 # walk back: did item i change the answer?
+        if best[i][w] != best[i - 1][w]:
+            chosen.append(i - 1)
+            w -= items[i - 1][0]
+    return best[n][capacity], chosen[::-1]
+
+print(knapsack([(1, 1), (3, 4), (4, 5), (5, 7)], 7))
+</textarea>
+    </div>
+    <p><strong>Rolling array.</strong> Row i only reads row i−1, so one 1-D list suffices if you iterate
+      <code>w</code> <em>downwards</em>: then <code>dp[w - wt]</code> still holds the previous row's value.</p>
+    <div class="runnable" data-title="Predict: what changes if w goes upward?" data-predict>
+<textarea>
+def knap_1d(items, capacity, downward=True):
+    dp = [0] * (capacity + 1)
+    for wt, val in items:
+        ws = range(capacity, wt - 1, -1) if downward else range(wt, capacity + 1)
+        for w in ws:
+            dp[w] = max(dp[w], dp[w - wt] + val)
+    return dp[capacity]
+
+items = [(2, 3)]
+print(knap_1d(items, 6, downward=True), knap_1d(items, 6, downward=False))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Iterating upward lets an item be reused in the same row, which is exactly the
+      <em>unbounded</em> knapsack. One loop direction separates two different problems. The price of the 1-D array is
+      that the full table, and therefore reconstruction, is gone.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="lcs-edit-distance">
+    <h2>Two-string DP: LCS and edit distance</h2>
+    <p>When the input is two sequences, the state is usually a pair of prefix lengths: <code>dp[i][j]</code> describes
+      <code>a[:i]</code> versus <code>b[:j]</code>. The last decision looks at the last characters.</p>
+    <h3>Longest common subsequence (LCS)</h3>
+    <p>A subsequence keeps order but may skip elements ("ACE" is a subsequence of "ABCDE"). LCS is the backbone of
+      <code>diff</code> and of version control merges.</p>
+    <pre><code class="language-python">if a[i-1] == b[j-1]: dp[i][j] = dp[i-1][j-1] + 1          # extend a common subsequence
+else:                dp[i][j] = max(dp[i-1][j], dp[i][j-1])  # drop the last char of a or of b</code></pre>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "lcs", "a": "ABCBDAB", "b": "BDCABA"}'></div>
+    <div class="runnable" data-title="LCS length and one LCS">
+<textarea>
+def lcs(a: str, b: str) -> str:
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    out, i, j = [], m, n                      # trace back from the bottom-right corner
+    while i and j:
+        if a[i - 1] == b[j - 1]:
+            out.append(a[i - 1]); i -= 1; j -= 1
+        elif dp[i - 1][j] >= dp[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+    return "".join(reversed(out))
+
+print(lcs("ABCBDAB", "BDCABA"), len(lcs("ABCBDAB", "BDCABA")))
+</textarea>
+    </div>
+    <h3>Edit distance (Levenshtein)</h3>
+    <p>The minimum number of single-character inserts, deletes, and substitutions turning <code>a</code> into
+      <code>b</code>. It drives "did you mean" suggestions. Base cases: turning a prefix of length i into the empty
+      string costs i deletions, so <code>dp[i][0] = i</code> and <code>dp[0][j] = j</code>.</p>
+    <pre><code class="language-python">dp[i][j] = dp[i-1][j-1]                  if a[i-1] == b[j-1]
+         = 1 + min(dp[i-1][j],           # delete a[i-1]
+                   dp[i][j-1],           # insert b[j-1]
+                   dp[i-1][j-1])         # substitute</code></pre>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "edit-distance", "a": "kitten", "b": "sitting"}'></div>
+    <div class="runnable" data-title="Edit distance with two rolling rows">
+<textarea>
+def edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))           # row for the empty prefix of a
+    for i, ca in enumerate(a, start=1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            if ca == cb:
+                cur[j] = prev[j - 1]
+            else:
+                cur[j] = 1 + min(prev[j], cur[j - 1], prev[j - 1])
+        prev = cur
+    return prev[-1]
+
+for pair in [("kitten", "sitting"), ("flaw", "lawn"), ("", "abc"), ("same", "same")]:
+    print(pair, edit_distance(*pair))
+</textarea>
+    </div>
+    <p>Both run in O(m·n) time. LCS and edit distance need O(m·n) space if you want to reconstruct; with two rolling
+      rows the value alone needs O(min(m, n)).</p>
+  </section>
+
+  <section class="lesson-section" id="lis">
+    <h2>Longest increasing subsequence: O(n²) and O(n log n)</h2>
+    <p>Find the length of the longest strictly increasing subsequence of a list. The classic state:
+      <code>dp[i]</code> = length of the longest increasing subsequence <em>ending at index i</em>. Ending at a fixed
+      position is a powerful trick: it tells the recurrence what the last element is.</p>
+    <pre><code class="language-python">dp[i] = 1 + max((dp[j] for j in range(i) if a[j] &lt; a[i]), default=0)
+answer = max(dp)        # the answer can end anywhere</code></pre>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "lis", "array": [10, 9, 2, 5, 3, 7, 101, 18]}'></div>
+    <p>That is O(n²). A cleverer state gets O(n log n): <code>tails[k]</code> = the <em>smallest possible tail</em> of
+      an increasing subsequence of length k + 1 seen so far. <code>tails</code> is always sorted, so for each new value
+      binary search (<code>bisect_left</code>, from <a href="m30-searching.html">M30</a>) finds the first tail that is
+      ≥ it and replaces it (a smaller tail is never worse), or appends if the value beats every tail.</p>
+    <div class="runnable" data-title="Patience sorting with bisect">
+<textarea>
+from bisect import bisect_left
+
+def lis_length(a: list[int]) -> int:
+    tails: list[int] = []
+    for x in a:
+        k = bisect_left(tails, x)
+        if k == len(tails):
+            tails.append(x)
+        else:
+            tails[k] = x
+        print(f"{x:>4} -> tails = {tails}")
+    return len(tails)
+
+print("LIS length:", lis_length([10, 9, 2, 5, 3, 7, 101, 18]))
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>tails</code> is <em>not</em> itself an increasing subsequence of the input; it
+      only has the right length. To reconstruct, store for each element the index of its predecessor when it was
+      placed. Use <code>bisect_right</code> instead for non-decreasing subsequences.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="grids-word-break">
+    <h2>Grid paths and word break</h2>
+    <p><strong>Grid paths.</strong> A robot moves only right or down on an m × n grid with some blocked cells. The
+      number of paths to cell (r, c) is the sum of the paths to the cell above and the cell to the left; a blocked cell
+      has 0. The same shape solves minimum path sum (replace + with min, add the cell cost).</p>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "grid-paths"}'></div>
+    <div class="runnable" data-title="Unique paths with obstacles (one rolling row)">
+<textarea>
+def unique_paths(grid: list[str]) -> int:
+    cols = len(grid[0])
+    row = [0] * cols
+    row[0] = 1
+    for line in grid:
+        for c, cell in enumerate(line):
+            if cell == "#":
+                row[c] = 0
+            elif c > 0:
+                row[c] += row[c - 1]           # row[c] still holds "from above"
+    return row[-1]
+
+print(unique_paths(["...", "...", "..."]))       # C(4, 2) = 6
+print(unique_paths(["...", ".#.", "..."]))
+</textarea>
+    </div>
+    <p><strong>Word break.</strong> Can a string be split into dictionary words? State: <code>ok[i]</code> = "the
+      prefix <code>s[:i]</code> can be segmented". Last decision: the last word <code>s[j:i]</code>.
+      <code>ok[i] = any(ok[j] and s[j:i] in words for j in range(i))</code>. Storing <em>which</em> j worked lets you
+      rebuild the split.</p>
+    <div class="runnable" data-title="Word break with reconstruction">
+<textarea>
+def word_break(s: str, words: set[str]) -> list[str] | None:
+    longest = max(map(len, words), default=0)
+    back = [None] * (len(s) + 1)
+    back[0] = 0
+    for i in range(1, len(s) + 1):
+        for j in range(max(0, i - longest), i):
+            if back[j] is not None and s[j:i] in words:
+                back[i] = j
+                break
+    if back[-1] is None:
+        return None
+    parts, i = [], len(s)
+    while i:
+        parts.append(s[back[i]:i])
+        i = back[i]
+    return parts[::-1]
+
+print(word_break("applepenapple", {"apple", "pen"}))
+print(word_break("catsandog", {"cats", "dog", "sand", "and", "cat"}))
+</textarea>
+    </div>
+    <p>Word break is O(n·L) checks where L is the longest word, each slice costing up to O(L). Limiting j to the last
+      L positions is a standard pruning that turns O(n²) into O(n·L).</p>
+  </section>
+
+  <section class="lesson-section" id="reconstruction">
+    <h2>Space optimization and reconstructing solutions</h2>
+    <p>Two habits separate textbook DP from production DP.</p>
+    <h3>Rolling arrays</h3>
+    <p>If row i only reads row i−1 (knapsack, LCS, edit distance, grid paths), keep only two rows, or one row with a
+      careful iteration direction. That turns O(n·W) memory into O(W). Fibonacci and climbing stairs need only two
+      variables. The cost: you lose the table you would walk backwards for reconstruction.</p>
+    <h3>Reconstruction</h3>
+    <p>Optimization DPs answer "how good is the best?" but users want "what is the best?". Two techniques:</p>
+    <ul>
+      <li><strong>Re-derive from the table:</strong> stand at the answer cell and ask which case of the recurrence
+        produced it (knapsack, LCS). Needs the full table.</li>
+      <li><strong>Store a choice pointer</strong> alongside each value (<code>last</code> coin, <code>back</code> index
+        in word break). Costs one extra array but makes the walk trivial.</li>
+    </ul>
+    <aside class="callout pro"><p>When memory is tight <em>and</em> you need the solution (aligning two long genomes),
+      Hirschberg's algorithm combines divide and conquer with rolling rows to reconstruct LCS in O(m·n) time and
+      O(min(m, n)) space. The standard library's <code>difflib</code> uses a different, heuristic matcher tuned for
+      human-readable diffs.</p></aside>
+    <div class="runnable" data-title="Fibonacci in O(1) space">
+<textarea>
+def fib(n: int) -> int:
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+
+print(fib(10), fib(100))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> decide early whether you need the solution or only its value. That decision determines
+      whether you can roll the array.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m32-e1" data-title="Min-cost climbing stairs">
+      <div class="exercise-prompt">
+        <p>Write <code>min_cost_climb(cost)</code>. You may start on step 0 or step 1, and from step <code>i</code> you
+          pay <code>cost[i]</code> and move up one or two steps. Return the minimum total cost to get past the last step
+          (to index <code>len(cost)</code>). Use O(1) extra space.</p>
+      </div>
+<textarea class="starter">
+def min_cost_climb(cost: list[int]) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert min_cost_climb([10, 15, 20]) == 15, "start on step 1, pay 15, jump two steps past the top"
+    assert min_cost_climb([1, 100, 1, 1, 1, 100, 1, 1, 100, 1]) == 6, "the classic example costs 6"
+
+def test_small():
+    assert min_cost_climb([5, 3]) == 3, "with two steps, start on the cheaper one and jump past"
+    assert min_cost_climb([0, 0, 0]) == 0, "free steps cost nothing"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Let <code>dp[i]</code> be the cheapest way to <em>arrive</em> at
+        step <code>i</code>: <code>dp[i] = min(dp[i-1] + cost[i-1], dp[i-2] + cost[i-2])</code> with
+        <code>dp[0] = dp[1] = 0</code>. Keep only the last two values.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def min_cost_climb(cost: list[int]) -&gt; int:
+    two_back, one_back = 0, 0          # cost to arrive at steps i-2 and i-1
+    for i in range(2, len(cost) + 1):
+        two_back, one_back = one_back, min(one_back + cost[i - 1], two_back + cost[i - 2])
+    return one_back</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m32-e2" data-title="Coin change: fewest coins">
+      <div class="exercise-prompt">
+        <p>Write <code>fewest_coins(coins, amount)</code> returning the minimum number of coins (unlimited supply of
+          each) that sum to <code>amount</code>, or <code>-1</code> if impossible. <code>fewest_coins(coins, 0)</code>
+          is 0.</p>
+      </div>
+<textarea class="starter">
+def fewest_coins(coins: list[int], amount: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_greedy_fails_here():
+    assert fewest_coins([1, 3, 4], 6) == 2, "3 + 3 beats greedy's 4 + 1 + 1"
+
+def test_classic():
+    assert fewest_coins([1, 2, 5], 11) == 3, "5 + 5 + 1"
+    assert fewest_coins([2], 3) == -1, "3 cannot be made from 2s"
+    assert fewest_coins([7], 0) == 0, "zero amount needs zero coins"
+
+def test_larger():
+    assert fewest_coins([186, 419, 83, 408], 6249) == 20, "a known hard case needs 20 coins"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>dp = [0] + [inf] * amount</code>; for each
+        <code>a</code>, try every coin <code>c &lt;= a</code>: <code>dp[a] = min(dp[a], dp[a - c] + 1)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def fewest_coins(coins: list[int], amount: int) -&gt; int:
+    dp = [0] + [math.inf] * amount
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= a and dp[a - c] + 1 &lt; dp[a]:
+                dp[a] = dp[a - c] + 1
+    return -1 if dp[amount] == math.inf else int(dp[amount])</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m32-e3" data-title="Coin change: count combinations">
+      <div class="exercise-prompt">
+        <p>Write <code>count_ways(coins, amount)</code> returning how many <em>combinations</em> (order does not
+          matter) of coins sum to <code>amount</code>. There is exactly one way to make 0.</p>
+      </div>
+<textarea class="starter">
+def count_ways(coins: list[int], amount: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert count_ways([1, 2, 5], 5) == 4, "5, 2+2+1, 2+1+1+1, 1*5"
+    assert count_ways([2], 3) == 0, "no way to make 3 from 2s"
+    assert count_ways([10], 10) == 1, "one coin"
+    assert count_ways([3, 5], 0) == 1, "one way to make zero: take nothing"
+
+def test_order_does_not_matter():
+    assert count_ways([1, 2], 3) == 2, "1+1+1 and 1+2 (2+1 is the same combination)"
+
+def test_bigger():
+    assert count_ways([1, 5, 10, 25, 50], 100) == 292, "there are 292 ways to make a dollar"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Coins in the outer loop, amounts in the inner loop, going
+        upward: <code>ways[a] += ways[a - c]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def count_ways(coins: list[int], amount: int) -&gt; int:
+    ways = [1] + [0] * amount
+    for c in coins:
+        for a in range(c, amount + 1):
+            ways[a] += ways[a - c]
+    return ways[amount]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m32-e4" data-title="Edit distance with the edit script">
+      <div class="exercise-prompt">
+        <p>Write <code>edit_script(a, b)</code> returning <code>(distance, ops)</code> where <code>distance</code> is
+          the Levenshtein distance and <code>ops</code> is a list of strings, one per edit, each starting with
+          <code>"insert"</code>, <code>"delete"</code>, or <code>"replace"</code> (any optimal script is accepted, and
+          the rest of each string is up to you). Unchanged characters produce no op.</p>
+      </div>
+<textarea class="starter">
+def edit_script(a: str, b: str) -> tuple[int, list[str]]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def apply(a, b, ops):
+    kinds = [op.split()[0] for op in ops]
+    assert all(k in {"insert", "delete", "replace"} for k in kinds), f"unknown op in {ops}"
+    return len(ops)
+
+def test_kitten():
+    d, ops = edit_script("kitten", "sitting")
+    assert d == 3, "kitten -> sitting needs 3 edits"
+    assert apply("kitten", "sitting", ops) == 3, "the script must contain exactly distance ops"
+
+def test_empty_and_equal():
+    assert edit_script("", "abc")[0] == 3, "three inserts"
+    assert all(op.startswith("insert") for op in edit_script("", "abc")[1]), "only inserts from empty"
+    assert edit_script("abc", "")[0] == 3, "three deletes"
+    assert edit_script("same", "same") == (0, []), "no edits for equal strings"
+
+def test_flaw():
+    d, ops = edit_script("flaw", "lawn")
+    assert d == 2 and len(ops) == 2, "delete f, insert n"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Fill the full table, then walk back from
+        <code>(len(a), len(b))</code>: if the characters match and <code>dp[i][j] == dp[i-1][j-1]</code>, move
+        diagonally with no op; otherwise follow whichever neighbor plus 1 equals <code>dp[i][j]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def edit_script(a: str, b: str) -&gt; tuple[int, list[str]]:
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+    ops: list[str] = []
+    i, j = m, n
+    while i or j:
+        if i and j and a[i - 1] == b[j - 1] and dp[i][j] == dp[i - 1][j - 1]:
+            i, j = i - 1, j - 1
+        elif i and j and dp[i][j] == dp[i - 1][j - 1] + 1:
+            ops.append(f"replace {a[i - 1]!r} with {b[j - 1]!r} at {i - 1}")
+            i, j = i - 1, j - 1
+        elif i and dp[i][j] == dp[i - 1][j] + 1:
+            ops.append(f"delete {a[i - 1]!r} at {i - 1}")
+            i -= 1
+        else:
+            ops.append(f"insert {b[j - 1]!r} at {i}")
+            j -= 1
+    return dp[m][n], ops[::-1]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m32-e5" data-title="Longest increasing subsequence, reconstructed">
+      <div class="exercise-prompt">
+        <p>Write <code>longest_increasing(a)</code> returning one longest <em>strictly increasing</em> subsequence of
+          <code>a</code> as a list. Aim for O(n log n) with <code>bisect</code>, though O(n²) also passes.</p>
+      </div>
+<textarea class="starter">
+from bisect import bisect_left
+
+def longest_increasing(a: list[int]) -> list[int]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def is_subsequence(sub, seq):
+    it = iter(seq)
+    return all(x in it for x in sub)
+
+def check(a, length):
+    got = longest_increasing(a)
+    assert len(got) == length, f"LIS of {a} has length {length}, got {got}"
+    assert all(x < y for x, y in zip(got, got[1:])), f"{got} must be strictly increasing"
+    assert is_subsequence(got, a), f"{got} must be a subsequence of {a}"
+
+def test_examples():
+    check([10, 9, 2, 5, 3, 7, 101, 18], 4)
+    check([0, 1, 0, 3, 2, 3], 4)
+    check([7, 7, 7, 7], 1)
+
+def test_edges():
+    assert longest_increasing([]) == [], "empty input gives an empty subsequence"
+    check(list(range(50)), 50)
+    check(list(range(50, 0, -1)), 1)
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep <code>tails</code> (values) and <code>tail_idx</code>
+        (their indexes), plus <code>prev[i]</code> = index of the element before <code>a[i]</code> in its subsequence
+        (the tail at position <code>k - 1</code> when <code>a[i]</code> was placed). Walk <code>prev</code> back from
+        the last tail.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from bisect import bisect_left
+
+def longest_increasing(a: list[int]) -&gt; list[int]:
+    tails: list[int] = []
+    tail_idx: list[int] = []
+    prev = [-1] * len(a)
+    for i, x in enumerate(a):
+        k = bisect_left(tails, x)
+        if k == len(tails):
+            tails.append(x)
+            tail_idx.append(i)
+        else:
+            tails[k] = x
+            tail_idx[k] = i
+        prev[i] = tail_idx[k - 1] if k else -1
+    out: list[int] = []
+    i = tail_idx[-1] if tail_idx else -1
+    while i != -1:
+        out.append(a[i])
+        i = prev[i]
+    return out[::-1]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">An LCS-powered diff tool</span></div>
+      <div class="widget-body">
+        <p>Build <code>lcsdiff.py</code>, a command-line tool that compares two text files line by line, like
+          <code>diff</code>. Treat each line as one "character" and compute the LCS of the two lists of lines: lines in
+          the LCS are unchanged, lines only in the first file were deleted, and lines only in the second were added.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init lcsdiff &amp;&amp; cd lcsdiff
+pixi add python pytest
+pixi run python lcsdiff.py old.txt new.txt
+pixi run pytest -q</code></pre>
+        <pre data-label="Expected output style"><code class="language-diff">  def greet(name):
+-     print("Hello " + name)
++     print(f"Hello, {name}!")
+  greet("Ada")
++ greet("Grace")</code></pre>
+        <ol>
+          <li>Write <code>lcs_table(a: list[str], b: list[str]) -&gt; list[list[int]]</code>.</li>
+          <li>Write <code>diff(a, b) -&gt; list[tuple[str, str]]</code> returning <code>(" ", line)</code>,
+            <code>("-", line)</code>, or <code>("+", line)</code> in output order by walking the table back.</li>
+          <li>Write <code>main(argv)</code> that reads both files with <code>Path.read_text(encoding="utf-8")</code>,
+            prints the diff, and returns exit code 0 if the files are identical and 1 otherwise (like
+            <code>diff</code>).</li>
+          <li>Test against <code>difflib.ndiff</code> on a few inputs: both must agree on <em>how many</em> lines are
+            kept (difflib may pick a different but equally valid alignment, or a slightly longer diff, because it
+            uses a heuristic matcher).</li>
+        </ol>
+        <ul class="checklist" data-id="m32-mini">
+          <li><code>diff</code> of identical files produces only unchanged lines and exit code 0</li>
+          <li>Every line of both files appears exactly once in the output</li>
+          <li>The number of unchanged lines equals the LCS length</li>
+          <li>Empty files and a file vs an empty file are handled</li>
+          <li>At least five pytest tests run with <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> print unified-diff hunks with <code>@@ -a,b +c,d @@</code> headers and three
+          lines of context; add <code>--ignore-whitespace</code> by comparing normalized keys; reduce memory with
+          Hirschberg's algorithm.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m32-quiz">
+<script type="application/json">
+{"title": "Dynamic programming quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which two properties together signal that dynamic programming applies?", "options": ["Optimal substructure", "Overlapping subproblems", "A sorted input", "A greedy choice property"], "answer": [0, 1], "explanation": "<p>DP needs an optimal answer built from optimal sub-answers <em>and</em> subproblems that repeat so caching pays off. Sorted input is irrelevant, and the greedy choice property is what lets you skip DP entirely.</p>"},
+  {"type": "single", "prompt": "Merge sort has optimal substructure. Why is it not usually called DP?", "options": ["It is too slow", "Its subproblems do not overlap, so there is nothing to reuse", "It uses recursion", "It sorts in place"], "answer": 1, "explanation": "<p>The two halves of merge sort are disjoint. Caching would never hit. That is divide and conquer.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from functools import cache\n\n@cache\ndef f(n):\n    return n if n < 2 else f(n - 1) + f(n - 2)\n\nf(10)\nprint(f.cache_info().currsize)", "answer": "11", "explanation": "<p>One cache entry per distinct argument 0 through 10: eleven subproblems, each computed once.</p>"},
+  {"type": "single", "prompt": "What is the running time of the DP for 0/1 knapsack with n items and capacity W?", "options": ["O(2^n)", "O(n log n)", "O(n·W)", "O(W^2)"], "answer": 2, "explanation": "<p>There are (n + 1)(W + 1) states, each computed in O(1). Because W is a number, not a length, this is pseudo-polynomial.</p>"},
+  {"type": "single", "prompt": "In 1-D knapsack, why must capacity be iterated from high to low?", "options": ["It is faster", "So dp[w - weight] still holds the previous item's row and each item is used at most once", "To avoid negative indexes", "Python lists require it"], "answer": 1, "explanation": "<p>Going upward would read values already updated for the current item, letting it be taken repeatedly, which solves unbounded knapsack instead.</p>"},
+  {"type": "output", "prompt": "How many combinations of coins [1, 2, 5] make 5?", "code": "ways = [1] + [0] * 5\nfor c in [1, 2, 5]:\n    for a in range(c, 6):\n        ways[a] += ways[a - c]\nprint(ways[5])", "answer": "4", "explanation": "<p>5; 2+2+1; 2+1+1+1; 1+1+1+1+1. Coins in the outer loop count each multiset once.</p>"},
+  {"type": "single", "prompt": "For LCS, what does dp[i][j] represent?", "options": ["Whether a[i] == b[j]", "The LCS length of the prefixes a[:i] and b[:j]", "The edit distance of a and b", "The number of common characters"], "answer": 1, "explanation": "<p>Two-sequence DPs index by prefix lengths. The answer is dp[len(a)][len(b)].</p>"},
+  {"type": "output", "prompt": "What is the edit distance between these strings?", "code": "a, b = \"flaw\", \"lawn\"", "answer": "2", "explanation": "<p>Delete the f and insert an n. No single edit suffices.</p>"},
+  {"type": "single", "prompt": "In the O(n log n) LIS algorithm, what is tails[k]?", "options": ["The k-th element of the LIS", "The smallest tail of any increasing subsequence of length k + 1 seen so far", "The largest element seen so far", "The index of the k-th element"], "answer": 1, "explanation": "<p>Keeping the smallest possible tail per length leaves the most room to extend. tails stays sorted, which enables binary search, but it is not itself a subsequence of the input.</p>"},
+  {"type": "text", "prompt": "Which standard-library module provides the binary search used in the O(n log n) LIS?", "answer": ["bisect"], "explanation": "<p><code>bisect.bisect_left(tails, x)</code> finds the first tail that is at least x.</p>"},
+  {"type": "multi", "prompt": "Which statements about rolling arrays are true?", "options": ["They reduce memory when each row depends only on the previous row", "They make reconstruction by walking back through the table impossible unless you store extra information", "They change the time complexity from O(n·W) to O(W)", "Fibonacci needs only two variables"], "answer": [0, 1, 3], "explanation": "<p>Rolling arrays save space, not time. You lose earlier rows, so plain backward walks no longer work.</p>"},
+  {"type": "single", "prompt": "Step 1 of the state-design recipe is the most important. What is it?", "options": ["Choose loop bounds", "Define in one sentence what dp[state] means", "Write base cases", "Pick top-down or bottom-up"], "answer": 1, "explanation": "<p>Everything else, the recurrence, bases, order, and answer location, follows from a precise definition of the state.</p>"},
+  {"type": "single", "prompt": "Why might a top-down DP with @cache crash for n = 50,000 while the bottom-up version works?", "options": ["cache is limited to 1000 entries", "Recursion depth exceeds Python's recursion limit", "Dictionaries cannot hold 50,000 keys", "cache only works on strings"], "answer": 1, "explanation": "<p>Each pending call is a stack frame. Python's default limit is about 1000 frames. Tabulation uses loops and has no such limit.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>DP = optimal substructure + overlapping subproblems. Cost = number of states × work per state.</li>
+      <li>Top-down with <code>functools.cache</code> is quickest to write; bottom-up tabulation is faster, has no
+        recursion limit, and enables rolling arrays.</li>
+      <li>The five-step recipe: define the state in words, write the recurrence from the last decision, base cases,
+        evaluation order, location of the answer (and plan reconstruction).</li>
+      <li>Loop order and direction are part of the meaning: coins-outer counts combinations; downward capacity is 0/1
+        knapsack, upward is unbounded.</li>
+      <li>Two-sequence problems (LCS, edit distance) index by prefix lengths; "ending at i" states (LIS) fix the last
+        element.</li>
+      <li>Reconstruct by re-deriving decisions from the full table or by storing choice pointers.</li>
+    </ul>
+    <div class="flashcards" data-title="Dynamic programming">
+<script type="application/json">
+[{"front": "Optimal substructure", "back": "An optimal solution is composed of optimal solutions to subproblems."},
+ {"front": "Overlapping subproblems", "back": "The same subproblems recur many times, so caching their answers pays off."},
+ {"front": "Memoization vs tabulation", "back": "Top-down recursion with a cache (functools.cache) vs bottom-up loops filling a table in dependency order."},
+ {"front": "DP running time", "back": "(number of distinct states) × (work per state)."},
+ {"front": "0/1 knapsack recurrence", "back": "best[i][w] = max(best[i-1][w], best[i-1][w-wt_i] + val_i) when wt_i ≤ w."},
+ {"front": "Coin change: combinations", "back": "Coins in the outer loop, amounts inner: ways[a] += ways[a - c]."},
+ {"front": "LCS recurrence", "back": "Match: dp[i-1][j-1] + 1. Else: max(dp[i-1][j], dp[i][j-1])."},
+ {"front": "Edit distance recurrence", "back": "Match: dp[i-1][j-1]. Else: 1 + min(delete dp[i-1][j], insert dp[i][j-1], replace dp[i-1][j-1])."},
+ {"front": "LIS in O(n log n)", "back": "Maintain tails (smallest tail per length); bisect_left to replace or append."},
+ {"front": "Rolling array trade-off", "back": "Saves memory (O(W) instead of O(nW)) but discards the table needed for reconstruction."},
+ {"front": "Pseudo-polynomial", "back": "Polynomial in a numeric value (like capacity W) rather than in input length; knapsack's O(nW)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/functools.html#functools.cache">functools.cache and lru_cache</a></li>
+      <li><a href="https://docs.python.org/3/library/bisect.html">bisect: array bisection</a></li>
+      <li><a href="https://docs.python.org/3/library/difflib.html">difflib: helpers for computing deltas</a></li>
+      <li>Next: <a href="m33-greedy-backtracking.html">M33 Greedy Algorithms &amp; Backtracking</a>, and the
+        <a href="../projects/p04-puzzle-solver.html">Puzzle Solver Suite</a> project, which uses knapsack and weighted
+        interval scheduling.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

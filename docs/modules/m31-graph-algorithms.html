@@ -1,0 +1,1097 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M31 · Graph Algorithms · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m31">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 31</p>
+    <h1>Graph Algorithms</h1>
+    <p class="lede">Maps, networks, dependency systems, and game worlds are all graphs. This module goes beyond
+      breadth-first search to the algorithms that power route planners, network routing, and pathfinding in games:
+      Dijkstra, Bellman-Ford, A*, minimum spanning trees, and cycle detection, each with the proof idea that makes it
+      trustworthy.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m26-graphs.html">M26</a>,
+      <a href="m25-heaps.html">M25</a>, <a href="m27-advanced-structures.html">M27</a></span></div>
+    <ul class="objectives">
+      <li>Implement Dijkstra's algorithm with <code>heapq</code> and lazy deletion, and explain why negative weights break it</li>
+      <li>Detect negative cycles with Bellman-Ford and know when to use it instead of Dijkstra</li>
+      <li>Design admissible and consistent heuristics for A* and compare it with BFS and Dijkstra</li>
+      <li>Compute all-pairs shortest paths with Floyd-Warshall</li>
+      <li>Build minimum spanning trees with Prim and Kruskal and justify them with the cut property</li>
+      <li>Detect cycles in directed graphs with three colors and describe strongly connected components</li>
+      <li>Reconstruct paths from predecessor maps and apply these algorithms to real problems</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="bfs-recap">
+    <h2>Recap: BFS finds shortest paths when every edge costs the same</h2>
+    <p>In <a href="m26-graphs.html">M26</a> you met graphs as adjacency lists and explored them with breadth-first
+      search. BFS visits vertices in rings of increasing distance from the source, like ripples from a stone dropped in a
+      pond. In an <strong>unweighted</strong> graph, the first time BFS reaches a vertex is along a path with the fewest
+      edges, so BFS computes shortest paths in O(V + E).</p>
+    <div class="runnable" data-title="BFS distances and parents">
+<textarea>
+from collections import deque
+
+graph = {
+    "A": ["B", "C"], "B": ["A", "D"], "C": ["A", "D", "E"],
+    "D": ["B", "C", "F"], "E": ["C", "F"], "F": ["D", "E"],
+}
+
+def bfs(graph, source):
+    dist, parent = {source: 0}, {source: None}
+    queue = deque([source])
+    while queue:
+        u = queue.popleft()
+        for v in graph[u]:
+            if v not in dist:
+                dist[v] = dist[u] + 1
+                parent[v] = u
+                queue.append(v)
+    return dist, parent
+
+dist, parent = bfs(graph, "A")
+print(dist)
+print(parent)
+</textarea>
+    </div>
+    <p>Real roads have different lengths, though. If edge A–B is a 2-minute walk and A–C–B is two 1-minute walks, the
+      path with fewer edges is not the fastest. A <strong>weighted graph</strong> attaches a number (the
+      <strong>weight</strong> or cost) to each edge, and the length of a path is the sum of its weights. We store
+      weighted adjacency lists as <code>{u: [(v, w), ...]}</code>.</p>
+    <p><strong>Remember:</strong> BFS = shortest paths by edge count. For weights, we need a priority queue instead of a
+      plain queue.</p>
+  </section>
+
+  <section class="lesson-section" id="dijkstra">
+    <h2>Dijkstra's algorithm</h2>
+    <p><strong>Intuition:</strong> pour water into the source of a network of pipes whose lengths are the edge weights.
+      The water front spreads at a constant speed and reaches each junction at exactly its shortest distance. Dijkstra's
+      algorithm simulates that front: it repeatedly settles the unsettled vertex closest to the source, then
+      <em>relaxes</em> its outgoing edges.</p>
+    <p><strong>Relaxing</strong> edge (u, v, w) means asking "is going through u a shortcut to v?" If
+      <code>dist[u] + w &lt; dist[v]</code>, update <code>dist[v]</code> and record <code>prev[v] = u</code>.</p>
+    <div class="viz" data-viz="graph" data-config='{"preset": "weighted", "algorithms": ["dijkstra", "bellman-ford"], "start": "A"}'></div>
+    <pre data-label="Pseudo-code"><code class="language-python">dist[s] = 0; all other dist = infinity
+heap = [(0, s)]
+while heap:
+    d, u = pop the smallest
+    if d &gt; dist[u]: continue          # stale entry: lazy deletion
+    for (v, w) in neighbors(u):
+        if d + w &lt; dist[v]:
+            dist[v] = d + w; prev[v] = u
+            push (dist[v], v)</code></pre>
+    <h3>Python implementation with <code>heapq</code> and lazy deletion</h3>
+    <p><code>heapq</code> has no "decrease key" operation. Instead of updating an entry in the heap, we push a new,
+      better entry and leave the old one in place. When the old one is eventually popped, its distance is larger than
+      the recorded best, so we skip it. This is <strong>lazy deletion</strong>; the heap holds at most E entries, which
+      keeps the complexity at O((V + E) log V).</p>
+    <div class="runnable" data-title="Dijkstra with path reconstruction">
+<textarea>
+import heapq
+import math
+
+graph = {
+    "home": [("cafe", 4), ("park", 1)],
+    "park": [("cafe", 2), ("library", 7)],
+    "cafe": [("library", 3), ("office", 8)],
+    "library": [("office", 2)],
+    "office": [],
+}
+
+def dijkstra(graph, source):
+    dist = {u: math.inf for u in graph}
+    prev = {u: None for u in graph}
+    dist[source] = 0
+    heap = [(0, source)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if d > dist[u]:
+            continue                    # a stale entry; u was already settled with a smaller d
+        for v, w in graph[u]:
+            nd = d + w
+            if nd < dist[v]:
+                dist[v], prev[v] = nd, u
+                heapq.heappush(heap, (nd, v))
+    return dist, prev
+
+def path_to(prev, target):
+    path = []
+    while target is not None:
+        path.append(target)
+        target = prev[target]
+    return path[::-1]
+
+dist, prev = dijkstra(graph, "home")
+print(dist)
+print(" -> ".join(path_to(prev, "office")), "costs", dist["office"])
+</textarea>
+    </div>
+    <h3>Why it is correct (proof sketch)</h3>
+    <aside class="callout note" data-title="Invariant"><p>Every vertex already settled (popped with a non-stale entry)
+      has its true shortest distance, and for every other vertex, <code>dist[v]</code> is the shortest distance using
+      only settled vertices as intermediate stops.</p></aside>
+    <p>Suppose u is the next vertex popped, with distance d. Any other path from s to u must leave the settled set at
+      some first unsettled vertex x. By the invariant, reaching x already costs at least <code>dist[x] &gt;= d</code>
+      (u was the minimum), and the rest of the path from x to u adds weights that are <strong>non-negative</strong>, so
+      the path costs at least d. Hence d is optimal, and the invariant survives.</p>
+    <h3>Why negative weights break it</h3>
+    <p>The proof's last step, "the rest of the path cannot make it cheaper," fails if weights can be negative.</p>
+    <div class="runnable" data-title="Dijkstra gives a wrong answer with a negative edge" data-predict>
+<textarea>
+import heapq, math
+
+graph = {"A": [("B", 2), ("C", 3)], "B": [("D", 1)], "C": [("B", -2)], "D": []}
+
+def dijkstra_settled(graph, s):
+    dist = {u: math.inf for u in graph}
+    dist[s] = 0
+    settled = set()
+    heap = [(0, s)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if u in settled:
+            continue
+        settled.add(u)                      # classic Dijkstra: once settled, never revisited
+        for v, w in graph[u]:
+            if v not in settled and d + w < dist[v]:
+                dist[v] = d + w
+                heapq.heappush(heap, (dist[v], v))
+    return dist
+
+print(dijkstra_settled(graph, "A"))
+</textarea>
+    </div>
+    <p>B is settled at distance 2 before C is processed, so the cheaper route A→C→B (cost 1) is never used, and D gets
+      3 instead of 2.</p>
+    <p><strong>Complexity:</strong> O((V + E) log V) time with a binary heap, O(V + E) space. Best case: the target is
+      popped early (you can stop as soon as it is settled). <strong>When to use:</strong> single-source shortest paths
+      with non-negative weights: road maps, network latency, game movement costs.</p>
+  </section>
+
+  <section class="lesson-section" id="bellman-ford">
+    <h2>Bellman-Ford and negative cycles</h2>
+    <p><strong>Intuition:</strong> gossip spreading through a town, one round at a time. In round 1, everyone learns the
+      best route that uses one edge; in round 2, routes with up to two edges; and so on. A shortest path without cycles
+      has at most V − 1 edges, so V − 1 rounds of relaxing <em>every</em> edge are enough.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">dist[s] = 0; others = infinity
+repeat V - 1 times:
+    for each edge (u, v, w):
+        if dist[u] + w &lt; dist[v]: dist[v] = dist[u] + w
+for each edge (u, v, w):                 # one extra round
+    if dist[u] + w &lt; dist[v]: negative cycle reachable!</code></pre>
+    <p>A <strong>negative cycle</strong> is a cycle whose weights sum below zero. Going around it again and again makes
+      a path arbitrarily cheap, so "shortest path" is undefined. If anything still improves in round V, a negative cycle
+      must be reachable.</p>
+    <div class="runnable" data-title="Bellman-Ford with negative-cycle detection">
+<textarea>
+import math
+
+def bellman_ford(n, edges, source):
+    dist = [math.inf] * n
+    dist[source] = 0
+    for _ in range(n - 1):
+        changed = False
+        for u, v, w in edges:
+            if dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w
+                changed = True
+        if not changed:
+            break                       # early exit: already converged
+    for u, v, w in edges:
+        if dist[u] + w < dist[v]:
+            return None                 # negative cycle reachable from source
+    return dist
+
+edges = [(0, 1, 2), (0, 2, 3), (2, 1, -2), (1, 3, 1)]
+print(bellman_ford(4, edges, 0))       # handles the negative edge correctly
+print(bellman_ford(3, [(0, 1, 1), (1, 2, -1), (2, 1, -1)], 0))   # 1 -> 2 -> 1 sums to -2
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> after round k, <code>dist[v]</code> is at most the length of the shortest path to v
+      using at most k edges. <strong>Complexity:</strong> O(V · E) time, O(V) space; best case O(E) with the early exit.
+      <strong>When to use:</strong> graphs with negative weights (currency exchange with log-rates, where a negative
+      cycle is an arbitrage opportunity; financial adjustments; some network routing protocols, which use the
+      distributed version, distance-vector routing).</p>
+    <p><strong>Remember:</strong> Dijkstra is faster but needs non-negative weights; Bellman-Ford is slower, handles
+      negative weights, and detects negative cycles.</p>
+  </section>
+
+  <section class="lesson-section" id="a-star">
+    <h2>A* search: Dijkstra with a sense of direction</h2>
+    <p><strong>Intuition:</strong> Dijkstra explores in all directions equally, like the water front. If you are walking
+      to a landmark you can <em>see</em>, you naturally prefer streets that head toward it. A* (pronounced "A star")
+      orders the frontier by <code>f(n) = g(n) + h(n)</code>, where <code>g</code> is the known cost from the start and
+      <code>h</code> is a <strong>heuristic</strong> estimate of the remaining cost to the goal.</p>
+    <ul>
+      <li><strong>Admissible:</strong> h never overestimates the true remaining cost. A* with an admissible heuristic
+        returns an optimal path.</li>
+      <li><strong>Consistent</strong> (monotone): for every edge (u, v) with weight w, <code>h(u) &lt;= w + h(v)</code>,
+        and h(goal) = 0. Consistent implies admissible, and it guarantees each vertex is settled at most once, just
+        like Dijkstra.</li>
+      <li>h = 0 turns A* into Dijkstra. A perfect h walks straight to the goal. An inadmissible h may be faster but can
+        return suboptimal paths (sometimes acceptable in games).</li>
+    </ul>
+    <p>On a grid where you move in 4 directions with cost 1, the <strong>Manhattan distance</strong>
+      <code>|dr| + |dc|</code> is consistent. With diagonal moves, use the Chebyshev or octile distance; straight-line
+      (Euclidean) distance is admissible for any movement but explores more.</p>
+    <p>Draw walls in the grid below, then run BFS, Dijkstra, and A* from the same start to the same goal. Count the
+      explored cells: A* explores a narrow band toward the goal, while BFS and Dijkstra flood outward.</p>
+    <div class="viz" data-viz="grid-path" data-config='{"rows": 14, "cols": 24, "algorithms": ["bfs", "dijkstra", "astar"]}'></div>
+    <div class="runnable" data-title="A* on a grid, compared with BFS">
+<textarea>
+import heapq
+from collections import deque
+
+GRID = [
+    "S.........#.........",
+    ".######...#..#####..",
+    "......#...#..#......",
+    "..###.#......#..###.",
+    "..#...######.#..#G..",
+    "..#..........#..#...",
+]
+rows, cols = len(GRID), len(GRID[0])
+find = lambda ch: next((r, c) for r in range(rows) for c in range(cols) if GRID[r][c] == ch)
+start, goal = find("S"), find("G")
+
+def neighbors(cell):
+    r, c = cell
+    for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < rows and 0 <= nc < cols and GRID[nr][nc] != "#":
+            yield (nr, nc)
+
+def bfs(start, goal):
+    dist, queue, explored = {start: 0}, deque([start]), 0
+    while queue:
+        u = queue.popleft(); explored += 1
+        if u == goal:
+            return dist[u], explored
+        for v in neighbors(u):
+            if v not in dist:
+                dist[v] = dist[u] + 1; queue.append(v)
+    return -1, explored
+
+def astar(start, goal):
+    h = lambda cell: abs(cell[0] - goal[0]) + abs(cell[1] - goal[1])
+    g = {start: 0}
+    heap = [(h(start), 0, start)]
+    explored = 0
+    while heap:
+        f, gu, u = heapq.heappop(heap)
+        if gu > g[u]:
+            continue
+        explored += 1
+        if u == goal:
+            return gu, explored
+        for v in neighbors(u):
+            if gu + 1 < g.get(v, float("inf")):
+                g[v] = gu + 1
+                heapq.heappush(heap, (g[v] + h(v), g[v], v))
+    return -1, explored
+
+print("BFS: length %d, explored %d cells" % bfs(start, goal))
+print("A*:  length %d, explored %d cells" % astar(start, goal))
+</textarea>
+    </div>
+    <p><strong>Complexity:</strong> worst case the same as Dijkstra, O((V + E) log V), but with a good heuristic it
+      explores a small fraction of the graph. Space is its weak point: it stores the whole frontier.
+      <strong>When to use:</strong> point-to-point search when you know where the goal is and can estimate the distance:
+      maps, game AI, puzzle solving (the 15-puzzle with Manhattan-distance heuristics).</p>
+  </section>
+
+  <section class="lesson-section" id="floyd-warshall">
+    <h2>Floyd-Warshall: all pairs at once</h2>
+    <p>Sometimes you need the distance between <em>every</em> pair of vertices: a distance table printed in a road atlas.
+      Floyd-Warshall is a three-line dynamic program. <strong>Idea:</strong> let <code>d[i][j]</code> be the shortest
+      path from i to j using only vertices <code>0..k-1</code> as intermediate stops. Allowing vertex k as well either
+      helps (go i → k → j) or does not.</p>
+    <div class="runnable" data-title="Floyd-Warshall">
+<textarea>
+import math
+INF = math.inf
+
+def floyd_warshall(w):
+    n = len(w)
+    d = [row[:] for row in w]
+    for k in range(n):                  # k must be the OUTER loop
+        for i in range(n):
+            for j in range(n):
+                if d[i][k] + d[k][j] < d[i][j]:
+                    d[i][j] = d[i][k] + d[k][j]
+    if any(d[i][i] < 0 for i in range(n)):
+        raise ValueError("negative cycle")
+    return d
+
+w = [[0, 3, INF, 7],
+     [8, 0, 2, INF],
+     [5, INF, 0, 1],
+     [2, INF, INF, 0]]
+for row in floyd_warshall(w):
+    print(row)
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> after iteration k, <code>d[i][j]</code> is the shortest i→j path whose intermediate
+      vertices are all in <code>{0, ..., k}</code>. <strong>Complexity:</strong> Θ(V³) time, Θ(V²) space; handles negative
+      edges and detects negative cycles (a negative diagonal). Use it for small dense graphs (a few hundred vertices);
+      for large sparse graphs, run Dijkstra from each vertex instead. You will meet this style of table-filling again in
+      <a href="m32-dynamic-programming.html">M32</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="mst">
+    <h2>Minimum spanning trees: Prim and Kruskal</h2>
+    <p><strong>Problem:</strong> a town wants to connect every house to the power grid by laying cable along possible
+      routes, each with a cost. The cheapest network that connects everyone has no cycles (a cycle means one cable is
+      redundant), so it is a tree spanning all vertices: a <strong>minimum spanning tree</strong> (MST). It applies to
+      connected, undirected, weighted graphs.</p>
+    <h3>The cut property</h3>
+    <p>A <strong>cut</strong> splits the vertices into two groups. An edge <em>crosses</em> the cut if its endpoints are in
+      different groups. <strong>Cut property:</strong> for any cut, a lightest crossing edge belongs to some MST (to
+      every MST if weights are distinct). Why: take an MST without that edge e; adding e creates a cycle, which must
+      cross the cut a second time through some edge e′ at least as heavy. Swapping e′ for e gives a spanning tree that is
+      no heavier. Both algorithms below are just different ways of choosing cuts.</p>
+    <div class="two-col">
+      <div>
+        <h4>Prim: grow one tree</h4>
+        <p><em>Intuition:</em> a mold spreading outward, always into the cheapest neighboring spot. Start from any
+          vertex; repeatedly add the lightest edge connecting the tree to a vertex outside it. The cut is "tree vs rest."</p>
+      </div>
+      <div>
+        <h4>Kruskal: merge forests</h4>
+        <p><em>Intuition:</em> sort all cables by price and buy them cheapest first, skipping any cable that connects two
+          houses already connected. Union-find (<a href="m27-advanced-structures.html">M27</a>) answers "already
+          connected?" in near-constant time.</p>
+      </div>
+    </div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "weighted", "algorithms": ["prim", "kruskal"], "start": "A"}'></div>
+    <div class="viz" data-viz="union-find" data-config='{"n": 8}'></div>
+    <div class="runnable" data-title="Prim and Kruskal agree on the total weight">
+<textarea>
+import heapq
+
+edges = [("A", "B", 4), ("A", "H", 8), ("B", "C", 8), ("B", "H", 11), ("C", "D", 7), ("C", "F", 4),
+         ("C", "I", 2), ("D", "E", 9), ("D", "F", 14), ("E", "F", 10), ("F", "G", 2), ("G", "H", 1),
+         ("G", "I", 6), ("H", "I", 7)]
+vertices = sorted({x for u, v, _ in edges for x in (u, v)})
+adj = {v: [] for v in vertices}
+for u, v, w in edges:
+    adj[u].append((w, v)); adj[v].append((w, u))
+
+def prim(start):
+    in_tree, tree = {start}, []
+    heap = [(w, start, v) for w, v in adj[start]]
+    heapq.heapify(heap)
+    while heap and len(in_tree) < len(vertices):
+        w, u, v = heapq.heappop(heap)
+        if v in in_tree:
+            continue                       # lazy deletion again
+        in_tree.add(v); tree.append((u, v, w))
+        for w2, x in adj[v]:
+            if x not in in_tree:
+                heapq.heappush(heap, (w2, v, x))
+    return tree
+
+def kruskal():
+    parent = {v: v for v in vertices}
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path halving
+            x = parent[x]
+        return x
+    tree = []
+    for u, v, w in sorted(edges, key=lambda e: e[2]):
+        ru, rv = find(u), find(v)
+        if ru != rv:                        # different components: no cycle
+            parent[ru] = rv
+            tree.append((u, v, w))
+    return tree
+
+for name, tree in [("Prim", prim("A")), ("Kruskal", kruskal())]:
+    print(f"{name:8} total={sum(w for *_, w in tree)}  edges={tree}")
+</textarea>
+    </div>
+    <p><strong>Complexity:</strong> Prim with a binary heap O(E log V); Kruskal O(E log E) for the sort plus nearly O(E)
+      for union-find. Both use O(V + E) space. Prim suits dense graphs given as adjacency lists; Kruskal suits sparse
+      graphs given as edge lists. <strong>When to use:</strong> network design (cables, pipes, roads), clustering (stop
+      Kruskal early and the components are clusters), and approximations for the traveling salesman problem.</p>
+    <aside class="callout warn"><p>An MST is not a shortest-path tree. The MST minimizes the <em>total</em> weight of the
+      network; the path between two particular vertices inside it can be much longer than their shortest path.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="cycle-detection">
+    <h2>Cycle detection in directed graphs</h2>
+    <p>In an undirected graph, meeting an already-visited vertex (other than your parent) means a cycle. In a directed
+      graph that is not enough: in A→B, A→C, B→C, vertex C is reached twice but there is no cycle. We need to know
+      whether a vertex is <em>on the current path</em>. Depth-first search with three colors does exactly that:</p>
+    <ul>
+      <li><strong>White</strong>: not yet visited.</li>
+      <li><strong>Gray</strong>: visiting; on the current DFS path (entered but not finished).</li>
+      <li><strong>Black</strong>: finished; everything reachable from it has been explored.</li>
+    </ul>
+    <p>An edge to a <strong>gray</strong> vertex is a <em>back edge</em>: it points to an ancestor on the current path,
+      which closes a cycle. Edges to black vertices are harmless. This is how build systems and package managers (Pixi's
+      solver included) report "circular dependency" errors, and why topological sort fails on cyclic graphs.</p>
+    <div class="viz" data-viz="graph" data-config='{"preset": "dag", "algorithms": ["dfs", "topo"], "start": "A"}'></div>
+    <div class="runnable" data-title="Find and report a cycle">
+<textarea>
+WHITE, GRAY, BLACK = 0, 1, 2
+
+def find_cycle(graph):
+    color = {u: WHITE for u in graph}
+    parent = {}
+    for root in graph:
+        if color[root] != WHITE:
+            continue
+        stack = [(root, iter(graph[root]))]
+        color[root] = GRAY
+        while stack:
+            u, children = stack[-1]
+            for v in children:
+                if color[v] == GRAY:              # back edge: a cycle
+                    cycle, x = [v], u
+                    while x != v:
+                        cycle.append(x); x = parent[x]
+                    return cycle[::-1] + [v]
+                if color[v] == WHITE:
+                    color[v], parent[v] = GRAY, u
+                    stack.append((v, iter(graph[v])))
+                    break
+            else:
+                color[u] = BLACK                  # all children done
+                stack.pop()
+    return None
+
+deps = {"app": ["web", "db"], "web": ["auth"], "auth": ["db"], "db": []}
+print(find_cycle(deps))
+deps["db"].append("app")
+print(find_cycle(deps))
+</textarea>
+    </div>
+    <p>The explicit stack of iterators (from <a href="m28-recursion.html#recursion-to-iteration">M28</a>) avoids the
+      recursion limit. <strong>Complexity:</strong> O(V + E) time, O(V) space.</p>
+  </section>
+
+  <section class="lesson-section" id="scc">
+    <h2>Strongly connected components (overview)</h2>
+    <p>In a directed graph, two vertices are <strong>strongly connected</strong> if each can reach the other. The graph
+      splits into <strong>strongly connected components</strong> (SCCs): maximal groups where everyone can reach everyone.
+      Collapsing each SCC to a single vertex always leaves a DAG (the <em>condensation</em>), which is why SCCs are the
+      first step in analyzing web link structure, call graphs, and deadlocks.</p>
+    <ul>
+      <li><strong>Kosaraju's algorithm:</strong> DFS the graph and record vertices in order of finishing; then DFS the
+        <em>reversed</em> graph in reverse finishing order. Each tree of the second pass is one SCC. Two passes, O(V + E).</li>
+      <li><strong>Tarjan's algorithm:</strong> one DFS that tracks each vertex's discovery index and the lowest index
+        reachable (its <em>low-link</em>). When a vertex's low-link equals its own index, it is the root of an SCC. Also
+        O(V + E).</li>
+    </ul>
+    <div class="runnable" data-title="Kosaraju in a few lines (recursive, for small graphs)">
+<textarea>
+def kosaraju(graph):
+    order, seen = [], set()
+    def dfs1(u):
+        seen.add(u)
+        for v in graph[u]:
+            if v not in seen:
+                dfs1(v)
+        order.append(u)                   # finished
+    for u in graph:
+        if u not in seen:
+            dfs1(u)
+    reverse = {u: [] for u in graph}
+    for u in graph:
+        for v in graph[u]:
+            reverse[v].append(u)
+    comps, assigned = [], set()
+    def dfs2(u, comp):
+        assigned.add(u); comp.append(u)
+        for v in reverse[u]:
+            if v not in assigned:
+                dfs2(v, comp)
+    for u in reversed(order):
+        if u not in assigned:
+            comp = []
+            dfs2(u, comp)
+            comps.append(sorted(comp))
+    return comps
+
+g = {1: [2], 2: [3], 3: [1, 4], 4: [5], 5: [6], 6: [4], 7: [6, 8], 8: []}
+print(kosaraju(g))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="path-reconstruction">
+    <h2>Path reconstruction and real uses</h2>
+    <p>Shortest-path algorithms compute <em>distances</em>; users want <em>routes</em>. Every algorithm in this module can
+      record a <strong>predecessor</strong> (<code>prev[v]</code> = the vertex before v on the best known path) whenever
+      it improves a distance. Following <code>prev</code> backward from the target to the source and reversing gives the
+      path in O(path length). For Floyd-Warshall, store <code>next[i][j]</code> instead.</p>
+    <div class="runnable" data-title="Predict the reconstructed route" data-predict>
+<textarea>
+prev = {"S": None, "A": "S", "B": "A", "C": "S", "T": "B"}
+
+def path_to(prev, target):
+    path = []
+    while target is not None:
+        path.append(target)
+        target = prev[target]
+    return path[::-1]
+
+print(path_to(prev, "T"))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>If the target is unreachable, its <code>prev</code> is <code>None</code> and its
+      distance is infinity. Check the distance first, or you will "reconstruct" a one-vertex path.</p></aside>
+    <h3>Where these algorithms run in the real world</h3>
+    <div class="card-grid">
+      <div class="card"><h4>Maps and navigation</h4><p>Bidirectional Dijkstra and A* with landmark heuristics,
+        precomputed hierarchies (contraction hierarchies) for continental road networks.</p></div>
+      <div class="card"><h4>Internet routing</h4><p>OSPF runs Dijkstra on each router's link-state map; RIP is a
+        distributed Bellman-Ford (distance-vector).</p></div>
+      <div class="card"><h4>Games</h4><p>A* on grids and navigation meshes for NPC movement; flood fills (BFS) for
+        reachability and influence maps.</p></div>
+      <div class="card"><h4>Infrastructure and science</h4><p>MSTs for network design and clustering; SCCs for
+        dependency analysis; negative-cycle detection for currency arbitrage.</p></div>
+    </div>
+    <aside class="callout pro"><p>For production graph work in Python, reach for a library:
+      <code>networkx</code> (<code>pixi add networkx</code>) has all of these algorithms with path reconstruction, and
+      <code>scipy.sparse.csgraph</code> runs Dijkstra, Bellman-Ford, Floyd-Warshall, and MST in compiled code on sparse
+      matrices. Write your own to understand them, or when you need a custom state space (like the transfer penalties in
+      the mini-project).</p></aside>
+    <div class="runnable" data-title="The same problems with scipy.sparse.csgraph">
+<textarea>
+import numpy as np
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree
+
+w = np.array([[0, 4, 1, 0],
+              [0, 0, 0, 3],
+              [0, 2, 0, 7],
+              [0, 0, 0, 0]])
+dist, pred = dijkstra(csr_matrix(w), directed=True, indices=0, return_predecessors=True)
+print("distances from 0:", dist)
+print("predecessors:", pred)
+mst = minimum_spanning_tree(csr_matrix(w + w.T))
+print("MST weight:", mst.sum())
+</textarea>
+    </div>
+    <table>
+      <thead><tr><th>Algorithm</th><th>Problem</th><th>Weights</th><th>Time</th><th>Space</th></tr></thead>
+      <tbody>
+        <tr><td>BFS</td><td>single-source, unweighted</td><td>all equal</td><td>O(V + E)</td><td>O(V)</td></tr>
+        <tr><td>Dijkstra (binary heap)</td><td>single-source</td><td>≥ 0</td><td>O((V + E) log V)</td><td>O(V + E)</td></tr>
+        <tr><td>Bellman-Ford</td><td>single-source, detects negative cycles</td><td>any</td><td>O(V · E)</td><td>O(V)</td></tr>
+        <tr><td>A*</td><td>single pair with heuristic</td><td>≥ 0</td><td>≤ Dijkstra, often far less</td><td>O(V)</td></tr>
+        <tr><td>Floyd-Warshall</td><td>all pairs</td><td>any (no negative cycles)</td><td>Θ(V³)</td><td>Θ(V²)</td></tr>
+        <tr><td>Prim / Kruskal</td><td>minimum spanning tree</td><td>any</td><td>O(E log V) / O(E log E)</td><td>O(V + E)</td></tr>
+        <tr><td>Three-color DFS</td><td>directed cycle detection</td><td>n/a</td><td>O(V + E)</td><td>O(V)</td></tr>
+        <tr><td>Kosaraju / Tarjan</td><td>strongly connected components</td><td>n/a</td><td>O(V + E)</td><td>O(V)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m31-e1" data-title="Dijkstra with path reconstruction">
+      <div class="exercise-prompt">
+        <p>Write <code>shortest_path(graph, source, target)</code> where <code>graph</code> maps each vertex to a list of
+          <code>(neighbor, weight)</code> pairs with non-negative weights. Return <code>(cost, path)</code> where
+          <code>path</code> is the list of vertices from source to target, or <code>(math.inf, [])</code> if the target
+          is unreachable. Use <code>heapq</code>.</p>
+      </div>
+<textarea class="starter">
+import heapq
+import math
+
+def shortest_path(graph, source, target):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+G = {
+    "home": [("cafe", 4), ("park", 1)],
+    "park": [("cafe", 2), ("library", 7)],
+    "cafe": [("library", 3), ("office", 8)],
+    "library": [("office", 2)],
+    "office": [],
+    "island": [],
+}
+
+def test_example():
+    cost, path = shortest_path(G, "home", "office")
+    assert cost == 8, f"home to office costs 8, got {cost}"
+    assert path == ["home", "park", "cafe", "library", "office"], f"got path {path}"
+
+def test_source_is_target():
+    assert shortest_path(G, "cafe", "cafe") == (0, ["cafe"]), "zero-length path"
+
+def test_unreachable():
+    assert shortest_path(G, "home", "island") == (math.inf, []), "unreachable target"
+
+def test_against_bellman_ford():
+    import random
+    for _ in range(30):
+        n = 8
+        g = {i: [] for i in range(n)}
+        edges = []
+        for _ in range(20):
+            u, v, w = random.randrange(n), random.randrange(n), random.randint(0, 9)
+            g[u].append((v, w)); edges.append((u, v, w))
+        dist = [math.inf] * n; dist[0] = 0
+        for _ in range(n - 1):
+            for u, v, w in edges:
+                if dist[u] + w < dist[v]:
+                    dist[v] = dist[u] + w
+        for t in range(n):
+            cost, path = shortest_path(g, 0, t)
+            assert cost == dist[t], f"wrong cost to {t}"
+            if path:
+                total = sum(min(w for x, w in g[a] if x == b) for a, b in zip(path, path[1:]))
+                assert total == cost and path[0] == 0 and path[-1] == t, f"path {path} does not match cost {cost}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep <code>dist</code> and <code>prev</code> dicts, skip stale heap
+        entries with <code>if d &gt; dist[u]: continue</code>, then walk <code>prev</code> back from the target.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+import math
+
+def shortest_path(graph, source, target):
+    dist = {source: 0}
+    prev = {source: None}
+    heap = [(0, source)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if d &gt; dist.get(u, math.inf):
+            continue
+        if u == target:
+            break
+        for v, w in graph[u]:
+            nd = d + w
+            if nd &lt; dist.get(v, math.inf):
+                dist[v] = nd
+                prev[v] = u
+                heapq.heappush(heap, (nd, v))
+    if target not in dist:
+        return (math.inf, [])
+    path = []
+    node = target
+    while node is not None:
+        path.append(node)
+        node = prev[node]
+    return (dist[target], path[::-1])</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m31-e2" data-title="Bellman-Ford with negative-cycle detection">
+      <div class="exercise-prompt">
+        <p>Write <code>bellman_ford(n, edges, source)</code> for vertices <code>0..n-1</code> and directed edges
+          <code>(u, v, w)</code>. Return the list of shortest distances (<code>math.inf</code> for unreachable), or
+          <code>None</code> if a negative cycle is reachable from the source.</p>
+      </div>
+<textarea class="starter">
+import math
+
+def bellman_ford(n, edges, source):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_negative_edge():
+    edges = [(0, 1, 2), (0, 2, 3), (2, 1, -2), (1, 3, 1)]
+    assert bellman_ford(4, edges, 0) == [0, 1, 3, 2], "negative edge handled"
+
+def test_unreachable():
+    assert bellman_ford(3, [(0, 1, 5)], 0) == [0, 5, math.inf], "vertex 2 is unreachable"
+
+def test_negative_cycle():
+    assert bellman_ford(3, [(0, 1, 1), (1, 2, -1), (2, 1, -1)], 0) is None, "1 -> 2 -> 1 sums to -2"
+
+def test_unreachable_negative_cycle():
+    edges = [(0, 1, 4), (2, 3, -5), (3, 2, 1)]
+    assert bellman_ford(4, edges, 0) == [0, 4, math.inf, math.inf], "a cycle the source cannot reach is irrelevant"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Relax every edge <code>n - 1</code> times, skipping edges whose
+        start is still infinite. Then do one more pass: any improvement means a reachable negative cycle.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def bellman_ford(n, edges, source):
+    dist = [math.inf] * n
+    dist[source] = 0
+    for _ in range(n - 1):
+        changed = False
+        for u, v, w in edges:
+            if dist[u] != math.inf and dist[u] + w &lt; dist[v]:
+                dist[v] = dist[u] + w
+                changed = True
+        if not changed:
+            break
+    for u, v, w in edges:
+        if dist[u] != math.inf and dist[u] + w &lt; dist[v]:
+            return None
+    return dist</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m31-e3" data-title="A* on a grid">
+      <div class="exercise-prompt">
+        <p>Write <code>astar(grid, start, goal)</code>. <code>grid</code> is a list of strings where <code>"#"</code> is a
+          wall; moves go up, down, left, or right with cost 1. <code>start</code> and <code>goal</code> are
+          <code>(row, col)</code> tuples. Return the length of the shortest path, or <code>-1</code> if there is none.
+          Use a Manhattan-distance heuristic and <code>heapq</code>.</p>
+      </div>
+<textarea class="starter">
+import heapq
+
+def astar(grid, start, goal):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from collections import deque
+import random
+
+def bfs_len(grid, start, goal):
+    R, C = len(grid), len(grid[0])
+    dist = {start: 0}
+    q = deque([start])
+    while q:
+        r, c = q.popleft()
+        if (r, c) == goal:
+            return dist[(r, c)]
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < R and 0 <= nc < C and grid[nr][nc] != "#" and (nr, nc) not in dist:
+                dist[(nr, nc)] = dist[(r, c)] + 1
+                q.append((nr, nc))
+    return -1
+
+def test_open_grid():
+    grid = ["....", "....", "...."]
+    assert astar(grid, (0, 0), (2, 3)) == 5, "open grid: Manhattan distance"
+
+def test_walls():
+    grid = ["..#.", "..#.", "...."]
+    assert astar(grid, (0, 0), (0, 3)) == 7, "must go around the wall"
+
+def test_blocked():
+    grid = [".#.", "##.", "..."]
+    assert astar(grid, (0, 0), (2, 2)) == -1, "start is walled in"
+
+def test_same_cell():
+    assert astar(["."], (0, 0), (0, 0)) == 0, "already at the goal"
+
+def test_random_against_bfs():
+    rng = random.Random(7)
+    for _ in range(60):
+        grid = ["".join("#" if rng.random() < 0.3 else "." for _ in range(9)) for _ in range(7)]
+        grid[0] = "." + grid[0][1:]
+        grid[-1] = grid[-1][:-1] + "."
+        assert astar(grid, (0, 0), (6, 8)) == bfs_len(grid, (0, 0), (6, 8)), f"wrong on grid {grid}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Push <code>(g + h(cell), g, cell)</code> tuples. Keep a dict of the
+        best <code>g</code> per cell and skip popped entries whose <code>g</code> is larger than the recorded best.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+
+def astar(grid, start, goal):
+    rows, cols = len(grid), len(grid[0])
+
+    def h(cell):
+        return abs(cell[0] - goal[0]) + abs(cell[1] - goal[1])
+
+    best = {start: 0}
+    heap = [(h(start), 0, start)]
+    while heap:
+        _, g, cell = heapq.heappop(heap)
+        if cell == goal:
+            return g
+        if g &gt; best[cell]:
+            continue
+        r, c = cell
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 &lt;= nr &lt; rows and 0 &lt;= nc &lt; cols and grid[nr][nc] != "#":
+                ng = g + 1
+                if ng &lt; best.get((nr, nc), float("inf")):
+                    best[(nr, nc)] = ng
+                    heapq.heappush(heap, (ng + h((nr, nc)), ng, (nr, nc)))
+    return -1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m31-e4" data-title="Kruskal with union-find">
+      <div class="exercise-prompt">
+        <p>Write <code>kruskal(n, edges)</code> for an undirected graph with vertices <code>0..n-1</code> and edges
+          <code>(u, v, w)</code>. Return <code>(total_weight, tree_edges)</code> for a minimum spanning tree (or spanning
+          forest if the graph is disconnected). Implement union-find with path compression yourself.</p>
+      </div>
+<textarea class="starter">
+def kruskal(n, edges):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import itertools, random
+
+def test_example():
+    edges = [(0, 1, 4), (0, 2, 1), (1, 2, 2), (1, 3, 5), (2, 3, 8), (3, 4, 3)]
+    total, tree = kruskal(5, edges)
+    assert total == 11, f"MST weight should be 11, got {total}"
+    assert len(tree) == 4, "a spanning tree on 5 vertices has 4 edges"
+
+def test_forest():
+    total, tree = kruskal(4, [(0, 1, 2), (2, 3, 5)])
+    assert total == 7 and len(tree) == 2, "two components give a forest of 2 edges"
+
+def brute_mst(n, edges):
+    best = None
+    for combo in itertools.combinations(edges, n - 1):
+        parent = list(range(n))
+        def find(x):
+            while parent[x] != x:
+                x = parent[x]
+            return x
+        ok = True
+        for u, v, _ in combo:
+            ru, rv = find(u), find(v)
+            if ru == rv:
+                ok = False
+                break
+            parent[ru] = rv
+        if ok:
+            w = sum(e[2] for e in combo)
+            best = w if best is None else min(best, w)
+    return best
+
+def test_random_against_brute_force():
+    rng = random.Random(3)
+    for _ in range(15):
+        n = 5
+        edges = [(i, i + 1, rng.randint(1, 9)) for i in range(n - 1)]
+        edges += [(rng.randrange(n), rng.randrange(n), rng.randint(1, 9)) for _ in range(4)]
+        edges = [e for e in edges if e[0] != e[1]]
+        total, tree = kruskal(n, edges)
+        assert total == brute_mst(n, edges), f"not minimal for {edges}"
+        assert sum(e[2] for e in tree) == total, "total must match the tree edges"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Sort edges by weight. For each edge, find the roots of both
+        endpoints; if they differ, union them and keep the edge.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def kruskal(n, edges):
+    parent = list(range(n))
+
+    def find(x):
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    total = 0
+    tree = []
+    for u, v, w in sorted(edges, key=lambda e: e[2]):
+        ru, rv = find(u), find(v)
+        if ru != rv:
+            parent[ru] = rv
+            tree.append((u, v, w))
+            total += w
+    return total, tree</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m31-e5" data-title="Directed cycle detection with colors">
+      <div class="exercise-prompt">
+        <p>Write <code>has_cycle(graph)</code> for a directed graph given as <code>{vertex: [successors]}</code> (every
+          vertex appears as a key). Return <code>True</code> if it contains a directed cycle. Use white/gray/black
+          coloring. It must handle a chain of 20,000 vertices, so use an explicit stack rather than recursion.</p>
+      </div>
+<textarea class="starter">
+def has_cycle(graph):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_dag():
+    g = {"a": ["b", "c"], "b": ["c"], "c": []}
+    assert has_cycle(g) is False, "a diamond-like DAG has no cycle"
+
+def test_cycle():
+    g = {"a": ["b"], "b": ["c"], "c": ["a"]}
+    assert has_cycle(g) is True, "a -> b -> c -> a"
+
+def test_self_loop():
+    assert has_cycle({"x": ["x"]}) is True, "a self-loop is a cycle"
+
+def test_disconnected():
+    g = {1: [2], 2: [], 3: [4], 4: [5], 5: [3]}
+    assert has_cycle(g) is True, "the cycle is in the second component"
+
+def test_long_chain():
+    n = 20_000
+    g = {i: [i + 1] for i in range(n)}
+    g[n] = []
+    assert has_cycle(g) is False, "a long chain has no cycle"
+    g[n] = [0]
+    assert has_cycle(g) is True, "closing the chain makes a cycle"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a stack of <code>(vertex, iterator over successors)</code>.
+        Mark a vertex gray when pushed and black when its iterator is exhausted. Seeing a gray successor means a
+        cycle.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def has_cycle(graph):
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = dict.fromkeys(graph, WHITE)
+    for root in graph:
+        if color[root] != WHITE:
+            continue
+        color[root] = GRAY
+        stack = [(root, iter(graph[root]))]
+        while stack:
+            u, successors = stack[-1]
+            advanced = False
+            for v in successors:
+                if color[v] == GRAY:
+                    return True
+                if color[v] == WHITE:
+                    color[v] = GRAY
+                    stack.append((v, iter(graph[v])))
+                    advanced = True
+                    break
+            if not advanced:
+                color[u] = BLACK
+                stack.pop()
+    return False</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: metro route planner</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">metro: fastest route with transfers</span></div>
+      <div class="widget-body">
+        <p>Build a journey planner for a small transit network. Stations are connected by line segments with travel
+          times, and changing lines costs a transfer penalty (walking between platforms plus waiting). The key insight:
+          the graph's vertices are not stations but <strong>(station, line)</strong> states, with transfer edges between
+          states at the same station. Dijkstra on that state graph gives the fastest route including transfers.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init metro &amp;&amp; cd metro
+pixi add pytest
+pixi run python metro.py network.json "Harbor" "University"</code></pre>
+        <pre data-label="network.json (sketch)"><code class="language-json">{
+  "transfer_minutes": 4,
+  "lines": {
+    "Red":  [["Harbor", 3], ["Central", 2], ["Museum", 4], ["University", 0]],
+    "Blue": [["Airport", 6], ["Central", 3], ["Stadium", 5], ["University", 0]]
+  }
+}</code></pre>
+        <pre data-label="Example output"><code class="language-bash">Harbor -&gt; University: 9 min, 0 transfers
+  Red: Harbor -&gt; Central -&gt; Museum -&gt; University</code></pre>
+        <ol>
+          <li>Load the JSON into a state graph: for each consecutive pair on a line, add edges both ways between
+            <code>(station, line)</code> states with the travel time; at each station served by several lines, add
+            transfer edges between its states with the penalty.</li>
+          <li>Add virtual start and end vertices connected with cost 0 to every state of the origin and destination
+            station.</li>
+          <li>Run Dijkstra with path reconstruction, then compress the state path into human-readable legs grouped by
+            line.</li>
+          <li>Add a <code>--fewest-transfers</code> mode: make the edge cost a tuple <code>(transfers, minutes)</code>;
+            tuples compare lexicographically, so Dijkstra still works.</li>
+          <li>Write pytest tests for: same-line trips, a trip where a transfer is faster, a trip where avoiding a transfer
+            is faster because of the penalty, unknown station names, and unreachable stations.</li>
+        </ol>
+        <ul class="checklist" data-id="m31-mini">
+          <li>The network loads from JSON into a <code>(station, line)</code> state graph</li>
+          <li>Dijkstra returns the fastest total time including transfer penalties</li>
+          <li>Routes print as legs grouped by line with the number of transfers</li>
+          <li><code>--fewest-transfers</code> uses tuple costs and changes the chosen route when appropriate</li>
+          <li>Unknown and unreachable stations produce clear error messages</li>
+          <li>Tests pass under <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add station coordinates and an A* heuristic (straight-line distance divided by
+          the fastest train speed, which is admissible); compute the MST of the station graph to find the cheapest set of
+          tracks that keeps every station connected; add closures ("Central is closed") by filtering edges; draw the
+          network with matplotlib.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m31-quiz">
+<script type="application/json">
+{"title": "Graph algorithms", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why is BFS not enough for shortest paths in a weighted graph?", "options": ["BFS cannot handle cycles", "BFS minimizes the number of edges, not the sum of weights", "BFS only works on trees", "BFS is too slow"], "answer": 1, "explanation": "<p>A path with more edges can have a smaller total weight. BFS's queue order reflects edge count only.</p>"},
+  {"type": "single", "prompt": "In Dijkstra with <code>heapq</code>, what is lazy deletion?", "options": ["Deleting the heap at the end", "Pushing a new entry when a distance improves and skipping outdated entries when they are popped", "Removing vertices with no edges", "Not computing distances until needed"], "answer": 1, "explanation": "<p>heapq has no decrease-key, so we push duplicates and skip any popped entry whose distance is greater than the best recorded one.</p>"},
+  {"type": "single", "prompt": "Which property of the weights does Dijkstra's correctness proof rely on?", "options": ["They are integers", "They are non-negative", "They are distinct", "They are less than V"], "answer": 1, "explanation": "<p>The proof argues that the rest of any alternative path cannot reduce its cost. Negative edges violate that.</p>"},
+  {"type": "single", "prompt": "What is the time complexity of Dijkstra with a binary heap?", "options": ["O(V + E)", "O((V + E) log V)", "O(V · E)", "O(V³)"], "answer": 1, "explanation": "<p>Each edge may cause one push and each push/pop costs O(log V) (log E = O(log V) since E ≤ V²).</p>"},
+  {"type": "single", "prompt": "How many rounds of relaxing every edge does Bellman-Ford need to find shortest paths (no negative cycles)?", "options": ["log V", "V − 1", "E", "V²"], "answer": 1, "explanation": "<p>A shortest simple path has at most V − 1 edges, and round k finalizes paths of up to k edges.</p>"},
+  {"type": "single", "prompt": "If some distance still decreases during Bellman-Ford's V-th round, then:", "options": ["The graph is disconnected", "A negative cycle is reachable from the source", "The source was wrong", "You need V more rounds"], "answer": 1, "explanation": "<p>Without negative cycles, everything converges within V − 1 rounds. Further improvement means a cycle keeps lowering the cost.</p>"},
+  {"type": "single", "prompt": "An A* heuristic is <em>admissible</em> when:", "options": ["It never overestimates the true remaining cost", "It is always exactly right", "It is zero", "It is greater than the true cost"], "answer": 0, "explanation": "<p>Never overestimating guarantees A* returns an optimal path. h = 0 is admissible (and turns A* into Dijkstra).</p>"},
+  {"type": "multi", "prompt": "For 4-directional grid movement with cost 1 per step, which heuristics are admissible?", "options": ["Manhattan distance", "Euclidean distance", "Twice the Manhattan distance", "Zero"], "answer": [0, 1, 3], "explanation": "<p>Manhattan is exact without walls, so it never overestimates; Euclidean is smaller still; zero always works. Doubling Manhattan overestimates.</p>"},
+  {"type": "single", "prompt": "In Floyd-Warshall, which loop must be outermost?", "options": ["i (the source)", "j (the destination)", "k (the intermediate vertex)", "It does not matter"], "answer": 2, "explanation": "<p>The invariant is about allowing intermediate vertices 0..k. All pairs must be updated for a given k before moving to k + 1.</p>"},
+  {"type": "single", "prompt": "The cut property says:", "options": ["The heaviest edge crossing a cut is never in an MST", "A lightest edge crossing any cut belongs to some MST", "Every cut has exactly one crossing edge", "MSTs contain all edges of minimum weight"], "answer": 1, "explanation": "<p>Swapping a lightest crossing edge into any spanning tree that lacks it never increases the weight. Prim and Kruskal both apply it.</p>"},
+  {"type": "single", "prompt": "What does Kruskal's algorithm use to decide whether adding an edge would create a cycle?", "options": ["A min-heap", "Union-find (disjoint sets)", "BFS from both endpoints", "Topological sort"], "answer": 1, "explanation": "<p>An edge creates a cycle exactly when its endpoints are already in the same component, which union-find checks in near-constant time.</p>"},
+  {"type": "single", "prompt": "In three-color DFS cycle detection on a directed graph, a cycle exists when you find an edge to a vertex that is:", "options": ["White", "Gray", "Black", "Any visited vertex"], "answer": 1, "explanation": "<p>Gray vertices are on the current DFS path, so an edge to one closes a cycle. Edges to black vertices lead to fully explored, cycle-free regions (cross or forward edges).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "prev = {\"S\": None, \"A\": \"S\", \"B\": \"A\", \"T\": \"B\"}\nnode, path = \"T\", []\nwhile node is not None:\n    path.append(node)\n    node = prev[node]\nprint(\"\".join(reversed(path)))", "answer": "SABT", "explanation": "<p>Following predecessors from T gives T, B, A, S; reversing yields the route from the source.</p>"},
+  {"type": "text", "prompt": "What name is given to maximal groups of vertices in a directed graph where every vertex can reach every other? (abbreviation accepted)", "answer": ["strongly connected components", "strongly connected component", "SCC", "SCCs"], "explanation": "<p>Strongly connected components; collapsing each into one vertex always leaves a DAG.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>BFS solves unweighted shortest paths; weighted graphs need a priority queue.</li>
+      <li>Dijkstra settles vertices in order of distance; lazy deletion makes <code>heapq</code> work; it requires
+        non-negative weights.</li>
+      <li>Bellman-Ford relaxes all edges V − 1 times, handles negative weights, and detects negative cycles in O(V · E).</li>
+      <li>A* adds an admissible heuristic to focus the search; consistent heuristics settle each vertex once.</li>
+      <li>Floyd-Warshall computes all pairs in Θ(V³) with the intermediate-vertex loop outermost.</li>
+      <li>Prim and Kruskal build MSTs, both justified by the cut property.</li>
+      <li>Three-color DFS finds directed cycles; Kosaraju and Tarjan find SCCs in O(V + E).</li>
+      <li>Record predecessors to reconstruct paths; use networkx or scipy for production work.</li>
+    </ul>
+    <div class="flashcards" data-title="Graph algorithm essentials">
+<script type="application/json">
+[{"front": "Relaxing an edge (u, v, w)", "back": "If dist[u] + w &lt; dist[v], set dist[v] = dist[u] + w and prev[v] = u."},
+ {"front": "Dijkstra requirement", "back": "Non-negative edge weights."},
+ {"front": "Lazy deletion", "back": "Push improved entries; skip popped entries with d &gt; dist[u]."},
+ {"front": "Bellman-Ford cost", "back": "O(V · E); V − 1 rounds plus one detection round."},
+ {"front": "Negative cycle", "back": "A cycle with total weight below zero; shortest paths through it are undefined."},
+ {"front": "A* priority", "back": "f(n) = g(n) + h(n): cost so far plus heuristic estimate to the goal."},
+ {"front": "Consistent heuristic", "back": "h(u) ≤ w(u, v) + h(v) for every edge, and h(goal) = 0. Implies admissible."},
+ {"front": "Floyd-Warshall", "back": "d[i][j] = min(d[i][j], d[i][k] + d[k][j]) with k outermost; Θ(V³)."},
+ {"front": "Cut property", "back": "A lightest edge crossing any cut is in some MST."},
+ {"front": "Prim vs Kruskal", "back": "Prim grows one tree with a heap; Kruskal sorts edges and merges components with union-find."},
+ {"front": "Gray vertex in DFS", "back": "On the current path; an edge to it is a back edge, closing a directed cycle."},
+ {"front": "Condensation", "back": "Collapse each SCC to one vertex; the result is always a DAG."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/heapq.html">heapq</a> and
+        <a href="https://docs.python.org/3/library/graphlib.html">graphlib.TopologicalSorter</a> (which raises
+        <code>CycleError</code>) in the Python docs</li>
+      <li><a href="https://docs.scipy.org/doc/scipy/reference/sparse.csgraph.html">scipy.sparse.csgraph</a> and
+        <a href="https://networkx.org/documentation/stable/reference/algorithms/index.html">networkx algorithms</a></li>
+      <li>Amit Patel, <a href="https://www.redblobgames.com/pathfinding/a-star/introduction.html">Introduction to A*</a> (Red Blob Games)</li>
+      <li>Next: <a href="m32-dynamic-programming.html">M32 Dynamic Programming</a> builds on the table-filling idea behind Floyd-Warshall.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

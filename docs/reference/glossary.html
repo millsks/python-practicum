@@ -1,0 +1,1605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+<style>
+  .gl-tools { position: sticky; top: calc(var(--header-h, 56px) + 8px); z-index: 2; background: var(--bg); padding: 0.6em 0; border-bottom: 1px solid var(--border); margin-bottom: 1em; }
+  .gl-tools input { width: 100%; font: inherit; padding: 0.55em 0.8em; border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius, 8px); background: var(--bg-elev, var(--bg)); color: var(--fg); }
+  .gl-tools .btn-row { margin-top: 0.5em; }
+  .gl-letters { display: flex; flex-wrap: wrap; gap: 4px 10px; font-weight: 600; margin: 0.5em 0 0; }
+  .gl-letters a { text-decoration: none; }
+  .gl-list { margin: 0 0 1em; }
+  .gl-entry { padding: 0.55em 0; border-bottom: 1px solid var(--border); }
+  .gl-entry dt { font-weight: 650; scroll-margin-top: calc(var(--header-h, 56px) + 140px); }
+  .gl-entry dt .tag { font-weight: 500; margin-left: 6px; }
+  .gl-entry dd { margin: 0.2em 0 0; color: var(--fg); }
+  .gl-module { font-size: 0.85em; white-space: nowrap; }
+  .gl-entry[hidden], .gl-letter[hidden] { display: none; }
+</style>
+</head>
+<body data-root="../" data-page="ref-glossary">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Vocabulary</p>
+    <h1>Glossary</h1>
+    <p class="lede">332 terms from across the course, from Python syntax to data structures, data science,
+      machine learning, data engineering, and professional tooling. Each entry has a short definition and a link to the
+      module that teaches it.</p>
+    <div class="lesson-meta"><span>⏱ Look things up as you go</span><span>118 Python, 60 CS, 30 Data science, 39 ML, 32 Data engineering, 53 Tooling</span></div>
+    <ul class="objectives">
+      <li>Look up any term used in the course and jump to where it is taught</li>
+      <li>Filter by keyword or by field</li>
+      <li>Drill the 20 most important terms with flashcards</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="terms">
+    <h2>Terms A–Z</h2>
+    <div class="gl-tools" role="search">
+      <label class="visually-hidden" for="gl-filter">Filter the glossary</label>
+      <input id="gl-filter" type="search" placeholder="Filter terms and definitions, e.g. heap, pixi, gradient" autocomplete="off">
+      <div class="btn-row" id="gl-cats"><button type="button" class="btn small primary" data-cat="all" aria-pressed="true">All</button><button type="button" class="btn small" data-cat="py" aria-pressed="false">Python</button><button type="button" class="btn small" data-cat="cs" aria-pressed="false">CS</button><button type="button" class="btn small" data-cat="ds" aria-pressed="false">Data science</button><button type="button" class="btn small" data-cat="ml" aria-pressed="false">ML</button><button type="button" class="btn small" data-cat="de" aria-pressed="false">Data engineering</button><button type="button" class="btn small" data-cat="tool" aria-pressed="false">Tooling</button><span class="status" id="gl-count" aria-live="polite">332 terms</span></div>
+      <nav class="gl-letters" aria-label="Jump to letter"><a href="#letter-a">A</a> <a href="#letter-b">B</a> <a href="#letter-c">C</a> <a href="#letter-d">D</a> <a href="#letter-e">E</a> <a href="#letter-f">F</a> <a href="#letter-g">G</a> <a href="#letter-h">H</a> <a href="#letter-i">I</a> <a href="#letter-j">J</a> <a href="#letter-k">K</a> <a href="#letter-l">L</a> <a href="#letter-m">M</a> <a href="#letter-n">N</a> <a href="#letter-o">O</a> <a href="#letter-p">P</a> <a href="#letter-q">Q</a> <a href="#letter-r">R</a> <a href="#letter-s">S</a> <a href="#letter-t">T</a> <a href="#letter-u">U</a> <a href="#letter-v">V</a> <a href="#letter-w">W</a> <a href="#letter-z">Z</a></nav>
+    </div>
+    <p id="gl-empty" class="status" hidden>No terms match. Try a shorter word, or choose "All".</p>
+    <h3 id="letter-a" class="gl-letter">A</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="a* search a shortest-path algorithm that expands nodes by cost so far plus a heuristic estimate of the remaining cost. cs">
+        <dt id="term-a-search">A* search <span class="tag">CS</span></dt>
+        <dd>A shortest-path algorithm that expands nodes by cost so far plus a heuristic estimate of the remaining cost. <a class="gl-module" href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="abstract base class (abc) a class from abc that declares abstract methods subclasses must implement; it cannot be instantiated itself. python">
+        <dt id="term-abstract-base-class-abc">Abstract base class (ABC) <span class="tag">Python</span></dt>
+        <dd>A class from <code>abc</code> that declares abstract methods subclasses must implement; it cannot be instantiated itself. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="acid atomicity, consistency, isolation, durability: the guarantees that make database transactions reliable. data engineering">
+        <dt id="term-acid">ACID <span class="tag">Data engineering</span></dt>
+        <dd>Atomicity, Consistency, Isolation, Durability: the guarantees that make database transactions reliable. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="activation function a nonlinear function (relu, sigmoid, tanh) applied to a neuron's output so networks can model nonlinear relationships. ml">
+        <dt id="term-activation-function">Activation function <span class="tag">ML</span></dt>
+        <dd>A nonlinear function (ReLU, sigmoid, tanh) applied to a neuron's output so networks can model nonlinear relationships. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="adjacency list a graph representation mapping each vertex to a list of its neighbors; o(v + e) space, ideal for sparse graphs. cs">
+        <dt id="term-adjacency-list">Adjacency list <span class="tag">CS</span></dt>
+        <dd>A graph representation mapping each vertex to a list of its neighbors; O(V + E) space, ideal for sparse graphs. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="adjacency matrix a v × v grid whose cell (i, j) records an edge from i to j; o(1) edge checks but o(v²) space. cs">
+        <dt id="term-adjacency-matrix">Adjacency matrix <span class="tag">CS</span></dt>
+        <dd>A V × V grid whose cell (i, j) records an edge from i to j; O(1) edge checks but O(V²) space. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="algorithm a finite, precise sequence of steps that solves a problem. cs">
+        <dt id="term-algorithm">Algorithm <span class="tag">CS</span></dt>
+        <dd>A finite, precise sequence of steps that solves a problem. <a class="gl-module" href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="amortized analysis averaging the cost of operations over a sequence, so rare expensive steps (like list resizing) still give o(1) per operation. cs">
+        <dt id="term-amortized-analysis">Amortized analysis <span class="tag">CS</span></dt>
+        <dd>Averaging the cost of operations over a sequence, so rare expensive steps (like list resizing) still give O(1) per operation. <a class="gl-module" href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="annotation metadata attached to a parameter, return value, or variable with : or -&amp;gt;, usually a type hint. in 3.14 annotations are evaluated lazily (pep 649). python">
+        <dt id="term-annotation">Annotation <span class="tag">Python</span></dt>
+        <dd>Metadata attached to a parameter, return value, or variable with <code>:</code> or <code>-&gt;</code>, usually a type hint. In 3.14 annotations are evaluated lazily (PEP 649). <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="annotationlib the 3.14 standard-library module for reading annotations in different formats (value, forwardref, string) via get_annotations(). python">
+        <dt id="term-annotationlib">annotationlib <span class="tag">Python</span></dt>
+        <dd>The 3.14 standard-library module for reading annotations in different formats (<code>VALUE</code>, <code>FORWARDREF</code>, <code>STRING</code>) via <code>get_annotations()</code>. <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="apache arrow a language-independent columnar in-memory format that lets tools like pandas, polars, and duckdb share data without copying. data science">
+        <dt id="term-apache-arrow">Apache Arrow <span class="tag">Data science</span></dt>
+        <dd>A language-independent columnar in-memory format that lets tools like pandas, Polars, and DuckDB share data without copying. <a class="gl-module" href="../modules/m52-polars-arrow.html">M52 Polars, Arrow &amp; Columnar Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="api application programming interface: the documented way programs talk to a library or service, such as a rest api over http. tooling">
+        <dt id="term-api">API <span class="tag">Tooling</span></dt>
+        <dd>Application Programming Interface: the documented way programs talk to a library or service, such as a REST API over HTTP. <a class="gl-module" href="../modules/m45-web-apis.html">M45 Web &amp; APIs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="*args / **kwargs parameters that collect any extra positional arguments into a tuple and extra keyword arguments into a dict. python">
+        <dt id="term-args-kwargs">*args / **kwargs <span class="tag">Python</span></dt>
+        <dd>Parameters that collect any extra positional arguments into a tuple and extra keyword arguments into a dict. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="argument a value passed to a function when it is called. arguments fill the function's parameters by position or by keyword. python">
+        <dt id="term-argument">Argument <span class="tag">Python</span></dt>
+        <dd>A value passed to a function when it is called. Arguments fill the function's parameters by position or by keyword. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="assertion an assert condition, message statement that raises assertionerror when the condition is false; pytest uses plain asserts for tests. python">
+        <dt id="term-assertion">Assertion <span class="tag">Python</span></dt>
+        <dd>An <code>assert condition, message</code> statement that raises <code>AssertionError</code> when the condition is false; pytest uses plain asserts for tests. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="async / await keywords for defining coroutines (async def) and suspending them until an awaitable finishes (await), so one thread can interleave many i/o tasks. python">
+        <dt id="term-async-await">Async / await <span class="tag">Python</span></dt>
+        <dd>Keywords for defining coroutines (<code>async def</code>) and suspending them until an awaitable finishes (<code>await</code>), so one thread can interleave many I/O tasks. <a class="gl-module" href="../modules/m38-asyncio.html">M38 Async Programming with asyncio</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="attribute a name attached to an object and accessed with a dot, such as user.name or list.append. python">
+        <dt id="term-attribute">Attribute <span class="tag">Python</span></dt>
+        <dd>A name attached to an object and accessed with a dot, such as <code>user.name</code> or <code>list.append</code>. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="autograd automatic differentiation that records operations on tensors and computes gradients for you, as in pytorch. ml">
+        <dt id="term-autograd">Autograd <span class="tag">ML</span></dt>
+        <dd>Automatic differentiation that records operations on tensors and computes gradients for you, as in PyTorch. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="avl tree a self-balancing binary search tree whose subtrees differ in height by at most one, restored with rotations. cs">
+        <dt id="term-avl-tree">AVL tree <span class="tag">CS</span></dt>
+        <dd>A self-balancing binary search tree whose subtrees differ in height by at most one, restored with rotations. <a class="gl-module" href="../modules/m24-trees.html">M24 Trees &amp; Binary Search Trees</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-b" class="gl-letter">B</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="de" data-search="backpressure a mechanism that slows producers when consumers cannot keep up, so a streaming system does not run out of memory. data engineering">
+        <dt id="term-backpressure">Backpressure <span class="tag">Data engineering</span></dt>
+        <dd>A mechanism that slows producers when consumers cannot keep up, so a streaming system does not run out of memory. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="backpropagation computing the gradient of the loss with respect to every weight by applying the chain rule backward through the network. ml">
+        <dt id="term-backpropagation">Backpropagation <span class="tag">ML</span></dt>
+        <dd>Computing the gradient of the loss with respect to every weight by applying the chain rule backward through the network. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="backtracking building a solution step by step and undoing a choice as soon as it cannot lead to a valid answer. cs">
+        <dt id="term-backtracking">Backtracking <span class="tag">CS</span></dt>
+        <dd>Building a solution step by step and undoing a choice as soon as it cannot lead to a valid answer. <a class="gl-module" href="../modules/m33-greedy-backtracking.html">M33 Greedy Algorithms &amp; Backtracking</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="base case the condition in a recursive function that returns directly without recursing, stopping the recursion. cs">
+        <dt id="term-base-case">Base case <span class="tag">CS</span></dt>
+        <dd>The condition in a recursive function that returns directly without recursing, stopping the recursion. <a class="gl-module" href="../modules/m28-recursion.html">M28 Recursion &amp; Divide and Conquer</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="batch processing processing data in large scheduled chunks (hourly, daily) rather than continuously. data engineering">
+        <dt id="term-batch-processing">Batch processing <span class="tag">Data engineering</span></dt>
+        <dd>Processing data in large scheduled chunks (hourly, daily) rather than continuously. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="bellman-ford a shortest-path algorithm that relaxes every edge v − 1 times; handles negative weights and detects negative cycles in o(ve). cs">
+        <dt id="term-bellman-ford">Bellman-Ford <span class="tag">CS</span></dt>
+        <dd>A shortest-path algorithm that relaxes every edge V − 1 times; handles negative weights and detects negative cycles in O(VE). <a class="gl-module" href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="bfs (breadth-first search) graph traversal that visits vertices in order of distance from the start using a queue; finds shortest paths in unweighted graphs. cs">
+        <dt id="term-bfs-breadth-first-search">BFS (breadth-first search) <span class="tag">CS</span></dt>
+        <dd>Graph traversal that visits vertices in order of distance from the start using a queue; finds shortest paths in unweighted graphs. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="bias-variance trade-off simple models underfit (high bias) and flexible models overfit (high variance); good models balance the two. ml">
+        <dt id="term-bias-variance-trade-off">Bias-variance trade-off <span class="tag">ML</span></dt>
+        <dd>Simple models underfit (high bias) and flexible models overfit (high variance); good models balance the two. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="big-o notation an upper bound on how an algorithm's cost grows with input size, ignoring constant factors, such as o(n log n). cs">
+        <dt id="term-big-o-notation">Big-O notation <span class="tag">CS</span></dt>
+        <dd>An upper bound on how an algorithm's cost grows with input size, ignoring constant factors, such as O(n log n). <a class="gl-module" href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="binary search finding a target in sorted data by repeatedly halving the search interval; o(log n). cs">
+        <dt id="term-binary-search">Binary search <span class="tag">CS</span></dt>
+        <dd>Finding a target in sorted data by repeatedly halving the search interval; O(log n). <a class="gl-module" href="../modules/m30-searching.html">M30 Searching &amp; Array Techniques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="binary search tree (bst) a binary tree where each node's left subtree holds smaller keys and its right subtree larger ones. cs">
+        <dt id="term-binary-search-tree-bst">Binary search tree (BST) <span class="tag">CS</span></dt>
+        <dd>A binary tree where each node's left subtree holds smaller keys and its right subtree larger ones. <a class="gl-module" href="../modules/m24-trees.html">M24 Trees &amp; Binary Search Trees</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="bit manipulation working directly with an integer's binary digits using operators like &amp;amp;, |, ^, ~, &amp;lt;&amp;lt;, and &amp;gt;&amp;gt;. cs">
+        <dt id="term-bit-manipulation">Bit manipulation <span class="tag">CS</span></dt>
+        <dd>Working directly with an integer's binary digits using operators like <code>&amp;</code>, <code>|</code>, <code>^</code>, <code>~</code>, <code>&lt;&lt;</code>, and <code>&gt;&gt;</code>. <a class="gl-module" href="../modules/m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="black-box testing testing behavior through public inputs and outputs without relying on internal implementation details. tooling">
+        <dt id="term-black-box-testing">Black-box testing <span class="tag">Tooling</span></dt>
+        <dd>Testing behavior through public inputs and outputs without relying on internal implementation details. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="bloom filter a compact probabilistic set that can say &quot;definitely not present&quot; or &quot;probably present&quot;, using a bit array and k hash functions. cs">
+        <dt id="term-bloom-filter">Bloom filter <span class="tag">CS</span></dt>
+        <dd>A compact probabilistic set that can say "definitely not present" or "probably present", using a bit array and k hash functions. <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="bound method a function retrieved from an instance, with that instance already filled in as self. python">
+        <dt id="term-bound-method">Bound method <span class="tag">Python</span></dt>
+        <dd>A function retrieved from an instance, with that instance already filled in as <code>self</code>. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="breakpoint a marker where a debugger pauses execution; breakpoint() drops into pdb. tooling">
+        <dt id="term-breakpoint">Breakpoint <span class="tag">Tooling</span></dt>
+        <dd>A marker where a debugger pauses execution; <code>breakpoint()</code> drops into pdb. <a class="gl-module" href="../modules/m43-debugging-security.html">M43 Debugging &amp; Secure Code</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="broadcasting numpy's rules for combining arrays of different shapes by virtually stretching size-1 dimensions, without copying data. data science">
+        <dt id="term-broadcasting">Broadcasting <span class="tag">Data science</span></dt>
+        <dd>NumPy's rules for combining arrays of different shapes by virtually stretching size-1 dimensions, without copying data. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="built-in a name available everywhere without importing, such as print, len, or valueerror; they live in the builtins module. python">
+        <dt id="term-built-in">Built-in <span class="tag">Python</span></dt>
+        <dd>A name available everywhere without importing, such as <code>print</code>, <code>len</code>, or <code>ValueError</code>; they live in the <code>builtins</code> module. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="bytecode the compact instruction format that cpython compiles source code into and then executes; cached in __pycache__ as .pyc files. python">
+        <dt id="term-bytecode">Bytecode <span class="tag">Python</span></dt>
+        <dd>The compact instruction format that CPython compiles source code into and then executes; cached in <code>__pycache__</code> as <code>.pyc</code> files. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="bytes an immutable sequence of integers 0–255 representing raw binary data; text becomes bytes by encoding it (for example to utf-8). python">
+        <dt id="term-bytes">bytes <span class="tag">Python</span></dt>
+        <dd>An immutable sequence of integers 0–255 representing raw binary data; text becomes bytes by encoding it (for example to UTF-8). <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-c" class="gl-letter">C</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="call stack the stack of active function frames; each call pushes a frame and each return pops it. cs">
+        <dt id="term-call-stack">Call stack <span class="tag">CS</span></dt>
+        <dd>The stack of active function frames; each call pushes a frame and each return pops it. <a class="gl-module" href="../modules/m28-recursion.html">M28 Recursion &amp; Divide and Conquer</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="callable any object you can call with (): functions, methods, classes, and instances whose class defines __call__. python">
+        <dt id="term-callable">Callable <span class="tag">Python</span></dt>
+        <dd>Any object you can call with <code>()</code>: functions, methods, classes, and instances whose class defines <code>__call__</code>. <a class="gl-module" href="../modules/m15-decorators.html">M15 Decorators &amp; Context Managers</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="ci (continuous integration) automatically running checks (lint, types, tests) on every push or pull request, for example with github actions. tooling">
+        <dt id="term-ci-continuous-integration">CI (continuous integration) <span class="tag">Tooling</span></dt>
+        <dd>Automatically running checks (lint, types, tests) on every push or pull request, for example with GitHub Actions. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="class a blueprint that defines the attributes and methods of its instances; creating an instance is calling the class. python">
+        <dt id="term-class">Class <span class="tag">Python</span></dt>
+        <dd>A blueprint that defines the attributes and methods of its instances; creating an instance is calling the class. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="class method a method decorated with @classmethod that receives the class (cls) rather than an instance; often used as an alternative constructor. python">
+        <dt id="term-class-method">Class method <span class="tag">Python</span></dt>
+        <dd>A method decorated with <code>@classmethod</code> that receives the class (<code>cls</code>) rather than an instance; often used as an alternative constructor. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="classification supervised learning that predicts a discrete label, such as spam or not spam. ml">
+        <dt id="term-classification">Classification <span class="tag">ML</span></dt>
+        <dd>Supervised learning that predicts a discrete label, such as spam or not spam. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="closure a function that remembers variables from the enclosing scope where it was defined, even after that scope has finished. python">
+        <dt id="term-closure">Closure <span class="tag">Python</span></dt>
+        <dd>A function that remembers variables from the enclosing scope where it was defined, even after that scope has finished. <a class="gl-module" href="../modules/m15-decorators.html">M15 Decorators &amp; Context Managers</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="clustering grouping unlabeled data points so points in the same group are similar, as in k-means. ml">
+        <dt id="term-clustering">Clustering <span class="tag">ML</span></dt>
+        <dd>Grouping unlabeled data points so points in the same group are similar, as in k-means. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="collision (hashing) two different keys mapping to the same hash-table slot, resolved by chaining or probing. cs">
+        <dt id="term-collision-hashing">Collision (hashing) <span class="tag">CS</span></dt>
+        <dd>Two different keys mapping to the same hash-table slot, resolved by chaining or probing. <a class="gl-module" href="../modules/m23-hash-tables.html">M23 Hash Tables &amp; Sets</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="composition building objects by holding other objects as attributes (&quot;has-a&quot;) instead of inheriting from them (&quot;is-a&quot;). python">
+        <dt id="term-composition">Composition <span class="tag">Python</span></dt>
+        <dd>Building objects by holding other objects as attributes ("has-a") instead of inheriting from them ("is-a"). <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="comprehension a compact expression that builds a list, set, or dict from an iterable, such as [x * x for x in xs if x &amp;gt; 0]. python">
+        <dt id="term-comprehension">Comprehension <span class="tag">Python</span></dt>
+        <dd>A compact expression that builds a list, set, or dict from an iterable, such as <code>[x * x for x in xs if x &gt; 0]</code>. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="conda-forge a community-maintained channel of conda packages for many languages; pixi's default source of packages. tooling">
+        <dt id="term-conda-forge">conda-forge <span class="tag">Tooling</span></dt>
+        <dd>A community-maintained channel of conda packages for many languages; Pixi's default source of packages. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="confidence interval a range computed from a sample that, under repeated sampling, contains the true parameter a stated fraction of the time (e.g. 95%). data science">
+        <dt id="term-confidence-interval">Confidence interval <span class="tag">Data science</span></dt>
+        <dd>A range computed from a sample that, under repeated sampling, contains the true parameter a stated fraction of the time (e.g. 95%). <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="context manager an object with __enter__ and __exit__ used in a with statement to set up and reliably clean up a resource. python">
+        <dt id="term-context-manager">Context manager <span class="tag">Python</span></dt>
+        <dd>An object with <code>__enter__</code> and <code>__exit__</code> used in a <code>with</code> statement to set up and reliably clean up a resource. <a class="gl-module" href="../modules/m15-decorators.html">M15 Decorators &amp; Context Managers</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="conventional commits a commit-message convention like feat(parser): add t-string support that tools use to generate changelogs. tooling">
+        <dt id="term-conventional-commits">Conventional Commits <span class="tag">Tooling</span></dt>
+        <dd>A commit-message convention like <code>feat(parser): add t-string support</code> that tools use to generate changelogs. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="coroutine the object returned by calling an async def function; it runs only when awaited or scheduled as a task. python">
+        <dt id="term-coroutine">Coroutine <span class="tag">Python</span></dt>
+        <dd>The object returned by calling an <code>async def</code> function; it runs only when awaited or scheduled as a task. <a class="gl-module" href="../modules/m38-asyncio.html">M38 Async Programming with asyncio</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="correlation a measure from −1 to 1 of how strongly two variables move together linearly; correlation does not imply causation. data science">
+        <dt id="term-correlation">Correlation <span class="tag">Data science</span></dt>
+        <dd>A measure from −1 to 1 of how strongly two variables move together linearly; correlation does not imply causation. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="cosine similarity the cosine of the angle between two vectors; 1 means same direction, commonly used to compare embeddings. ml">
+        <dt id="term-cosine-similarity">Cosine similarity <span class="tag">ML</span></dt>
+        <dd>The cosine of the angle between two vectors; 1 means same direction, commonly used to compare embeddings. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="coverage the share of code lines or branches executed by the test suite, measured with pytest-cov. tooling">
+        <dt id="term-coverage">Coverage <span class="tag">Tooling</span></dt>
+        <dd>The share of code lines or branches executed by the test suite, measured with pytest-cov. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="cpython the reference implementation of python, written in c, which is what python.org and conda-forge ship. python">
+        <dt id="term-cpython">CPython <span class="tag">Python</span></dt>
+        <dd>The reference implementation of Python, written in C, which is what <code>python.org</code> and conda-forge ship. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="cross-validation estimating model performance by training and evaluating on several different train/validation splits (folds). ml">
+        <dt id="term-cross-validation">Cross-validation <span class="tag">ML</span></dt>
+        <dd>Estimating model performance by training and evaluating on several different train/validation splits (folds). <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="cte (common table expression) a named temporary result defined with with in sql, used to make complex queries readable. data engineering">
+        <dt id="term-cte-common-table-expression">CTE (common table expression) <span class="tag">Data engineering</span></dt>
+        <dd>A named temporary result defined with <code>WITH</code> in SQL, used to make complex queries readable. <a class="gl-module" href="../modules/m61-sql-duckdb.html">M61 Analytical SQL &amp; DuckDB</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="cycle detection determining whether a graph contains a cycle, typically with dfs coloring or union-find. cs">
+        <dt id="term-cycle-detection">Cycle detection <span class="tag">CS</span></dt>
+        <dd>Determining whether a graph contains a cycle, typically with DFS coloring or union-find. <a class="gl-module" href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-d" class="gl-letter">D</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="de" data-search="dask a python library for parallel and out-of-core computing that scales pandas- and numpy-style code across cores or clusters. data engineering">
+        <dt id="term-dask">Dask <span class="tag">Data engineering</span></dt>
+        <dd>A Python library for parallel and out-of-core computing that scales pandas- and NumPy-style code across cores or clusters. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="data drift a change over time in the distribution of production inputs compared with the training data, which degrades model accuracy. ml">
+        <dt id="term-data-drift">Data drift <span class="tag">ML</span></dt>
+        <dd>A change over time in the distribution of production inputs compared with the training data, which degrades model accuracy. <a class="gl-module" href="../modules/m59-ml-production.html">M59 ML in Production</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="data lake cheap storage holding raw files (often parquet) of any structure, queried later by engines like duckdb or spark. data engineering">
+        <dt id="term-data-lake">Data lake <span class="tag">Data engineering</span></dt>
+        <dd>Cheap storage holding raw files (often Parquet) of any structure, queried later by engines like DuckDB or Spark. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="data leakage information from the test set or the future sneaking into training, producing over-optimistic scores. ml">
+        <dt id="term-data-leakage">Data leakage <span class="tag">ML</span></dt>
+        <dd>Information from the test set or the future sneaking into training, producing over-optimistic scores. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="data quality how fit data is for use: complete, valid, accurate, consistent, and timely; enforced by validation checks in pipelines. data engineering">
+        <dt id="term-data-quality">Data quality <span class="tag">Data engineering</span></dt>
+        <dd>How fit data is for use: complete, valid, accurate, consistent, and timely; enforced by validation checks in pipelines. <a class="gl-module" href="../modules/m62-pipelines.html">M62 Pipelines, Orchestration &amp; Data Quality</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="data warehouse a database optimized for analytical queries over integrated, cleaned historical data. data engineering">
+        <dt id="term-data-warehouse">Data warehouse <span class="tag">Data engineering</span></dt>
+        <dd>A database optimized for analytical queries over integrated, cleaned historical data. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="dataclass a class decorated with @dataclass that gets __init__, __repr__, and __eq__ generated from its annotated fields. python">
+        <dt id="term-dataclass">Dataclass <span class="tag">Python</span></dt>
+        <dd>A class decorated with <code>@dataclass</code> that gets <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> generated from its annotated fields. <a class="gl-module" href="../modules/m13-dataclasses.html">M13 Dataclasses, Enums &amp; Records</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="dataframe a two-dimensional table of labeled columns, each with its own dtype, as in pandas and polars. data science">
+        <dt id="term-dataframe">DataFrame <span class="tag">Data science</span></dt>
+        <dd>A two-dimensional table of labeled columns, each with its own dtype, as in pandas and Polars. <a class="gl-module" href="../modules/m51-pandas.html">M51 pandas: Series &amp; DataFrames</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="debugger a tool to pause a program, inspect variables, and step through code; python's built-in one is pdb. tooling">
+        <dt id="term-debugger">Debugger <span class="tag">Tooling</span></dt>
+        <dd>A tool to pause a program, inspect variables, and step through code; Python's built-in one is pdb. <a class="gl-module" href="../modules/m43-debugging-security.html">M43 Debugging &amp; Secure Code</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="decision tree a model that predicts by asking a sequence of feature threshold questions arranged as a tree. ml">
+        <dt id="term-decision-tree">Decision tree <span class="tag">ML</span></dt>
+        <dd>A model that predicts by asking a sequence of feature threshold questions arranged as a tree. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="decorator a callable that takes a function or class and returns a replacement, applied with @name above the definition. python">
+        <dt id="term-decorator">Decorator <span class="tag">Python</span></dt>
+        <dd>A callable that takes a function or class and returns a replacement, applied with <code>@name</code> above the definition. <a class="gl-module" href="../modules/m15-decorators.html">M15 Decorators &amp; Context Managers</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="deep copy a copy that recursively duplicates nested objects too (copy.deepcopy), so changes to the copy never affect the original. python">
+        <dt id="term-deep-copy">Deep copy <span class="tag">Python</span></dt>
+        <dd>A copy that recursively duplicates nested objects too (<code>copy.deepcopy</code>), so changes to the copy never affect the original. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="dependency injection passing a component's collaborators in (as parameters) instead of creating them inside, which makes code testable and flexible. tooling">
+        <dt id="term-dependency-injection">Dependency injection <span class="tag">Tooling</span></dt>
+        <dd>Passing a component's collaborators in (as parameters) instead of creating them inside, which makes code testable and flexible. <a class="gl-module" href="../modules/m46-design.html">M46 Software Design &amp; Architecture</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="deque a double-ended queue supporting o(1) insertion and removal at both ends; collections.deque in python. cs">
+        <dt id="term-deque">Deque <span class="tag">CS</span></dt>
+        <dd>A double-ended queue supporting O(1) insertion and removal at both ends; <code>collections.deque</code> in Python. <a class="gl-module" href="../modules/m22-stacks-queues.html">M22 Stacks, Queues &amp; Deques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="descriptor an object defining __get__, __set__, or __delete__ that controls attribute access on another class; property is one. python">
+        <dt id="term-descriptor">Descriptor <span class="tag">Python</span></dt>
+        <dd>An object defining <code>__get__</code>, <code>__set__</code>, or <code>__delete__</code> that controls attribute access on another class; <code>property</code> is one. <a class="gl-module" href="../modules/m36-metaprogramming.html">M36 Metaprogramming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="design pattern a named, reusable solution to a common design problem, such as strategy, adapter, or observer. tooling">
+        <dt id="term-design-pattern">Design pattern <span class="tag">Tooling</span></dt>
+        <dd>A named, reusable solution to a common design problem, such as Strategy, Adapter, or Observer. <a class="gl-module" href="../modules/m46-design.html">M46 Software Design &amp; Architecture</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="dfs (depth-first search) graph traversal that goes as deep as possible before backtracking, using recursion or an explicit stack. cs">
+        <dt id="term-dfs-depth-first-search">DFS (depth-first search) <span class="tag">CS</span></dt>
+        <dd>Graph traversal that goes as deep as possible before backtracking, using recursion or an explicit stack. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="dictionary (dict) a mutable mapping from hashable keys to values, implemented as a hash table and ordered by insertion. python">
+        <dt id="term-dictionary-dict">Dictionary (dict) <span class="tag">Python</span></dt>
+        <dd>A mutable mapping from hashable keys to values, implemented as a hash table and ordered by insertion. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="dijkstra's algorithm single-source shortest paths for non-negative edge weights using a priority queue; o((v + e) log v) with a binary heap. cs">
+        <dt id="term-dijkstra-s-algorithm">Dijkstra's algorithm <span class="tag">CS</span></dt>
+        <dd>Single-source shortest paths for non-negative edge weights using a priority queue; O((V + E) log V) with a binary heap. <a class="gl-module" href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="dimension table a table of descriptive attributes (customer, product, date) that fact tables reference in a star schema. data engineering">
+        <dt id="term-dimension-table">Dimension table <span class="tag">Data engineering</span></dt>
+        <dd>A table of descriptive attributes (customer, product, date) that fact tables reference in a star schema. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="directed acyclic graph (dag) a directed graph with no cycles, such as a task-dependency graph; it always has a topological order. cs">
+        <dt id="term-directed-acyclic-graph-dag">Directed acyclic graph (DAG) <span class="tag">CS</span></dt>
+        <dd>A directed graph with no cycles, such as a task-dependency graph; it always has a topological order. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="distribution a description of how likely each value of a random variable is, such as the normal or binomial distribution. data science">
+        <dt id="term-distribution">Distribution <span class="tag">Data science</span></dt>
+        <dd>A description of how likely each value of a random variable is, such as the normal or binomial distribution. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="divide and conquer solving a problem by splitting it into smaller independent subproblems, solving them, and combining the results, as in merge sort. cs">
+        <dt id="term-divide-and-conquer">Divide and conquer <span class="tag">CS</span></dt>
+        <dd>Solving a problem by splitting it into smaller independent subproblems, solving them, and combining the results, as in merge sort. <a class="gl-module" href="../modules/m28-recursion.html">M28 Recursion &amp; Divide and Conquer</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="docstring a string literal as the first statement of a module, class, or function that documents it; available as __doc__. python">
+        <dt id="term-docstring">Docstring <span class="tag">Python</span></dt>
+        <dd>A string literal as the first statement of a module, class, or function that documents it; available as <code>__doc__</code>. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="dot product the sum of element-wise products of two equal-length vectors; it measures how aligned they are. data science">
+        <dt id="term-dot-product">Dot product <span class="tag">Data science</span></dt>
+        <dd>The sum of element-wise products of two equal-length vectors; it measures how aligned they are. <a class="gl-module" href="../modules/m47-vectors-matrices.html">M47 Vectors &amp; Matrices from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="dtype the data type of a numpy array's elements (such as float64 or int32), fixed for the whole array. data science">
+        <dt id="term-dtype">dtype <span class="tag">Data science</span></dt>
+        <dd>The data type of a NumPy array's elements (such as <code>float64</code> or <code>int32</code>), fixed for the whole array. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="duck typing using an object based on the methods it has rather than its declared type: if it has .read(), treat it like a file. python">
+        <dt id="term-duck-typing">Duck typing <span class="tag">Python</span></dt>
+        <dd>Using an object based on the methods it has rather than its declared type: if it has <code>.read()</code>, treat it like a file. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="duckdb an in-process analytical sql database that queries parquet, csv, and dataframes directly and very fast. data engineering">
+        <dt id="term-duckdb">DuckDB <span class="tag">Data engineering</span></dt>
+        <dd>An in-process analytical SQL database that queries Parquet, CSV, and DataFrames directly and very fast. <a class="gl-module" href="../modules/m61-sql-duckdb.html">M61 Analytical SQL &amp; DuckDB</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="dunder method a &quot;double underscore&quot; special method such as __len__ or __eq__ that python calls to implement built-in operations. python">
+        <dt id="term-dunder-method">Dunder method <span class="tag">Python</span></dt>
+        <dd>A "double underscore" special method such as <code>__len__</code> or <code>__eq__</code> that Python calls to implement built-in operations. <a class="gl-module" href="../modules/m11-data-model.html">M11 The Python Data Model</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="dynamic array a resizable array that over-allocates capacity so appends are amortized o(1); python's list. cs">
+        <dt id="term-dynamic-array">Dynamic array <span class="tag">CS</span></dt>
+        <dd>A resizable array that over-allocates capacity so appends are amortized O(1); Python's <code>list</code>. <a class="gl-module" href="../modules/m20-arrays.html">M20 Arrays &amp; Dynamic Arrays</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="dynamic programming solving problems with overlapping subproblems by storing each subproblem's answer instead of recomputing it. cs">
+        <dt id="term-dynamic-programming">Dynamic programming <span class="tag">CS</span></dt>
+        <dd>Solving problems with overlapping subproblems by storing each subproblem's answer instead of recomputing it. <a class="gl-module" href="../modules/m32-dynamic-programming.html">M32 Dynamic Programming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="dynamic typing types belong to objects, not variables, and are checked at run time; a name can refer to an int now and a str later. python">
+        <dt id="term-dynamic-typing">Dynamic typing <span class="tag">Python</span></dt>
+        <dd>Types belong to objects, not variables, and are checked at run time; a name can refer to an int now and a str later. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-e" class="gl-letter">E</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="edit distance the minimum number of insertions, deletions, and substitutions needed to turn one string into another (levenshtein distance). cs">
+        <dt id="term-edit-distance">Edit distance <span class="tag">CS</span></dt>
+        <dd>The minimum number of insertions, deletions, and substitutions needed to turn one string into another (Levenshtein distance). <a class="gl-module" href="../modules/m32-dynamic-programming.html">M32 Dynamic Programming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="editable install installing your own package so that changes to its source are visible immediately, e.g. { path = &quot;.&quot;, editable = true } in pixi. tooling">
+        <dt id="term-editable-install">Editable install <span class="tag">Tooling</span></dt>
+        <dd>Installing your own package so that changes to its source are visible immediately, e.g. <code>{ path = ".", editable = true }</code> in Pixi. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="eigenvector a nonzero vector that a matrix only scales (by its eigenvalue) without changing its direction. data science">
+        <dt id="term-eigenvector">Eigenvector <span class="tag">Data science</span></dt>
+        <dd>A nonzero vector that a matrix only scales (by its eigenvalue) without changing its direction. <a class="gl-module" href="../modules/m49-linear-algebra.html">M49 Linear Algebra with NumPy &amp; SciPy</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="elt extract, load, transform: load raw data into the warehouse first and transform it there with sql. data engineering">
+        <dt id="term-elt">ELT <span class="tag">Data engineering</span></dt>
+        <dd>Extract, Load, Transform: load raw data into the warehouse first and transform it there with SQL. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="embedding a dense vector representation of an item (word, user, image) where similar items are close together. ml">
+        <dt id="term-embedding">Embedding <span class="tag">ML</span></dt>
+        <dd>A dense vector representation of an item (word, user, image) where similar items are close together. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="encapsulation bundling data with the methods that operate on it and hiding internal details behind a public interface. python">
+        <dt id="term-encapsulation">Encapsulation <span class="tag">Python</span></dt>
+        <dd>Bundling data with the methods that operate on it and hiding internal details behind a public interface. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="encoding the rule that converts text to bytes and back, such as utf-8; always pass encoding= to open(). python">
+        <dt id="term-encoding">Encoding <span class="tag">Python</span></dt>
+        <dd>The rule that converts text to bytes and back, such as UTF-8; always pass <code>encoding=</code> to <code>open()</code>. <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="ensemble a model that combines many models' predictions, such as random forests or gradient boosting. ml">
+        <dt id="term-ensemble">Ensemble <span class="tag">ML</span></dt>
+        <dd>A model that combines many models' predictions, such as random forests or gradient boosting. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="enum a class whose members are a fixed set of named constants, from the enum module (enum, intenum, strenum). python">
+        <dt id="term-enum">Enum <span class="tag">Python</span></dt>
+        <dd>A class whose members are a fixed set of named constants, from the <code>enum</code> module (<code>Enum</code>, <code>IntEnum</code>, <code>StrEnum</code>). <a class="gl-module" href="../modules/m13-dataclasses.html">M13 Dataclasses, Enums &amp; Records</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="environment (pixi) a named, installed set of packages built from one or more features, stored in .pixi/envs/&amp;lt;name&amp;gt;. tooling">
+        <dt id="term-environment-pixi">Environment (Pixi) <span class="tag">Tooling</span></dt>
+        <dd>A named, installed set of packages built from one or more features, stored in <code>.pixi/envs/&lt;name&gt;</code>. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="epoch one full pass of the training algorithm over the entire training dataset. ml">
+        <dt id="term-epoch">Epoch <span class="tag">ML</span></dt>
+        <dd>One full pass of the training algorithm over the entire training dataset. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="estimator any scikit-learn object with fit(); predictors add predict() and transformers add transform(). ml">
+        <dt id="term-estimator">Estimator <span class="tag">ML</span></dt>
+        <dd>Any scikit-learn object with <code>fit()</code>; predictors add <code>predict()</code> and transformers add <code>transform()</code>. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="etl extract, transform, load: pull data from sources, clean and reshape it, and then load it into a target store. data engineering">
+        <dt id="term-etl">ETL <span class="tag">Data engineering</span></dt>
+        <dd>Extract, Transform, Load: pull data from sources, clean and reshape it, and then load it into a target store. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="event loop the scheduler at the heart of asyncio that runs coroutines, switching between them whenever one awaits i/o. python">
+        <dt id="term-event-loop">Event loop <span class="tag">Python</span></dt>
+        <dd>The scheduler at the heart of asyncio that runs coroutines, switching between them whenever one awaits I/O. <a class="gl-module" href="../modules/m38-asyncio.html">M38 Async Programming with asyncio</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="exception an object signaling an error or unusual condition; raising it unwinds the call stack until a matching except handles it. python">
+        <dt id="term-exception">Exception <span class="tag">Python</span></dt>
+        <dd>An object signaling an error or unusual condition; raising it unwinds the call stack until a matching <code>except</code> handles it. <a class="gl-module" href="../modules/m07-exceptions.html">M07 Errors &amp; Exceptions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="exception chaining linking a new exception to the one that caused it with raise new(...) from err, so tracebacks show both. python">
+        <dt id="term-exception-chaining">Exception chaining <span class="tag">Python</span></dt>
+        <dd>Linking a new exception to the one that caused it with <code>raise New(...) from err</code>, so tracebacks show both. <a class="gl-module" href="../modules/m07-exceptions.html">M07 Errors &amp; Exceptions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="exception group an exceptiongroup bundles several exceptions raised together (for example by a taskgroup); handle them with except*. python">
+        <dt id="term-exception-group">Exception group <span class="tag">Python</span></dt>
+        <dd>An <code>ExceptionGroup</code> bundles several exceptions raised together (for example by a TaskGroup); handle them with <code>except*</code>. <a class="gl-module" href="../modules/m07-exceptions.html">M07 Errors &amp; Exceptions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="exploratory data analysis (eda) investigating a dataset with summaries and plots to understand its structure and problems before modeling. data science">
+        <dt id="term-exploratory-data-analysis-eda">Exploratory data analysis (EDA) <span class="tag">Data science</span></dt>
+        <dd>Investigating a dataset with summaries and plots to understand its structure and problems before modeling. <a class="gl-module" href="../modules/m53-visualization.html">M53 Data Visualization</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="expression code that evaluates to a value, such as 2 + 3 or len(xs); contrast with a statement. python">
+        <dt id="term-expression">Expression <span class="tag">Python</span></dt>
+        <dd>Code that evaluates to a value, such as <code>2 + 3</code> or <code>len(xs)</code>; contrast with a statement. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-f" class="gl-letter">F</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="f-string a string literal prefixed with f whose {expressions} are evaluated and formatted immediately, e.g. f&quot;{total:.2f}&quot;. python">
+        <dt id="term-f-string">f-string <span class="tag">Python</span></dt>
+        <dd>A string literal prefixed with <code>f</code> whose <code>{expressions}</code> are evaluated and formatted immediately, e.g. <code>f"{total:.2f}"</code>. <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="fact table the central table in a star schema holding measurable events (sales, clicks) with foreign keys to dimensions. data engineering">
+        <dt id="term-fact-table">Fact table <span class="tag">Data engineering</span></dt>
+        <dd>The central table in a star schema holding measurable events (sales, clicks) with foreign keys to dimensions. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="fastapi a python web framework for building typed http apis with automatic validation and documentation. tooling">
+        <dt id="term-fastapi">FastAPI <span class="tag">Tooling</span></dt>
+        <dd>A Python web framework for building typed HTTP APIs with automatic validation and documentation. <a class="gl-module" href="../modules/m45-web-apis.html">M45 Web &amp; APIs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="feature an input variable used by a model to make predictions. ml">
+        <dt id="term-feature">Feature <span class="tag">ML</span></dt>
+        <dd>An input variable used by a model to make predictions. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="feature (pixi) a named bundle of dependencies, tasks, and settings in pixi.toml that environments are composed from. tooling">
+        <dt id="term-feature-pixi">Feature (Pixi) <span class="tag">Tooling</span></dt>
+        <dd>A named bundle of dependencies, tasks, and settings in <code>pixi.toml</code> that environments are composed from. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="feature engineering creating, transforming, or selecting input features to make patterns easier for a model to learn. ml">
+        <dt id="term-feature-engineering">Feature engineering <span class="tag">ML</span></dt>
+        <dd>Creating, transforming, or selecting input features to make patterns easier for a model to learn. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="fenwick tree a binary indexed tree supporting prefix sums and point updates in o(log n) using a single array. cs">
+        <dt id="term-fenwick-tree">Fenwick tree <span class="tag">CS</span></dt>
+        <dd>A binary indexed tree supporting prefix sums and point updates in O(log n) using a single array. <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="fixture (pytest) a function decorated with @pytest.fixture that provides setup (and teardown) to tests that request it by name. tooling">
+        <dt id="term-fixture-pytest">Fixture (pytest) <span class="tag">Tooling</span></dt>
+        <dd>A function decorated with <code>@pytest.fixture</code> that provides setup (and teardown) to tests that request it by name. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="foreign key a column referencing another table's primary key, enforcing a relationship between the tables. data engineering">
+        <dt id="term-foreign-key">Foreign key <span class="tag">Data engineering</span></dt>
+        <dd>A column referencing another table's primary key, enforcing a relationship between the tables. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="free-threaded build a cpython build without the gil (python3.14t), officially supported in 3.14 (pep 779), in which threads can run python code in parallel. python">
+        <dt id="term-free-threaded-build">Free-threaded build <span class="tag">Python</span></dt>
+        <dd>A CPython build without the GIL (<code>python3.14t</code>), officially supported in 3.14 (PEP 779), in which threads can run Python code in parallel. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="frozendict an immutable, hashable mapping added as a built-in in python 3.15 (pep 814). python">
+        <dt id="term-frozendict">frozendict <span class="tag">Python</span></dt>
+        <dd>An immutable, hashable mapping added as a built-in in Python 3.15 (PEP 814). <a class="gl-module" href="../modules/m18-functional.html">M18 Functional Python</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="frozenset an immutable, hashable version of set, usable as a dict key or set member. python">
+        <dt id="term-frozenset">Frozenset <span class="tag">Python</span></dt>
+        <dd>An immutable, hashable version of <code>set</code>, usable as a dict key or set member. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="function a named, reusable block of code defined with def that takes parameters and returns a value (none by default). python">
+        <dt id="term-function">Function <span class="tag">Python</span></dt>
+        <dd>A named, reusable block of code defined with <code>def</code> that takes parameters and returns a value (<code>None</code> by default). <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-g" class="gl-letter">G</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="garbage collection automatic memory reclamation; cpython frees most objects by reference counting and uses a cycle collector for reference cycles. python">
+        <dt id="term-garbage-collection">Garbage collection <span class="tag">Python</span></dt>
+        <dd>Automatic memory reclamation; CPython frees most objects by reference counting and uses a cycle collector for reference cycles. <a class="gl-module" href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="generator a function containing yield; calling it returns an iterator that produces values lazily, pausing between them. python">
+        <dt id="term-generator">Generator <span class="tag">Python</span></dt>
+        <dd>A function containing <code>yield</code>; calling it returns an iterator that produces values lazily, pausing between them. <a class="gl-module" href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="generator expression a lazy comprehension in parentheses, such as (x * x for x in xs), that yields values one at a time. python">
+        <dt id="term-generator-expression">Generator expression <span class="tag">Python</span></dt>
+        <dd>A lazy comprehension in parentheses, such as <code>(x * x for x in xs)</code>, that yields values one at a time. <a class="gl-module" href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="generic a class or function parameterized by a type variable, written def first[t](xs: list[t]) -&amp;gt; t in pep 695 syntax. python">
+        <dt id="term-generic">Generic <span class="tag">Python</span></dt>
+        <dd>A class or function parameterized by a type variable, written <code>def first[T](xs: list[T]) -&gt; T</code> in PEP 695 syntax. <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="gil (global interpreter lock) a lock in standard cpython that lets only one thread execute python bytecode at a time; removed in the free-threaded build. python">
+        <dt id="term-gil-global-interpreter-lock">GIL (global interpreter lock) <span class="tag">Python</span></dt>
+        <dd>A lock in standard CPython that lets only one thread execute Python bytecode at a time; removed in the free-threaded build. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="git a distributed version-control system that records snapshots (commits) of a project's history. tooling">
+        <dt id="term-git">Git <span class="tag">Tooling</span></dt>
+        <dd>A distributed version-control system that records snapshots (commits) of a project's history. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="gradient descent an optimization method that repeatedly steps parameters in the direction that most decreases the loss. ml">
+        <dt id="term-gradient-descent">Gradient descent <span class="tag">ML</span></dt>
+        <dd>An optimization method that repeatedly steps parameters in the direction that most decreases the loss. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="graph a set of vertices (nodes) connected by edges, possibly directed or weighted. cs">
+        <dt id="term-graph">Graph <span class="tag">CS</span></dt>
+        <dd>A set of vertices (nodes) connected by edges, possibly directed or weighted. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="greedy algorithm an algorithm that makes the locally best choice at each step; correct only when the problem has the greedy-choice property. cs">
+        <dt id="term-greedy-algorithm">Greedy algorithm <span class="tag">CS</span></dt>
+        <dd>An algorithm that makes the locally best choice at each step; correct only when the problem has the greedy-choice property. <a class="gl-module" href="../modules/m33-greedy-backtracking.html">M33 Greedy Algorithms &amp; Backtracking</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="groupby the split-apply-combine operation: split rows into groups by key, aggregate each group, and combine the results. data science">
+        <dt id="term-groupby">groupby <span class="tag">Data science</span></dt>
+        <dd>The split-apply-combine operation: split rows into groups by key, aggregate each group, and combine the results. <a class="gl-module" href="../modules/m51-pandas.html">M51 pandas: Series &amp; DataFrames</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-h" class="gl-letter">H</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="hash function a function mapping data to a fixed-size integer, ideally spreading keys uniformly; equal keys must hash equally. cs">
+        <dt id="term-hash-function">Hash function <span class="tag">CS</span></dt>
+        <dd>A function mapping data to a fixed-size integer, ideally spreading keys uniformly; equal keys must hash equally. <a class="gl-module" href="../modules/m23-hash-tables.html">M23 Hash Tables &amp; Sets</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="hash table a structure that stores key-value pairs in slots chosen by hashing the key, giving o(1) average lookup. cs">
+        <dt id="term-hash-table">Hash table <span class="tag">CS</span></dt>
+        <dd>A structure that stores key-value pairs in slots chosen by hashing the key, giving O(1) average lookup. <a class="gl-module" href="../modules/m23-hash-tables.html">M23 Hash Tables &amp; Sets</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="hashable an object with a hash value that never changes during its lifetime and an equality consistent with it; required for dict keys and set members. python">
+        <dt id="term-hashable">Hashable <span class="tag">Python</span></dt>
+        <dd>An object with a hash value that never changes during its lifetime and an equality consistent with it; required for dict keys and set members. <a class="gl-module" href="../modules/m23-hash-tables.html">M23 Hash Tables &amp; Sets</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="heap a complete binary tree where every parent is ≤ (min-heap) or ≥ (max-heap) its children, stored compactly in an array. cs">
+        <dt id="term-heap">Heap <span class="tag">CS</span></dt>
+        <dd>A complete binary tree where every parent is ≤ (min-heap) or ≥ (max-heap) its children, stored compactly in an array. <a class="gl-module" href="../modules/m25-heaps.html">M25 Heaps &amp; Priority Queues</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="higher-order function a function that takes or returns other functions, such as map, sorted(key=...), and decorators. python">
+        <dt id="term-higher-order-function">Higher-order function <span class="tag">Python</span></dt>
+        <dd>A function that takes or returns other functions, such as <code>map</code>, <code>sorted(key=...)</code>, and decorators. <a class="gl-module" href="../modules/m18-functional.html">M18 Functional Python</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="http the request/response protocol of the web, with methods like get and post and status codes like 200 and 404. tooling">
+        <dt id="term-http">HTTP <span class="tag">Tooling</span></dt>
+        <dd>The request/response protocol of the web, with methods like GET and POST and status codes like 200 and 404. <a class="gl-module" href="../modules/m45-web-apis.html">M45 Web &amp; APIs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="httpx a modern python http client with both synchronous and async apis. tooling">
+        <dt id="term-httpx">httpx <span class="tag">Tooling</span></dt>
+        <dd>A modern Python HTTP client with both synchronous and async APIs. <a class="gl-module" href="../modules/m45-web-apis.html">M45 Web &amp; APIs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="huffman coding a greedy, optimal prefix-free code that gives frequent symbols shorter bit strings. cs">
+        <dt id="term-huffman-coding">Huffman coding <span class="tag">CS</span></dt>
+        <dd>A greedy, optimal prefix-free code that gives frequent symbols shorter bit strings. <a class="gl-module" href="../modules/m33-greedy-backtracking.html">M33 Greedy Algorithms &amp; Backtracking</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="hyperparameter a setting chosen before training (learning rate, tree depth) rather than learned from data; tuned with search and cross-validation. ml">
+        <dt id="term-hyperparameter">Hyperparameter <span class="tag">ML</span></dt>
+        <dd>A setting chosen before training (learning rate, tree depth) rather than learned from data; tuned with search and cross-validation. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="hypothesis test a procedure that measures how surprising the data would be if a null hypothesis were true, summarized by a p-value. data science">
+        <dt id="term-hypothesis-test">Hypothesis test <span class="tag">Data science</span></dt>
+        <dd>A procedure that measures how surprising the data would be if a null hypothesis were true, summarized by a p-value. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-i" class="gl-letter">I</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="de" data-search="idempotent an operation that has the same effect whether it runs once or many times; essential for safely re-running pipelines. data engineering">
+        <dt id="term-idempotent">Idempotent <span class="tag">Data engineering</span></dt>
+        <dd>An operation that has the same effect whether it runs once or many times; essential for safely re-running pipelines. <a class="gl-module" href="../modules/m62-pipelines.html">M62 Pipelines, Orchestration &amp; Data Quality</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="identity which object a name refers to, compared with is and shown by id(); distinct from equality (==). python">
+        <dt id="term-identity">Identity <span class="tag">Python</span></dt>
+        <dd>Which object a name refers to, compared with <code>is</code> and shown by <code>id()</code>; distinct from equality (<code>==</code>). <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="immutable an object whose value cannot change after creation, such as int, str, tuple, and frozenset. python">
+        <dt id="term-immutable">Immutable <span class="tag">Python</span></dt>
+        <dd>An object whose value cannot change after creation, such as int, str, tuple, and frozenset. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="import system the machinery that finds, loads, and caches modules when you write import; loaded modules live in sys.modules. python">
+        <dt id="term-import-system">Import system <span class="tag">Python</span></dt>
+        <dd>The machinery that finds, loads, and caches modules when you write <code>import</code>; loaded modules live in <code>sys.modules</code>. <a class="gl-module" href="../modules/m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="in-place algorithm an algorithm that uses only o(1) (or o(log n)) extra memory beyond its input. cs">
+        <dt id="term-in-place-algorithm">In-place algorithm <span class="tag">CS</span></dt>
+        <dd>An algorithm that uses only O(1) (or O(log n)) extra memory beyond its input. <a class="gl-module" href="../modules/m29-sorting.html">M29 Sorting</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="incremental load processing only new or changed data since the last run instead of everything. data engineering">
+        <dt id="term-incremental-load">Incremental load <span class="tag">Data engineering</span></dt>
+        <dd>Processing only new or changed data since the last run instead of everything. <a class="gl-module" href="../modules/m62-pipelines.html">M62 Pipelines, Orchestration &amp; Data Quality</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="index (database) a data structure (usually a b-tree) that speeds up lookups on a column at the cost of extra storage and slower writes. data engineering">
+        <dt id="term-index-database">Index (database) <span class="tag">Data engineering</span></dt>
+        <dd>A data structure (usually a B-tree) that speeds up lookups on a column at the cost of extra storage and slower writes. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="inheritance defining a class in terms of a parent class so it reuses and can override the parent's attributes and methods. python">
+        <dt id="term-inheritance">Inheritance <span class="tag">Python</span></dt>
+        <dd>Defining a class in terms of a parent class so it reuses and can override the parent's attributes and methods. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="instance a concrete object created from a class, with its own attribute values. python">
+        <dt id="term-instance">Instance <span class="tag">Python</span></dt>
+        <dd>A concrete object created from a class, with its own attribute values. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="integration test a test that exercises several components together against real resources such as files or databases. tooling">
+        <dt id="term-integration-test">Integration test <span class="tag">Tooling</span></dt>
+        <dd>A test that exercises several components together against real resources such as files or databases. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="interpreter the program that reads and executes python code; also a single isolated runtime inside a process (see subinterpreter). python">
+        <dt id="term-interpreter">Interpreter <span class="tag">Python</span></dt>
+        <dd>The program that reads and executes Python code; also a single isolated runtime inside a process (see subinterpreter). <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="introspection examining objects at run time with tools like type(), dir(), getattr(), and the inspect module. python">
+        <dt id="term-introspection">Introspection <span class="tag">Python</span></dt>
+        <dd>Examining objects at run time with tools like <code>type()</code>, <code>dir()</code>, <code>getattr()</code>, and the <code>inspect</code> module. <a class="gl-module" href="../modules/m36-metaprogramming.html">M36 Metaprogramming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="iterable any object you can loop over: it returns an iterator from iter(), e.g. lists, strings, dicts, files, and generators. python">
+        <dt id="term-iterable">Iterable <span class="tag">Python</span></dt>
+        <dd>Any object you can loop over: it returns an iterator from <code>iter()</code>, e.g. lists, strings, dicts, files, and generators. <a class="gl-module" href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="iterator an object with __next__ that yields items one at a time and raises stopiteration when exhausted. python">
+        <dt id="term-iterator">Iterator <span class="tag">Python</span></dt>
+        <dd>An object with <code>__next__</code> that yields items one at a time and raises <code>StopIteration</code> when exhausted. <a class="gl-module" href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="itertools the standard-library module of fast building blocks for iterators, such as chain, islice, groupby, and batched. python">
+        <dt id="term-itertools">itertools <span class="tag">Python</span></dt>
+        <dd>The standard-library module of fast building blocks for iterators, such as <code>chain</code>, <code>islice</code>, <code>groupby</code>, and <code>batched</code>. <a class="gl-module" href="../modules/m14-iterators.html">M14 Iterators &amp; Generators</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-j" class="gl-letter">J</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="tool" data-search="jit compiler a just-in-time compiler that translates hot code to machine code while the program runs; cpython's is experimental in 3.14 (python_jit=1). tooling">
+        <dt id="term-jit-compiler">JIT compiler <span class="tag">Tooling</span></dt>
+        <dd>A just-in-time compiler that translates hot code to machine code while the program runs; CPython's is experimental in 3.14 (<code>PYTHON_JIT=1</code>). <a class="gl-module" href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="join combining rows from two tables based on matching key values (inner, left, right, full outer). data engineering">
+        <dt id="term-join">Join <span class="tag">Data engineering</span></dt>
+        <dd>Combining rows from two tables based on matching key values (inner, left, right, full outer). <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="json javascript object notation, a text format for nested data; read and written with python's json module. tooling">
+        <dt id="term-json">JSON <span class="tag">Tooling</span></dt>
+        <dd>JavaScript Object Notation, a text format for nested data; read and written with Python's <code>json</code> module. <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-k" class="gl-letter">K</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ml" data-search="k-means a clustering algorithm that alternates assigning points to the nearest of k centroids and moving each centroid to its points' mean. ml">
+        <dt id="term-k-means">k-means <span class="tag">ML</span></dt>
+        <dd>A clustering algorithm that alternates assigning points to the nearest of k centroids and moving each centroid to its points' mean. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="kafka a distributed, durable log for streaming events, organized into topics split into partitions. data engineering">
+        <dt id="term-kafka">Kafka <span class="tag">Data engineering</span></dt>
+        <dd>A distributed, durable log for streaming events, organized into topics split into partitions. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="keyword argument an argument passed by parameter name, such as sorted(xs, reverse=true). python">
+        <dt id="term-keyword-argument">Keyword argument <span class="tag">Python</span></dt>
+        <dd>An argument passed by parameter name, such as <code>sorted(xs, reverse=True)</code>. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="kmp algorithm knuth-morris-pratt string search, which uses a failure table to find a pattern in o(n + m) without re-scanning text. cs">
+        <dt id="term-kmp-algorithm">KMP algorithm <span class="tag">CS</span></dt>
+        <dd>Knuth-Morris-Pratt string search, which uses a failure table to find a pattern in O(n + m) without re-scanning text. <a class="gl-module" href="../modules/m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-l" class="gl-letter">L</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ml" data-search="label the target value a supervised model learns to predict. ml">
+        <dt id="term-label">Label <span class="tag">ML</span></dt>
+        <dd>The target value a supervised model learns to predict. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="lambda a small anonymous function written as a single expression, such as lambda x: x * 2. python">
+        <dt id="term-lambda">Lambda <span class="tag">Python</span></dt>
+        <dd>A small anonymous function written as a single expression, such as <code>lambda x: x * 2</code>. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="lazy evaluation (polars) building a query plan first and executing it only when results are requested, so the engine can optimize the whole query. data science">
+        <dt id="term-lazy-evaluation-polars">Lazy evaluation (Polars) <span class="tag">Data science</span></dt>
+        <dd>Building a query plan first and executing it only when results are requested, so the engine can optimize the whole query. <a class="gl-module" href="../modules/m52-polars-arrow.html">M52 Polars, Arrow &amp; Columnar Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="lazy import python 3.15's lazy import (pep 810), which binds a module name now but loads the module only on first use. python">
+        <dt id="term-lazy-import">Lazy import <span class="tag">Python</span></dt>
+        <dd>Python 3.15's <code>lazy import</code> (PEP 810), which binds a module name now but loads the module only on first use. <a class="gl-module" href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="learning rate the step size in gradient descent; too large diverges, too small learns slowly. ml">
+        <dt id="term-learning-rate">Learning rate <span class="tag">ML</span></dt>
+        <dd>The step size in gradient descent; too large diverges, too small learns slowly. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="legb rule the order python searches for a name: local, enclosing function, global (module), then built-in. python">
+        <dt id="term-legb-rule">LEGB rule <span class="tag">Python</span></dt>
+        <dd>The order Python searches for a name: Local, Enclosing function, Global (module), then Built-in. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="linear regression a model predicting a number as a weighted sum of features, fit by minimizing squared error. ml">
+        <dt id="term-linear-regression">Linear regression <span class="tag">ML</span></dt>
+        <dd>A model predicting a number as a weighted sum of features, fit by minimizing squared error. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="linked list a sequence of nodes where each node points to the next (and in a doubly linked list, the previous). cs">
+        <dt id="term-linked-list">Linked list <span class="tag">CS</span></dt>
+        <dd>A sequence of nodes where each node points to the next (and in a doubly linked list, the previous). <a class="gl-module" href="../modules/m21-linked-lists.html">M21 Linked Lists</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="linter a tool that flags likely bugs and style problems without running the code; this course uses ruff. tooling">
+        <dt id="term-linter">Linter <span class="tag">Tooling</span></dt>
+        <dd>A tool that flags likely bugs and style problems without running the code; this course uses ruff. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="list a mutable, ordered sequence implemented as a dynamic array of references. python">
+        <dt id="term-list">List <span class="tag">Python</span></dt>
+        <dd>A mutable, ordered sequence implemented as a dynamic array of references. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="literal source code that directly denotes a value, such as 42, &quot;hi&quot;, or [1, 2]. python">
+        <dt id="term-literal">Literal <span class="tag">Python</span></dt>
+        <dd>Source code that directly denotes a value, such as <code>42</code>, <code>"hi"</code>, or <code>[1, 2]</code>. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="load factor the ratio of stored items to slots in a hash table; tables resize when it passes a threshold to keep operations fast. cs">
+        <dt id="term-load-factor">Load factor <span class="tag">CS</span></dt>
+        <dd>The ratio of stored items to slots in a hash table; tables resize when it passes a threshold to keep operations fast. <a class="gl-module" href="../modules/m23-hash-tables.html">M23 Hash Tables &amp; Sets</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="lock (mutex) a synchronization primitive (threading.lock) that lets only one thread at a time run a critical section. python">
+        <dt id="term-lock-mutex">Lock (mutex) <span class="tag">Python</span></dt>
+        <dd>A synchronization primitive (<code>threading.Lock</code>) that lets only one thread at a time run a critical section. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="lockfile a file (pixi.lock) recording the exact version of every package for every platform, so installs are reproducible. tooling">
+        <dt id="term-lockfile">Lockfile <span class="tag">Tooling</span></dt>
+        <dd>A file (<code>pixi.lock</code>) recording the exact version of every package for every platform, so installs are reproducible. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="logging recording events from a running program for later diagnosis; professional code uses structured logs (structlog) instead of print(). tooling">
+        <dt id="term-logging">Logging <span class="tag">Tooling</span></dt>
+        <dd>Recording events from a running program for later diagnosis; professional code uses structured logs (structlog) instead of <code>print()</code>. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="logistic regression a linear classifier that passes a weighted sum through the sigmoid function to output a probability. ml">
+        <dt id="term-logistic-regression">Logistic regression <span class="tag">ML</span></dt>
+        <dd>A linear classifier that passes a weighted sum through the sigmoid function to output a probability. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="loss function a function measuring how wrong a model's predictions are, such as mean squared error or cross-entropy; training minimizes it. ml">
+        <dt id="term-loss-function">Loss function <span class="tag">ML</span></dt>
+        <dd>A function measuring how wrong a model's predictions are, such as mean squared error or cross-entropy; training minimizes it. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="lru cache a fixed-size cache that evicts the least recently used item; built from a hash map plus a doubly linked list, or functools.lru_cache. cs">
+        <dt id="term-lru-cache">LRU cache <span class="tag">CS</span></dt>
+        <dd>A fixed-size cache that evicts the least recently used item; built from a hash map plus a doubly linked list, or <code>functools.lru_cache</code>. <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-m" class="gl-letter">M</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ds" data-search="matrix multiplication combining an m × n and an n × p matrix into an m × p matrix where each entry is a row-column dot product; @ in python. data science">
+        <dt id="term-matrix-multiplication">Matrix multiplication <span class="tag">Data science</span></dt>
+        <dd>Combining an m × n and an n × p matrix into an m × p matrix where each entry is a row-column dot product; <code>@</code> in Python. <a class="gl-module" href="../modules/m47-vectors-matrices.html">M47 Vectors &amp; Matrices from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="memoization caching a function's results by its arguments so repeated calls return instantly; functools.cache in python. cs">
+        <dt id="term-memoization">Memoization <span class="tag">CS</span></dt>
+        <dd>Caching a function's results by its arguments so repeated calls return instantly; <code>functools.cache</code> in Python. <a class="gl-module" href="../modules/m28-recursion.html">M28 Recursion &amp; Divide and Conquer</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="merge sort a stable divide-and-conquer sort that splits the list, sorts halves, and merges them; o(n log n) time, o(n) space. cs">
+        <dt id="term-merge-sort">Merge sort <span class="tag">CS</span></dt>
+        <dd>A stable divide-and-conquer sort that splits the list, sorts halves, and merges them; O(n log n) time, O(n) space. <a class="gl-module" href="../modules/m29-sorting.html">M29 Sorting</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="metaclass the class of a class; it controls how classes are created. the default metaclass is type. python">
+        <dt id="term-metaclass">Metaclass <span class="tag">Python</span></dt>
+        <dd>The class of a class; it controls how classes are created. The default metaclass is <code>type</code>. <a class="gl-module" href="../modules/m36-metaprogramming.html">M36 Metaprogramming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="method a function defined in a class body and called on instances, receiving the instance as its first parameter (self). python">
+        <dt id="term-method">Method <span class="tag">Python</span></dt>
+        <dd>A function defined in a class body and called on instances, receiving the instance as its first parameter (<code>self</code>). <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="method resolution order (mro) the order in which python searches base classes for an attribute, computed with c3 linearization; see class.__mro__. python">
+        <dt id="term-method-resolution-order-mro">Method resolution order (MRO) <span class="tag">Python</span></dt>
+        <dd>The order in which Python searches base classes for an attribute, computed with C3 linearization; see <code>Class.__mro__</code>. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="minimum spanning tree a subset of edges connecting all vertices of a weighted graph with minimum total weight, found by prim's or kruskal's algorithm. cs">
+        <dt id="term-minimum-spanning-tree">Minimum spanning tree <span class="tag">CS</span></dt>
+        <dd>A subset of edges connecting all vertices of a weighted graph with minimum total weight, found by Prim's or Kruskal's algorithm. <a class="gl-module" href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="mixin a small class that adds one capability to others through multiple inheritance, not meant to stand alone. python">
+        <dt id="term-mixin">Mixin <span class="tag">Python</span></dt>
+        <dd>A small class that adds one capability to others through multiple inheritance, not meant to stand alone. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="mlops practices for deploying, monitoring, versioning, and retraining machine-learning models reliably in production. ml">
+        <dt id="term-mlops">MLOps <span class="tag">ML</span></dt>
+        <dd>Practices for deploying, monitoring, versioning, and retraining machine-learning models reliably in production. <a class="gl-module" href="../modules/m59-ml-production.html">M59 ML in Production</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="mocking replacing a dependency with a fake object in tests (unittest.mock) to isolate the code under test. tooling">
+        <dt id="term-mocking">Mocking <span class="tag">Tooling</span></dt>
+        <dd>Replacing a dependency with a fake object in tests (<code>unittest.mock</code>) to isolate the code under test. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="model persistence saving a trained model to disk (for example with joblib or skops) and loading it later for predictions. ml">
+        <dt id="term-model-persistence">Model persistence <span class="tag">ML</span></dt>
+        <dd>Saving a trained model to disk (for example with joblib or skops) and loading it later for predictions. <a class="gl-module" href="../modules/m59-ml-production.html">M59 ML in Production</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="modular arithmetic arithmetic on remainders after division by a modulus; pow(b, e, m) computes modular powers efficiently. cs">
+        <dt id="term-modular-arithmetic">Modular arithmetic <span class="tag">CS</span></dt>
+        <dd>Arithmetic on remainders after division by a modulus; <code>pow(b, e, m)</code> computes modular powers efficiently. <a class="gl-module" href="../modules/m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="module a single .py file (or extension) whose top-level names form a namespace you can import. python">
+        <dt id="term-module">Module <span class="tag">Python</span></dt>
+        <dd>A single <code>.py</code> file (or extension) whose top-level names form a namespace you can import. <a class="gl-module" href="../modules/m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="mutable an object whose contents can change in place, such as list, dict, set, and most user-defined objects. python">
+        <dt id="term-mutable">Mutable <span class="tag">Python</span></dt>
+        <dd>An object whose contents can change in place, such as list, dict, set, and most user-defined objects. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="mypy a static type checker that reads type hints and reports type errors without running the program. tooling">
+        <dt id="term-mypy">mypy <span class="tag">Tooling</span></dt>
+        <dd>A static type checker that reads type hints and reports type errors without running the program. <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-n" class="gl-letter">N</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="name binding associating a name with an object via assignment, def, import, and so on; names are references, not boxes. python">
+        <dt id="term-name-binding">Name binding <span class="tag">Python</span></dt>
+        <dd>Associating a name with an object via assignment, <code>def</code>, <code>import</code>, and so on; names are references, not boxes. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="namedtuple a tuple subclass with named fields (typing.namedtuple), useful for lightweight immutable records. python">
+        <dt id="term-namedtuple">NamedTuple <span class="tag">Python</span></dt>
+        <dd>A tuple subclass with named fields (<code>typing.NamedTuple</code>), useful for lightweight immutable records. <a class="gl-module" href="../modules/m13-dataclasses.html">M13 Dataclasses, Enums &amp; Records</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="namespace a mapping from names to objects, such as a module's globals or a function's locals. python">
+        <dt id="term-namespace">Namespace <span class="tag">Python</span></dt>
+        <dd>A mapping from names to objects, such as a module's globals or a function's locals. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="ndarray numpy's n-dimensional array: a block of same-typed values with a shape and strides. data science">
+        <dt id="term-ndarray">ndarray <span class="tag">Data science</span></dt>
+        <dd>NumPy's n-dimensional array: a block of same-typed values with a shape and strides. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="nearest neighbors finding the training points closest to a query point; the basis of k-nn models and vector search. ml">
+        <dt id="term-nearest-neighbors">Nearest neighbors <span class="tag">ML</span></dt>
+        <dd>Finding the training points closest to a query point; the basis of k-NN models and vector search. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="neural network a model made of layers of weighted sums followed by nonlinear activations, trained with backpropagation. ml">
+        <dt id="term-neural-network">Neural network <span class="tag">ML</span></dt>
+        <dd>A model made of layers of weighted sums followed by nonlinear activations, trained with backpropagation. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="none python's single null value, the default return value of functions; test for it with is none. python">
+        <dt id="term-none">None <span class="tag">Python</span></dt>
+        <dd>Python's single null value, the default return value of functions; test for it with <code>is None</code>. <a class="gl-module" href="../modules/m02-values-types.html">M02 Values, Types &amp; Variables</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="norm a measure of a vector's length, such as the euclidean (l2) norm or the manhattan (l1) norm. data science">
+        <dt id="term-norm">Norm <span class="tag">Data science</span></dt>
+        <dd>A measure of a vector's length, such as the Euclidean (L2) norm or the Manhattan (L1) norm. <a class="gl-module" href="../modules/m49-linear-algebra.html">M49 Linear Algebra with NumPy &amp; SciPy</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="normalization structuring relational tables to remove duplication so each fact is stored once. data engineering">
+        <dt id="term-normalization">Normalization <span class="tag">Data engineering</span></dt>
+        <dd>Structuring relational tables to remove duplication so each fact is stored once. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-o" class="gl-letter">O</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="de" data-search="orchestrator a tool (airflow, dagster, prefect) that schedules pipeline tasks, tracks dependencies, retries failures, and records runs. data engineering">
+        <dt id="term-orchestrator">Orchestrator <span class="tag">Data engineering</span></dt>
+        <dd>A tool (Airflow, Dagster, Prefect) that schedules pipeline tasks, tracks dependencies, retries failures, and records runs. <a class="gl-module" href="../modules/m62-pipelines.html">M62 Pipelines, Orchestration &amp; Data Quality</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="orm object-relational mapper: a library such as sqlalchemy that maps database rows to python objects. data engineering">
+        <dt id="term-orm">ORM <span class="tag">Data engineering</span></dt>
+        <dd>Object-relational mapper: a library such as SQLAlchemy that maps database rows to Python objects. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="overfitting a model learning noise in the training data so it performs well there but poorly on new data. ml">
+        <dt id="term-overfitting">Overfitting <span class="tag">ML</span></dt>
+        <dd>A model learning noise in the training data so it performs well there but poorly on new data. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-p" class="gl-letter">P</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ds" data-search="p-value the probability of seeing data at least as extreme as observed if the null hypothesis were true; small values are evidence against it. data science">
+        <dt id="term-p-value">p-value <span class="tag">Data science</span></dt>
+        <dd>The probability of seeing data at least as extreme as observed if the null hypothesis were true; small values are evidence against it. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="package a directory of modules importable as a unit, usually with an __init__.py. python">
+        <dt id="term-package">Package <span class="tag">Python</span></dt>
+        <dd>A directory of modules importable as a unit, usually with an <code>__init__.py</code>. <a class="gl-module" href="../modules/m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="parameter a name in a function definition that receives an argument when the function is called. python">
+        <dt id="term-parameter">Parameter <span class="tag">Python</span></dt>
+        <dd>A name in a function definition that receives an argument when the function is called. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="parametrize @pytest.mark.parametrize runs one test function with many input/expected-output cases. tooling">
+        <dt id="term-parametrize">Parametrize <span class="tag">Tooling</span></dt>
+        <dd><code>@pytest.mark.parametrize</code> runs one test function with many input/expected-output cases. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="parquet a compressed, columnar file format for analytics that stores a schema and lets engines read only needed columns. data engineering">
+        <dt id="term-parquet">Parquet <span class="tag">Data engineering</span></dt>
+        <dd>A compressed, columnar file format for analytics that stores a schema and lets engines read only needed columns. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="partial application fixing some of a function's arguments to make a new function; functools.partial, with placeholder slots in 3.14. python">
+        <dt id="term-partial-application">Partial application <span class="tag">Python</span></dt>
+        <dd>Fixing some of a function's arguments to make a new function; <code>functools.partial</code>, with <code>Placeholder</code> slots in 3.14. <a class="gl-module" href="../modules/m18-functional.html">M18 Functional Python</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="partitioning splitting data by a key (date, user id) so work can be parallelized and queries can skip irrelevant parts. data engineering">
+        <dt id="term-partitioning">Partitioning <span class="tag">Data engineering</span></dt>
+        <dd>Splitting data by a key (date, user id) so work can be parallelized and queries can skip irrelevant parts. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pathlib the object-oriented filesystem path module; path objects join with / and gained copy() and move() in 3.14. tooling">
+        <dt id="term-pathlib">pathlib <span class="tag">Tooling</span></dt>
+        <dd>The object-oriented filesystem path module; <code>Path</code> objects join with <code>/</code> and gained <code>copy()</code> and <code>move()</code> in 3.14. <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="pattern matching the match/case statement that compares a value against structural patterns and binds parts of it. python">
+        <dt id="term-pattern-matching">Pattern matching <span class="tag">Python</span></dt>
+        <dd>The <code>match</code>/<code>case</code> statement that compares a value against structural patterns and binds parts of it. <a class="gl-module" href="../modules/m04-control-flow.html">M04 Control Flow</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="pca (principal component analysis) a linear method that finds the orthogonal directions of maximum variance, used to reduce dimensionality. data science">
+        <dt id="term-pca-principal-component-analysis">PCA (principal component analysis) <span class="tag">Data science</span></dt>
+        <dd>A linear method that finds the orthogonal directions of maximum variance, used to reduce dimensionality. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pdb python's built-in debugger; 3.14 can attach to a running process with python -m pdb -p pid (pep 768). tooling">
+        <dt id="term-pdb">pdb <span class="tag">Tooling</span></dt>
+        <dd>Python's built-in debugger; 3.14 can attach to a running process with <code>python -m pdb -p PID</code> (PEP 768). <a class="gl-module" href="../modules/m43-debugging-security.html">M43 Debugging &amp; Secure Code</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="pep a python enhancement proposal: the design document for a language or process change, such as pep 8 (style) or pep 750 (t-strings). python">
+        <dt id="term-pep">PEP <span class="tag">Python</span></dt>
+        <dd>A Python Enhancement Proposal: the design document for a language or process change, such as PEP 8 (style) or PEP 750 (t-strings). <a class="gl-module" href="../modules/m00-setup.html">M00 Setup: Python 3.14 with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="pep 8 python's official style guide for naming, layout, and formatting; ruff enforces most of it. python">
+        <dt id="term-pep-8">PEP 8 <span class="tag">Python</span></dt>
+        <dd>Python's official style guide for naming, layout, and formatting; ruff enforces most of it. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="pipeline (scikit-learn) a chain of preprocessing steps and a final estimator fit together, which prevents data leakage between splits. ml">
+        <dt id="term-pipeline-scikit-learn">Pipeline (scikit-learn) <span class="tag">ML</span></dt>
+        <dd>A chain of preprocessing steps and a final estimator fit together, which prevents data leakage between splits. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pixi a fast, cross-platform package and environment manager built on conda-forge and pypi; the only tool this course uses to install python and run code. tooling">
+        <dt id="term-pixi">Pixi <span class="tag">Tooling</span></dt>
+        <dd>A fast, cross-platform package and environment manager built on conda-forge and PyPI; the only tool this course uses to install Python and run code. <a class="gl-module" href="../modules/m00-setup.html">M00 Setup: Python 3.14 with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pixi.toml the pixi manifest declaring a workspace's channels, platforms, dependencies, features, environments, and tasks. tooling">
+        <dt id="term-pixi-toml">pixi.toml <span class="tag">Tooling</span></dt>
+        <dd>The Pixi manifest declaring a workspace's channels, platforms, dependencies, features, environments, and tasks. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="polars a fast dataframe library built on arrow with an expression api and a lazy query optimizer. data science">
+        <dt id="term-polars">Polars <span class="tag">Data science</span></dt>
+        <dd>A fast DataFrame library built on Arrow with an expression API and a lazy query optimizer. <a class="gl-module" href="../modules/m52-polars-arrow.html">M52 Polars, Arrow &amp; Columnar Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="polymorphism different types responding to the same method call in their own way, so code can work with any of them. python">
+        <dt id="term-polymorphism">Polymorphism <span class="tag">Python</span></dt>
+        <dd>Different types responding to the same method call in their own way, so code can work with any of them. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="positional-only parameter a parameter before / in a signature, which cannot be passed by keyword. python">
+        <dt id="term-positional-only-parameter">Positional-only parameter <span class="tag">Python</span></dt>
+        <dd>A parameter before <code>/</code> in a signature, which cannot be passed by keyword. <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pre-commit a framework that runs checks such as ruff and mypy automatically before each git commit. tooling">
+        <dt id="term-pre-commit">pre-commit <span class="tag">Tooling</span></dt>
+        <dd>A framework that runs checks such as ruff and mypy automatically before each git commit. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="precision and recall precision: of predicted positives, how many are correct. recall: of actual positives, how many were found. ml">
+        <dt id="term-precision-and-recall">Precision and recall <span class="tag">ML</span></dt>
+        <dd>Precision: of predicted positives, how many are correct. Recall: of actual positives, how many were found. <a class="gl-module" href="../modules/m59-ml-production.html">M59 ML in Production</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="prefix sum an array where entry i holds the sum of the first i items, so any range sum takes o(1) after o(n) setup. cs">
+        <dt id="term-prefix-sum">Prefix sum <span class="tag">CS</span></dt>
+        <dd>An array where entry i holds the sum of the first i items, so any range sum takes O(1) after O(n) setup. <a class="gl-module" href="../modules/m30-searching.html">M30 Searching &amp; Array Techniques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="primary key a column (or set of columns) whose value uniquely identifies each row in a table. data engineering">
+        <dt id="term-primary-key">Primary key <span class="tag">Data engineering</span></dt>
+        <dd>A column (or set of columns) whose value uniquely identifies each row in a table. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="priority queue an abstract structure that always returns the highest-priority item next, usually implemented with a heap. cs">
+        <dt id="term-priority-queue">Priority queue <span class="tag">CS</span></dt>
+        <dd>An abstract structure that always returns the highest-priority item next, usually implemented with a heap. <a class="gl-module" href="../modules/m25-heaps.html">M25 Heaps &amp; Priority Queues</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="process a running program with its own memory space; multiprocessing and processpoolexecutor run python code in several. python">
+        <dt id="term-process">Process <span class="tag">Python</span></dt>
+        <dd>A running program with its own memory space; <code>multiprocessing</code> and <code>ProcessPoolExecutor</code> run Python code in several. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="profiler a tool that measures where a program spends time or memory, such as cprofile, tracemalloc, or 3.15's sampling profiler. tooling">
+        <dt id="term-profiler">Profiler <span class="tag">Tooling</span></dt>
+        <dd>A tool that measures where a program spends time or memory, such as cProfile, tracemalloc, or 3.15's sampling profiler. <a class="gl-module" href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="property a managed attribute defined with @property, letting a method run when the attribute is read or set. python">
+        <dt id="term-property">Property <span class="tag">Python</span></dt>
+        <dd>A managed attribute defined with <code>@property</code>, letting a method run when the attribute is read or set. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="protocol a typing.protocol class describing required methods for structural (&quot;duck&quot;) typing checked statically. python">
+        <dt id="term-protocol">Protocol <span class="tag">Python</span></dt>
+        <dd>A <code>typing.Protocol</code> class describing required methods for structural ("duck") typing checked statically. <a class="gl-module" href="../modules/m12-inheritance.html">M12 Inheritance, Composition &amp; Protocols</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="pure function a function whose output depends only on its inputs and that has no side effects, which makes it easy to test and reason about. python">
+        <dt id="term-pure-function">Pure function <span class="tag">Python</span></dt>
+        <dd>A function whose output depends only on its inputs and that has no side effects, which makes it easy to test and reason about. <a class="gl-module" href="../modules/m18-functional.html">M18 Functional Python</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pypi the python package index, the public repository of python packages; add them in pixi with pixi add --pypi. tooling">
+        <dt id="term-pypi">PyPI <span class="tag">Tooling</span></dt>
+        <dd>The Python Package Index, the public repository of Python packages; add them in Pixi with <code>pixi add --pypi</code>. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pyproject.toml the standard file for python packaging metadata and tool configuration (ruff, mypy, pytest). tooling">
+        <dt id="term-pyproject-toml">pyproject.toml <span class="tag">Tooling</span></dt>
+        <dd>The standard file for Python packaging metadata and tool configuration (ruff, mypy, pytest). <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="pytest python's most popular test framework, using plain assert statements, fixtures, and plugins. tooling">
+        <dt id="term-pytest">pytest <span class="tag">Tooling</span></dt>
+        <dd>Python's most popular test framework, using plain <code>assert</code> statements, fixtures, and plugins. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-q" class="gl-letter">Q</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="queue a first-in, first-out (fifo) collection. cs">
+        <dt id="term-queue">Queue <span class="tag">CS</span></dt>
+        <dd>A first-in, first-out (FIFO) collection. <a class="gl-module" href="../modules/m22-stacks-queues.html">M22 Stacks, Queues &amp; Deques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="quicksort an in-place divide-and-conquer sort that partitions around a pivot; o(n log n) average, o(n²) worst case. cs">
+        <dt id="term-quicksort">Quicksort <span class="tag">CS</span></dt>
+        <dd>An in-place divide-and-conquer sort that partitions around a pivot; O(n log n) average, O(n²) worst case. <a class="gl-module" href="../modules/m29-sorting.html">M29 Sorting</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-r" class="gl-letter">R</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="cs" data-search="rabin-karp string search using a rolling hash to compare a pattern against each text window in expected o(n + m). cs">
+        <dt id="term-rabin-karp">Rabin-Karp <span class="tag">CS</span></dt>
+        <dd>String search using a rolling hash to compare a pattern against each text window in expected O(n + m). <a class="gl-module" href="../modules/m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="race condition a bug where the result depends on the unpredictable timing of threads or tasks accessing shared state; prevented with locks or by not sharing. python">
+        <dt id="term-race-condition">Race condition <span class="tag">Python</span></dt>
+        <dd>A bug where the result depends on the unpredictable timing of threads or tasks accessing shared state; prevented with locks or by not sharing. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="random forest an ensemble of decision trees trained on random subsets of rows and features, whose votes are averaged. ml">
+        <dt id="term-random-forest">Random forest <span class="tag">ML</span></dt>
+        <dd>An ensemble of decision trees trained on random subsets of rows and features, whose votes are averaged. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="recommender system a system predicting which items a user will like, using collaborative filtering, content features, or embeddings. ml">
+        <dt id="term-recommender-system">Recommender system <span class="tag">ML</span></dt>
+        <dd>A system predicting which items a user will like, using collaborative filtering, content features, or embeddings. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="recursion a function solving a problem by calling itself on smaller inputs until it reaches a base case. cs">
+        <dt id="term-recursion">Recursion <span class="tag">CS</span></dt>
+        <dd>A function solving a problem by calling itself on smaller inputs until it reaches a base case. <a class="gl-module" href="../modules/m28-recursion.html">M28 Recursion &amp; Divide and Conquer</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="refactoring restructuring code to improve its design without changing its behavior, protected by tests. tooling">
+        <dt id="term-refactoring">Refactoring <span class="tag">Tooling</span></dt>
+        <dd>Restructuring code to improve its design without changing its behavior, protected by tests. <a class="gl-module" href="../modules/m46-design.html">M46 Software Design &amp; Architecture</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="reference counting cpython's main memory strategy: each object counts its references and is freed when the count drops to zero. python">
+        <dt id="term-reference-counting">Reference counting <span class="tag">Python</span></dt>
+        <dd>CPython's main memory strategy: each object counts its references and is freed when the count drops to zero. <a class="gl-module" href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="regularization penalizing model complexity (l1, l2, dropout) to reduce overfitting. ml">
+        <dt id="term-regularization">Regularization <span class="tag">ML</span></dt>
+        <dd>Penalizing model complexity (L1, L2, dropout) to reduce overfitting. <a class="gl-module" href="../modules/m56-scikit-learn.html">M56 scikit-learn in Practice</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="repl read-eval-print loop: the interactive python prompt (&amp;gt;&amp;gt;&amp;gt;), syntax-highlighted in 3.14. python">
+        <dt id="term-repl">REPL <span class="tag">Python</span></dt>
+        <dd>Read-Eval-Print Loop: the interactive Python prompt (<code>&gt;&gt;&gt;</code>), syntax-highlighted in 3.14. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="rest an architectural style for web apis built around resources identified by urls and manipulated with http methods. tooling">
+        <dt id="term-rest">REST <span class="tag">Tooling</span></dt>
+        <dd>An architectural style for web APIs built around resources identified by URLs and manipulated with HTTP methods. <a class="gl-module" href="../modules/m45-web-apis.html">M45 Web &amp; APIs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="ruff an extremely fast python linter and formatter that replaces flake8, isort, and black. tooling">
+        <dt id="term-ruff">ruff <span class="tag">Tooling</span></dt>
+        <dd>An extremely fast Python linter and formatter that replaces flake8, isort, and black. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-s" class="gl-letter">S</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ds" data-search="sampling selecting a subset of a population to estimate its properties; random sampling avoids systematic bias. data science">
+        <dt id="term-sampling">Sampling <span class="tag">Data science</span></dt>
+        <dd>Selecting a subset of a population to estimate its properties; random sampling avoids systematic bias. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="schema the structure of data: column names, types, and constraints. data engineering">
+        <dt id="term-schema">Schema <span class="tag">Data engineering</span></dt>
+        <dd>The structure of data: column names, types, and constraints. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="scipy the scientific computing library built on numpy, with optimization, integration, interpolation, signal processing, statistics, and sparse matrices. data science">
+        <dt id="term-scipy">SciPy <span class="tag">Data science</span></dt>
+        <dd>The scientific computing library built on NumPy, with optimization, integration, interpolation, signal processing, statistics, and sparse matrices. <a class="gl-module" href="../modules/m50-scipy.html">M50 SciPy for Science &amp; Engineering</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="scope the region of code where a name is visible; python has function, module, and built-in scopes (see legb). python">
+        <dt id="term-scope">Scope <span class="tag">Python</span></dt>
+        <dd>The region of code where a name is visible; Python has function, module, and built-in scopes (see LEGB). <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="secure coding writing code that resists attack: validate input, parameterize sql, never eval untrusted data, and keep secrets out of source. tooling">
+        <dt id="term-secure-coding">Secure coding <span class="tag">Tooling</span></dt>
+        <dd>Writing code that resists attack: validate input, parameterize SQL, never <code>eval</code> untrusted data, and keep secrets out of source. <a class="gl-module" href="../modules/m43-debugging-security.html">M43 Debugging &amp; Secure Code</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="segment tree a tree over array intervals that answers range queries (sum, min) and applies updates in o(log n). cs">
+        <dt id="term-segment-tree">Segment tree <span class="tag">CS</span></dt>
+        <dd>A tree over array intervals that answers range queries (sum, min) and applies updates in O(log n). <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="semantic versioning version numbers major.minor.patch where a major bump signals breaking changes. tooling">
+        <dt id="term-semantic-versioning">Semantic versioning <span class="tag">Tooling</span></dt>
+        <dd>Version numbers MAJOR.MINOR.PATCH where a major bump signals breaking changes. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="sentinel a unique marker object meaning &quot;no value given&quot; when none is a valid value; python 3.15 adds a sentinel() built-in (pep 661). python">
+        <dt id="term-sentinel">Sentinel <span class="tag">Python</span></dt>
+        <dd>A unique marker object meaning "no value given" when <code>None</code> is a valid value; Python 3.15 adds a <code>sentinel()</code> built-in (PEP 661). <a class="gl-module" href="../modules/m05-functions.html">M05 Functions</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="sequence an ordered collection supporting integer indexing and len(), such as list, tuple, str, and range. python">
+        <dt id="term-sequence">Sequence <span class="tag">Python</span></dt>
+        <dd>An ordered collection supporting integer indexing and <code>len()</code>, such as list, tuple, str, and range. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="series a one-dimensional labeled array in pandas; each dataframe column is a series. data science">
+        <dt id="term-series">Series <span class="tag">Data science</span></dt>
+        <dd>A one-dimensional labeled array in pandas; each DataFrame column is a Series. <a class="gl-module" href="../modules/m51-pandas.html">M51 pandas: Series &amp; DataFrames</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="set a mutable, unordered collection of unique hashable items with fast membership tests. python">
+        <dt id="term-set">Set <span class="tag">Python</span></dt>
+        <dd>A mutable, unordered collection of unique hashable items with fast membership tests. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="shallow copy a new container holding references to the same inner objects (xs.copy(), xs[:]). python">
+        <dt id="term-shallow-copy">Shallow copy <span class="tag">Python</span></dt>
+        <dd>A new container holding references to the same inner objects (<code>xs.copy()</code>, <code>xs[:]</code>). <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="slice a start:stop:step selection of a sequence, such as s[1:4]; stop is exclusive. python">
+        <dt id="term-slice">Slice <span class="tag">Python</span></dt>
+        <dd>A <code>start:stop:step</code> selection of a sequence, such as <code>s[1:4]</code>; stop is exclusive. <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="sliding window a technique that maintains a moving range over a sequence, updating results incrementally instead of recomputing. cs">
+        <dt id="term-sliding-window">Sliding window <span class="tag">CS</span></dt>
+        <dd>A technique that maintains a moving range over a sequence, updating results incrementally instead of recomputing. <a class="gl-module" href="../modules/m30-searching.html">M30 Searching &amp; Array Techniques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="__slots__ a class attribute listing allowed instance attributes, which saves memory by avoiding a per-instance __dict__. python">
+        <dt id="term-slots">__slots__ <span class="tag">Python</span></dt>
+        <dd>A class attribute listing allowed instance attributes, which saves memory by avoiding a per-instance <code>__dict__</code>. <a class="gl-module" href="../modules/m36-metaprogramming.html">M36 Metaprogramming</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="soft keyword a word that is a keyword only in specific contexts, such as match, case, type, and 3.15's lazy. python">
+        <dt id="term-soft-keyword">Soft keyword <span class="tag">Python</span></dt>
+        <dd>A word that is a keyword only in specific contexts, such as <code>match</code>, <code>case</code>, <code>type</code>, and 3.15's <code>lazy</code>. <a class="gl-module" href="../modules/m04-control-flow.html">M04 Control Flow</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="solid five object-oriented design principles: single responsibility, open/closed, liskov substitution, interface segregation, dependency inversion. tooling">
+        <dt id="term-solid">SOLID <span class="tag">Tooling</span></dt>
+        <dd>Five object-oriented design principles: Single responsibility, Open/closed, Liskov substitution, Interface segregation, Dependency inversion. <a class="gl-module" href="../modules/m46-design.html">M46 Software Design &amp; Architecture</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="space complexity how much extra memory an algorithm needs as a function of input size. cs">
+        <dt id="term-space-complexity">Space complexity <span class="tag">CS</span></dt>
+        <dd>How much extra memory an algorithm needs as a function of input size. <a class="gl-module" href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="spark a distributed engine for large-scale batch and streaming data processing across a cluster. data engineering">
+        <dt id="term-spark">Spark <span class="tag">Data engineering</span></dt>
+        <dd>A distributed engine for large-scale batch and streaming data processing across a cluster. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="sparse matrix a matrix stored by its nonzero entries only, saving memory and time when most entries are zero. data science">
+        <dt id="term-sparse-matrix">Sparse matrix <span class="tag">Data science</span></dt>
+        <dd>A matrix stored by its nonzero entries only, saving memory and time when most entries are zero. <a class="gl-module" href="../modules/m49-linear-algebra.html">M49 Linear Algebra with NumPy &amp; SciPy</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="sql structured query language, the declarative language for querying and modifying relational databases. data engineering">
+        <dt id="term-sql">SQL <span class="tag">Data engineering</span></dt>
+        <dd>Structured Query Language, the declarative language for querying and modifying relational databases. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="sql injection an attack that smuggles sql through unescaped string formatting; prevented with parameterized queries. tooling">
+        <dt id="term-sql-injection">SQL injection <span class="tag">Tooling</span></dt>
+        <dd>An attack that smuggles SQL through unescaped string formatting; prevented with parameterized queries. <a class="gl-module" href="../modules/m43-debugging-security.html">M43 Debugging &amp; Secure Code</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="src layout placing a package under src/&amp;lt;name&amp;gt;/ so tests import the installed package, not stray files in the working directory. tooling">
+        <dt id="term-src-layout">src layout <span class="tag">Tooling</span></dt>
+        <dd>Placing a package under <code>src/&lt;name&gt;/</code> so tests import the installed package, not stray files in the working directory. <a class="gl-module" href="../modules/m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="stable sort a sort that keeps items with equal keys in their original relative order; python's sorted is stable. cs">
+        <dt id="term-stable-sort">Stable sort <span class="tag">CS</span></dt>
+        <dd>A sort that keeps items with equal keys in their original relative order; Python's <code>sorted</code> is stable. <a class="gl-module" href="../modules/m29-sorting.html">M29 Sorting</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="stack a last-in, first-out (lifo) collection; a python list with append and pop. cs">
+        <dt id="term-stack">Stack <span class="tag">CS</span></dt>
+        <dd>A last-in, first-out (LIFO) collection; a Python list with <code>append</code> and <code>pop</code>. <a class="gl-module" href="../modules/m22-stacks-queues.html">M22 Stacks, Queues &amp; Deques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="standard deviation the square root of variance; a measure of how spread out values are around the mean. data science">
+        <dt id="term-standard-deviation">Standard deviation <span class="tag">Data science</span></dt>
+        <dd>The square root of variance; a measure of how spread out values are around the mean. <a class="gl-module" href="../modules/m54-statistics.html">M54 Statistics &amp; Probability</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="star schema a warehouse model with a central fact table joined to surrounding dimension tables. data engineering">
+        <dt id="term-star-schema">Star schema <span class="tag">Data engineering</span></dt>
+        <dd>A warehouse model with a central fact table joined to surrounding dimension tables. <a class="gl-module" href="../modules/m60-data-engineering.html">M60 Data Engineering Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="statement a complete instruction such as an assignment, if, for, or return; statements do not produce values. python">
+        <dt id="term-statement">Statement <span class="tag">Python</span></dt>
+        <dd>A complete instruction such as an assignment, <code>if</code>, <code>for</code>, or <code>return</code>; statements do not produce values. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="static method a method decorated with @staticmethod that receives neither instance nor class; a plain function grouped in a class. python">
+        <dt id="term-static-method">Static method <span class="tag">Python</span></dt>
+        <dd>A method decorated with <code>@staticmethod</code> that receives neither instance nor class; a plain function grouped in a class. <a class="gl-module" href="../modules/m10-classes.html">M10 Classes &amp; Objects</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="streaming processing events continuously as they arrive rather than in scheduled batches. data engineering">
+        <dt id="term-streaming">Streaming <span class="tag">Data engineering</span></dt>
+        <dd>Processing events continuously as they arrive rather than in scheduled batches. <a class="gl-module" href="../modules/m63-big-data-streaming.html">M63 Streaming &amp; Big Data</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="strides the number of bytes to step in memory to move one position along each dimension of a numpy array. data science">
+        <dt id="term-strides">Strides <span class="tag">Data science</span></dt>
+        <dd>The number of bytes to step in memory to move one position along each dimension of a NumPy array. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="string (str) an immutable sequence of unicode code points. python">
+        <dt id="term-string-str">String (str) <span class="tag">Python</span></dt>
+        <dd>An immutable sequence of Unicode code points. <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="structlog a structured-logging library that emits key-value or json log events that log aggregators can parse. tooling">
+        <dt id="term-structlog">structlog <span class="tag">Tooling</span></dt>
+        <dd>A structured-logging library that emits key-value or JSON log events that log aggregators can parse. <a class="gl-module" href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="subinterpreter an isolated interpreter inside the same process with its own modules and gil, exposed by concurrent.interpreters in 3.14 (pep 734). python">
+        <dt id="term-subinterpreter">Subinterpreter <span class="tag">Python</span></dt>
+        <dd>An isolated interpreter inside the same process with its own modules and GIL, exposed by <code>concurrent.interpreters</code> in 3.14 (PEP 734). <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="subprocess a separate operating-system program started from python with subprocess.run(). tooling">
+        <dt id="term-subprocess">Subprocess <span class="tag">Tooling</span></dt>
+        <dd>A separate operating-system program started from Python with <code>subprocess.run()</code>. <a class="gl-module" href="../modules/m40-stdlib.html">M40 Standard Library Power Tools</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="supervised learning learning a mapping from inputs to known labels using labeled examples. ml">
+        <dt id="term-supervised-learning">Supervised learning <span class="tag">ML</span></dt>
+        <dd>Learning a mapping from inputs to known labels using labeled examples. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="svd (singular value decomposition) factoring any matrix as u σ vᵀ; the basis of pca, low-rank approximation, and least squares. data science">
+        <dt id="term-svd-singular-value-decomposition">SVD (singular value decomposition) <span class="tag">Data science</span></dt>
+        <dd>Factoring any matrix as U Σ Vᵀ; the basis of PCA, low-rank approximation, and least squares. <a class="gl-module" href="../modules/m49-linear-algebra.html">M49 Linear Algebra with NumPy &amp; SciPy</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-t" class="gl-letter">T</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="t-string (template string) a 3.14 literal prefixed with t (pep 750) that produces a template keeping text and interpolated values separate for safe processing. python">
+        <dt id="term-t-string-template-string">t-string (template string) <span class="tag">Python</span></dt>
+        <dd>A 3.14 literal prefixed with <code>t</code> (PEP 750) that produces a <code>Template</code> keeping text and interpolated values separate for safe processing. <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="task (pixi) a named command in pixi.toml run with pixi run &amp;lt;name&amp;gt;, optionally with dependencies, arguments, and caching. tooling">
+        <dt id="term-task-pixi">Task (Pixi) <span class="tag">Tooling</span></dt>
+        <dd>A named command in <code>pixi.toml</code> run with <code>pixi run &lt;name&gt;</code>, optionally with dependencies, arguments, and caching. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="taskgroup asyncio.taskgroup: an async context manager that runs tasks together and cancels the rest if one fails (structured concurrency). python">
+        <dt id="term-taskgroup">TaskGroup <span class="tag">Python</span></dt>
+        <dd><code>asyncio.TaskGroup</code>: an async context manager that runs tasks together and cancels the rest if one fails (structured concurrency). <a class="gl-module" href="../modules/m38-asyncio.html">M38 Async Programming with asyncio</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="tensor a multi-dimensional array, the core data type of deep learning frameworks like pytorch. ml">
+        <dt id="term-tensor">Tensor <span class="tag">ML</span></dt>
+        <dd>A multi-dimensional array, the core data type of deep learning frameworks like PyTorch. <a class="gl-module" href="../modules/m58-neural-networks.html">M58 Neural Networks from Scratch</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="test-driven development (tdd) writing a failing test first, then the minimal code to pass it, then refactoring: red, green, refactor. tooling">
+        <dt id="term-test-driven-development-tdd">Test-driven development (TDD) <span class="tag">Tooling</span></dt>
+        <dd>Writing a failing test first, then the minimal code to pass it, then refactoring: red, green, refactor. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="thread an independent flow of execution within a process that shares the process's memory with other threads. python">
+        <dt id="term-thread">Thread <span class="tag">Python</span></dt>
+        <dd>An independent flow of execution within a process that shares the process's memory with other threads. <a class="gl-module" href="../modules/m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="tidy data a layout where each variable is a column, each observation a row, and each value a cell. data science">
+        <dt id="term-tidy-data">Tidy data <span class="tag">Data science</span></dt>
+        <dd>A layout where each variable is a column, each observation a row, and each value a cell. <a class="gl-module" href="../modules/m51-pandas.html">M51 pandas: Series &amp; DataFrames</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="time complexity how an algorithm's running time grows with input size, usually expressed in big-o. cs">
+        <dt id="term-time-complexity">Time complexity <span class="tag">CS</span></dt>
+        <dd>How an algorithm's running time grows with input size, usually expressed in Big-O. <a class="gl-module" href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="timsort / powersort python's adaptive, stable hybrid of merge sort and insertion sort; since 3.11 its run-merging policy is powersort. cs">
+        <dt id="term-timsort-powersort">Timsort / Powersort <span class="tag">CS</span></dt>
+        <dd>Python's adaptive, stable hybrid of merge sort and insertion sort; since 3.11 its run-merging policy is Powersort. <a class="gl-module" href="../modules/m29-sorting.html">M29 Sorting</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="toml a minimal configuration file format used by pixi.toml and pyproject.toml; read with tomllib. tooling">
+        <dt id="term-toml">TOML <span class="tag">Tooling</span></dt>
+        <dd>A minimal configuration file format used by <code>pixi.toml</code> and <code>pyproject.toml</code>; read with <code>tomllib</code>. <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="topological sort an ordering of a dag's vertices so every edge points forward; graphlib.topologicalsorter in the stdlib. cs">
+        <dt id="term-topological-sort">Topological sort <span class="tag">CS</span></dt>
+        <dd>An ordering of a DAG's vertices so every edge points forward; <code>graphlib.TopologicalSorter</code> in the stdlib. <a class="gl-module" href="../modules/m26-graphs.html">M26 Graphs</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="traceback the report printed for an unhandled exception, listing the chain of calls (most recent last) that led to it. python">
+        <dt id="term-traceback">Traceback <span class="tag">Python</span></dt>
+        <dd>The report printed for an unhandled exception, listing the chain of calls (most recent last) that led to it. <a class="gl-module" href="../modules/m01-first-steps.html">M01 First Steps</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="train/test split holding back part of the data for final evaluation so the reported score reflects unseen data. ml">
+        <dt id="term-train-test-split">Train/test split <span class="tag">ML</span></dt>
+        <dd>Holding back part of the data for final evaluation so the reported score reflects unseen data. <a class="gl-module" href="../modules/m55-ml-foundations.html">M55 Machine Learning Foundations</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="transaction a group of database operations that succeed or fail together (atomically), following acid guarantees. data engineering">
+        <dt id="term-transaction">Transaction <span class="tag">Data engineering</span></dt>
+        <dd>A group of database operations that succeed or fail together (atomically), following ACID guarantees. <a class="gl-module" href="../modules/m44-data-databases.html">M44 Databases &amp; SQL</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="tree a connected, acyclic graph, usually rooted, where each node has children and exactly one parent except the root. cs">
+        <dt id="term-tree">Tree <span class="tag">CS</span></dt>
+        <dd>A connected, acyclic graph, usually rooted, where each node has children and exactly one parent except the root. <a class="gl-module" href="../modules/m24-trees.html">M24 Trees &amp; Binary Search Trees</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="trie a prefix tree storing strings character by character, so prefix lookups take time proportional to the key length. cs">
+        <dt id="term-trie">Trie <span class="tag">CS</span></dt>
+        <dd>A prefix tree storing strings character by character, so prefix lookups take time proportional to the key length. <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="truthiness how a value behaves in a boolean context; empty containers, zero, and none are falsy, most other values truthy. python">
+        <dt id="term-truthiness">Truthiness <span class="tag">Python</span></dt>
+        <dd>How a value behaves in a boolean context; empty containers, zero, and <code>None</code> are falsy, most other values truthy. <a class="gl-module" href="../modules/m04-control-flow.html">M04 Control Flow</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="tuple an immutable, ordered sequence, often used as a fixed-size record. python">
+        <dt id="term-tuple">Tuple <span class="tag">Python</span></dt>
+        <dd>An immutable, ordered sequence, often used as a fixed-size record. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="two pointers a technique that moves two indices through a sequence (often from both ends) to solve problems in linear time. cs">
+        <dt id="term-two-pointers">Two pointers <span class="tag">CS</span></dt>
+        <dd>A technique that moves two indices through a sequence (often from both ends) to solve problems in linear time. <a class="gl-module" href="../modules/m30-searching.html">M30 Searching &amp; Array Techniques</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="type alias a name for a type expression, written with the type statement: type vector = list[float]. python">
+        <dt id="term-type-alias">Type alias <span class="tag">Python</span></dt>
+        <dd>A name for a type expression, written with the <code>type</code> statement: <code>type Vector = list[float]</code>. <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="type hint an annotation that states the expected type of a value for readers and static checkers; python does not enforce it at run time. python">
+        <dt id="term-type-hint">Type hint <span class="tag">Python</span></dt>
+        <dd>An annotation that states the expected type of a value for readers and static checkers; Python does not enforce it at run time. <a class="gl-module" href="../modules/m16-typing.html">M16 Type Hints &amp; Static Typing</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="typeddict a typing construct describing a dict with a fixed set of string keys and value types. python">
+        <dt id="term-typeddict">TypedDict <span class="tag">Python</span></dt>
+        <dd>A <code>typing</code> construct describing a dict with a fixed set of string keys and value types. <a class="gl-module" href="../modules/m13-dataclasses.html">M13 Dataclasses, Enums &amp; Records</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-u" class="gl-letter">U</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="unicode the standard assigning a code point to every character in every writing system; python str holds unicode text. python">
+        <dt id="term-unicode">Unicode <span class="tag">Python</span></dt>
+        <dd>The standard assigning a code point to every character in every writing system; Python <code>str</code> holds Unicode text. <a class="gl-module" href="../modules/m03-strings.html">M03 Strings &amp; Text</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="cs" data-search="union-find a disjoint-set structure supporting near-constant-time union and find with union by rank and path compression. cs">
+        <dt id="term-union-find">Union-find <span class="tag">CS</span></dt>
+        <dd>A disjoint-set structure supporting near-constant-time <code>union</code> and <code>find</code> with union by rank and path compression. <a class="gl-module" href="../modules/m27-advanced-structures.html">M27 Advanced Structures</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="unit test a fast test of one function or class in isolation, with no real i/o. tooling">
+        <dt id="term-unit-test">Unit test <span class="tag">Tooling</span></dt>
+        <dd>A fast test of one function or class in isolation, with no real I/O. <a class="gl-module" href="../modules/m17-testing.html">M17 Testing with pytest</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="unpacking assigning the items of an iterable to several names at once (a, *rest = xs) or spreading them into a call or literal with */**. python">
+        <dt id="term-unpacking">Unpacking <span class="tag">Python</span></dt>
+        <dd>Assigning the items of an iterable to several names at once (<code>a, *rest = xs</code>) or spreading them into a call or literal with <code>*</code>/<code>**</code>. <a class="gl-module" href="../modules/m06-collections.html">M06 Collections</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ml" data-search="unsupervised learning finding structure in data without labels, such as clusters or low-dimensional representations. ml">
+        <dt id="term-unsupervised-learning">Unsupervised learning <span class="tag">ML</span></dt>
+        <dd>Finding structure in data without labels, such as clusters or low-dimensional representations. <a class="gl-module" href="../modules/m57-unsupervised-embeddings.html">M57 Unsupervised Learning &amp; Embeddings</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="utf-8 the dominant variable-width encoding of unicode into bytes; the default for open() from python 3.15 (pep 686). python">
+        <dt id="term-utf-8">UTF-8 <span class="tag">Python</span></dt>
+        <dd>The dominant variable-width encoding of Unicode into bytes; the default for <code>open()</code> from Python 3.15 (PEP 686). <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="uuid a 128-bit universally unique identifier; uuid.uuid7() (3.14) generates time-ordered uuids that make good database keys. tooling">
+        <dt id="term-uuid">UUID <span class="tag">Tooling</span></dt>
+        <dd>A 128-bit universally unique identifier; <code>uuid.uuid7()</code> (3.14) generates time-ordered UUIDs that make good database keys. <a class="gl-module" href="../modules/m40-stdlib.html">M40 Standard Library Power Tools</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-v" class="gl-letter">V</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="ds" data-search="vectorization replacing python loops with whole-array operations that run in compiled code, often 10–100× faster. data science">
+        <dt id="term-vectorization">Vectorization <span class="tag">Data science</span></dt>
+        <dd>Replacing Python loops with whole-array operations that run in compiled code, often 10–100× faster. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="view (numpy) an array that shares memory with another array, such as a basic slice; changing one changes the other. data science">
+        <dt id="term-view-numpy">View (NumPy) <span class="tag">Data science</span></dt>
+        <dd>An array that shares memory with another array, such as a basic slice; changing one changes the other. <a class="gl-module" href="../modules/m48-numpy.html">M48 NumPy Fundamentals</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="py" data-search="virtual environment an isolated set of installed packages for one project; in this course pixi creates and manages these for you in .pixi/envs. python">
+        <dt id="term-virtual-environment">Virtual environment <span class="tag">Python</span></dt>
+        <dd>An isolated set of installed packages for one project; in this course Pixi creates and manages these for you in <code>.pixi/envs</code>. <a class="gl-module" href="../modules/m00-setup.html">M00 Setup: Python 3.14 with Pixi</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="ds" data-search="visualization encoding data as position, length, color, and shape in a chart so patterns become visible; matplotlib in this course. data science">
+        <dt id="term-visualization">Visualization <span class="tag">Data science</span></dt>
+        <dd>Encoding data as position, length, color, and shape in a chart so patterns become visible; matplotlib in this course. <a class="gl-module" href="../modules/m53-visualization.html">M53 Data Visualization</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-w" class="gl-letter">W</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="py" data-search="walrus operator the assignment expression :=, which assigns and returns a value inside a larger expression. python">
+        <dt id="term-walrus-operator">Walrus operator <span class="tag">Python</span></dt>
+        <dd>The assignment expression <code>:=</code>, which assigns and returns a value inside a larger expression. <a class="gl-module" href="../modules/m04-control-flow.html">M04 Control Flow</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="de" data-search="window function a sql function computed over a set of related rows (over (partition by ... order by ...)) without collapsing them, such as running totals. data engineering">
+        <dt id="term-window-function">Window function <span class="tag">Data engineering</span></dt>
+        <dd>A SQL function computed over a set of related rows (<code>OVER (PARTITION BY ... ORDER BY ...)</code>) without collapsing them, such as running totals. <a class="gl-module" href="../modules/m61-sql-duckdb.html">M61 Analytical SQL &amp; DuckDB</a></dd>
+      </div>
+      <div class="gl-entry" data-cat="tool" data-search="workspace (pixi) a project directory managed by pixi, defined by its pixi.toml and pixi.lock. tooling">
+        <dt id="term-workspace-pixi">Workspace (Pixi) <span class="tag">Tooling</span></dt>
+        <dd>A project directory managed by Pixi, defined by its <code>pixi.toml</code> and <code>pixi.lock</code>. <a class="gl-module" href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a></dd>
+      </div>
+    </dl>
+    <h3 id="letter-z" class="gl-letter">Z</h3>
+    <dl class="gl-list">
+      <div class="gl-entry" data-cat="tool" data-search="zstandard a fast modern compression algorithm, available in the standard library as compression.zstd since 3.14 (pep 784). tooling">
+        <dt id="term-zstandard">Zstandard <span class="tag">Tooling</span></dt>
+        <dd>A fast modern compression algorithm, available in the standard library as <code>compression.zstd</code> since 3.14 (PEP 784). <a class="gl-module" href="../modules/m09-files-io.html">M09 Files &amp; Data Formats</a></dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="lesson-section" id="flashcards">
+    <h2>Flashcards: 20 key terms</h2>
+    <p>Say the definition out loud before you flip each card. These are the terms the rest of the course leans on most.</p>
+    <div class="flashcards" data-title="Key terms">
+<script type="application/json">
+[
+ {
+  "front": "Closure",
+  "back": "A function that remembers variables from the enclosing scope where it was defined, even after that scope has finished."
+ },
+ {
+  "front": "Decorator",
+  "back": "A callable that takes a function or class and returns a replacement, applied with <code>@name</code> above the definition."
+ },
+ {
+  "front": "Generator",
+  "back": "A function containing <code>yield</code>; calling it returns an iterator that produces values lazily, pausing between them."
+ },
+ {
+  "front": "Context manager",
+  "back": "An object with <code>__enter__</code> and <code>__exit__</code> used in a <code>with</code> statement to set up and reliably clean up a resource."
+ },
+ {
+  "front": "GIL (global interpreter lock)",
+  "back": "A lock in standard CPython that lets only one thread execute Python bytecode at a time; removed in the free-threaded build."
+ },
+ {
+  "front": "Hashable",
+  "back": "An object with a hash value that never changes during its lifetime and an equality consistent with it; required for dict keys and set members."
+ },
+ {
+  "front": "Big-O notation",
+  "back": "An upper bound on how an algorithm's cost grows with input size, ignoring constant factors, such as O(n log n)."
+ },
+ {
+  "front": "Amortized analysis",
+  "back": "Averaging the cost of operations over a sequence, so rare expensive steps (like list resizing) still give O(1) per operation."
+ },
+ {
+  "front": "Dynamic programming",
+  "back": "Solving problems with overlapping subproblems by storing each subproblem's answer instead of recomputing it."
+ },
+ {
+  "front": "Hash table",
+  "back": "A structure that stores key-value pairs in slots chosen by hashing the key, giving O(1) average lookup."
+ },
+ {
+  "front": "Stable sort",
+  "back": "A sort that keeps items with equal keys in their original relative order; Python's <code>sorted</code> is stable."
+ },
+ {
+  "front": "Memoization",
+  "back": "Caching a function's results by its arguments so repeated calls return instantly; <code>functools.cache</code> in Python."
+ },
+ {
+  "front": "Vectorization",
+  "back": "Replacing Python loops with whole-array operations that run in compiled code, often 10–100× faster."
+ },
+ {
+  "front": "Broadcasting",
+  "back": "NumPy's rules for combining arrays of different shapes by virtually stretching size-1 dimensions, without copying data."
+ },
+ {
+  "front": "Overfitting",
+  "back": "A model learning noise in the training data so it performs well there but poorly on new data."
+ },
+ {
+  "front": "Cross-validation",
+  "back": "Estimating model performance by training and evaluating on several different train/validation splits (folds)."
+ },
+ {
+  "front": "Idempotent",
+  "back": "An operation that has the same effect whether it runs once or many times; essential for safely re-running pipelines."
+ },
+ {
+  "front": "ETL",
+  "back": "Extract, Transform, Load: pull data from sources, clean and reshape it, and then load it into a target store."
+ },
+ {
+  "front": "Lockfile",
+  "back": "A file (<code>pixi.lock</code>) recording the exact version of every package for every platform, so installs are reproducible."
+ },
+ {
+  "front": "t-string (template string)",
+  "back": "A 3.14 literal prefixed with <code>t</code> (PEP 750) that produces a <code>Template</code> keeping text and interpolated values separate for safe processing."
+ }
+]
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-glossary-quiz">
+<script type="application/json">
+{"title": "Glossary quiz", "passScore": 0.7, "questions": [{"type": "single", "prompt": "Which term means \"an operation with the same effect whether it runs once or many times\"?", "options": ["Atomic", "Idempotent", "Immutable", "Stable"], "answer": 1, "explanation": "<p>Idempotent pipelines can be re-run safely after a failure without duplicating data.</p>"}, {"type": "single", "prompt": "A function that remembers variables from the scope where it was defined is a…", "options": ["Generator", "Closure", "Descriptor", "Coroutine"], "answer": 1, "explanation": "<p>Closures capture enclosing variables; <code>nonlocal</code> lets them rebind those variables.</p>"}, {"type": "text", "prompt": "Which file records the exact version of every package for every platform in a Pixi workspace?", "answer": ["pixi.lock", "lockfile", "the lockfile"], "explanation": "<p><code>pixi.lock</code> makes installs reproducible; commit it alongside <code>pixi.toml</code>.</p>"}, {"type": "multi", "prompt": "Which are hashable (usable as dict keys)?", "options": ["<code>tuple</code> of ints", "<code>list</code>", "<code>frozenset</code>", "<code>str</code>", "<code>dict</code>"], "answer": [0, 2, 3], "explanation": "<p>Hashable objects have a hash that never changes; mutable containers like list and dict are not hashable.</p>"}, {"type": "single", "prompt": "Training accuracy 99%, test accuracy 60%. The model is most likely…", "options": ["Underfitting", "Overfitting", "Well regularized", "Suffering from data drift"], "answer": 1, "explanation": "<p>A large gap between training and test performance is the classic sign of overfitting.</p>"}, {"type": "single", "prompt": "In a star schema, the table holding measurable events like sales is the…", "options": ["Dimension table", "Fact table", "Lookup table", "Staging table"], "answer": 1, "explanation": "<p>Fact tables hold events and measures with foreign keys to the descriptive dimension tables.</p>"}, {"type": "text", "prompt": "What is the name of NumPy's rule for combining arrays of different shapes?", "answer": ["broadcasting"], "explanation": "<p>Broadcasting virtually stretches size-1 dimensions so element-wise operations work without copying.</p>"}, {"type": "single", "prompt": "What does LEGB stand for?", "options": ["List, Enum, Generator, Bytes", "Local, Enclosing, Global, Built-in", "Lexical, External, Global, Base", "Loop, Else, Guard, Break"], "answer": 1, "explanation": "<p>LEGB is the order Python searches scopes to resolve a name.</p>"}]}
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/glossary.html">The official Python glossary</a></li>
+      <li><a href="python-cheatsheet.html">Python cheat sheet</a>, <a href="complexity-cheatsheet.html">Complexity cheat sheet</a>, <a href="pixi-cheatsheet.html">Pixi cheat sheet</a></li>
+    </ul>
+  </section>
+</main>
+<script>
+(function () {
+  var state = { text: "", cat: "all" };
+  function apply() {
+    var entries = document.querySelectorAll(".gl-entry");
+    var shown = 0;
+    var words = state.text.split(/\s+/).filter(Boolean);
+    entries.forEach(function (el) {
+      var hay = el.getAttribute("data-search") || "";
+      var okCat = state.cat === "all" || el.getAttribute("data-cat") === state.cat;
+      var okText = words.every(function (w) { return hay.indexOf(w) !== -1; });
+      el.hidden = !(okCat && okText);
+      if (!el.hidden) shown += 1;
+    });
+    document.querySelectorAll(".gl-letter").forEach(function (h) {
+      var list = h.nextElementSibling;
+      h.hidden = !list || !list.querySelector(".gl-entry:not([hidden])");
+      if (list) list.hidden = h.hidden;
+    });
+    var count = document.getElementById("gl-count");
+    if (count) count.textContent = shown + (shown === 1 ? " term" : " terms");
+    var empty = document.getElementById("gl-empty");
+    if (empty) empty.hidden = shown !== 0;
+  }
+  document.addEventListener("input", function (event) {
+    if (event.target && event.target.id === "gl-filter") {
+      state.text = event.target.value.trim().toLowerCase();
+      apply();
+    }
+  });
+  document.addEventListener("click", function (event) {
+    var btn = event.target.closest && event.target.closest("#gl-cats button[data-cat]");
+    if (!btn) return;
+    state.cat = btn.getAttribute("data-cat");
+    document.querySelectorAll("#gl-cats button[data-cat]").forEach(function (b) {
+      var on = b === btn;
+      b.classList.toggle("primary", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    apply();
+  });
+})();
+</script>
+</body>
+</html>

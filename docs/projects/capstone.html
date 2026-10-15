@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capstone · RouteWise Delivery Planner · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="capstone">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 10 · Capstone · Graded project</p>
+    <h1>Capstone: RouteWise Delivery Planner</h1>
+    <p class="lede">Design, build, test, and ship a real application. RouteWise plans a bakery cooperative's daily
+      delivery routes under van capacity and customer time windows, learns how long deliveries really take, stores
+      every plan and outcome, and reports how the day went. It pulls together almost everything in this course:
+      graphs and shortest paths, greedy heuristics and exact dynamic programming, data pipelines, machine learning,
+      SQL, and the professional habits that make code trustworthy.</p>
+    <div class="lesson-meta"><span>⏱ ~30–45 hours over 3–5 weeks</span><span>Prerequisites: Parts 1–9, especially
+      <a href="../modules/m31-graph-algorithms.html">M31</a>, <a href="../modules/m32-dynamic-programming.html">M32</a>,
+      <a href="../modules/m33-greedy-backtracking.html">M33</a>, <a href="../modules/m44-data-databases.html">M44</a>,
+      <a href="../modules/m56-scikit-learn.html">M56</a>, and <a href="../modules/m42-tooling.html">M42</a></span></div>
+    <ul class="objectives">
+      <li>Turn a messy business problem into precise requirements, a data model, and an architecture</li>
+      <li>Implement Dijkstra and A* on a road network and cache an all-pairs travel-time matrix</li>
+      <li>Solve a capacitated vehicle routing problem with time windows using construction heuristics and 2-opt</li>
+      <li>Verify heuristics against an exact Held-Karp dynamic program on small instances</li>
+      <li>Train and evaluate an ETA model honestly against a naive baseline</li>
+      <li>Persist plans and outcomes in SQLite and turn them into KPIs and a report</li>
+      <li>Ship it like a professional: Pixi tasks, strict typing, linting, 50+ tests, CI, ADRs, and a demo</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="problem">
+    <h2>The problem and its stakeholders</h2>
+    <p><strong>Rise &amp; Shine</strong> is a cooperative of four neighbourhood bakeries that share one central
+      kitchen and a small fleet of vans. Every morning they deliver bread and pastries to between 30 and 200
+      customers: cafes that open at 7:00 and want croissants before then, offices that accept deliveries only between
+      9:00 and 11:00, restaurants, corner shops, and a growing list of households with subscriptions.</p>
+    <p>Today, a dispatcher named Priya plans routes the night before on a whiteboard, using a paper map and her
+      memory of which streets are slow. It mostly works for 40 customers. At 120 it falls apart: vans come back to
+      refill because they were overloaded, a cafe gets its order at 7:40 and cancels its contract, and two drivers
+      cross the same neighbourhood in opposite directions. Nobody can say whether a new customer across the river is
+      profitable to serve, because nobody knows how long a delivery there really takes.</p>
+    <p>This is a famous problem in operations research: the <strong>capacitated vehicle routing problem with time
+      windows</strong> (CVRPTW). Its simplest special case, a single van with no limits, is the travelling salesman
+      problem (TSP), which is NP-hard: no known algorithm solves every instance exactly in polynomial time. Real
+      planners therefore combine fast <em>heuristics</em> that find good answers with <em>exact</em> methods that
+      check those answers on small cases. That is exactly what you will build.</p>
+
+    <div class="card-grid">
+      <div class="card"><h4>Dispatcher (Priya)</h4><p>Needs a plan by 18:00 for tomorrow, in one command, that she
+        trusts: no overloaded vans, no impossible time windows, and a readable summary she can sanity-check.</p></div>
+      <div class="card"><h4>Drivers</h4><p>Want sensible, compact routes with realistic arrival times, not plans that
+        assume every light is green.</p></div>
+      <div class="card"><h4>Customers</h4><p>Care about one thing: the order arrives inside their window.</p></div>
+      <div class="card"><h4>Cooperative board</h4><p>Wants weekly KPIs: kilometres driven, on-time percentage, van
+        utilization, and whether a fifth van would pay for itself.</p></div>
+      <div class="card"><h4>You, the engineer</h4><p>Need code that is correct, tested, typed, documented, and easy
+        for the next engineer to change when the bakery adds refrigerated vans.</p></div>
+    </div>
+
+    <aside class="callout think"><p>Before reading the requirements, spend ten minutes writing your own list. What
+      inputs exist? What must the output contain? What could go wrong on a bad day (a road closure, a sick driver, a
+      customer who doubles their order)? Comparing your list with the one below is the best way to learn requirements
+      analysis.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="requirements">
+    <h2>Requirements</h2>
+    <p>A <dfn>functional requirement</dfn> says what the system does; a <dfn>non-functional requirement</dfn> says
+      how well it must do it (speed, reliability, maintainability). Each requirement below has an id so tests, commits,
+      and ADRs can refer to it.</p>
+    <div class="two-col">
+      <div>
+        <h3>Functional</h3>
+        <ul>
+          <li><strong>F1 City data.</strong> Generate a reproducible synthetic city (road graph, depot, customers with
+            demand, time window, and service time) and load/save it as CSV.</li>
+          <li><strong>F2 Travel times.</strong> Compute shortest travel times on the road graph with Dijkstra and A*,
+            including the actual path, and a cached matrix between the depot and all customers.</li>
+          <li><strong>F3 Feasibility.</strong> Given a route, simulate it: arrival, waiting, service, and return times;
+            report every capacity, time-window, and end-of-day violation.</li>
+          <li><strong>F4 Planning.</strong> Produce a plan that serves every customer exactly once with feasible routes,
+            using nearest neighbour, Clarke-Wright savings, or sweep, optionally improved by 2-opt.</li>
+          <li><strong>F5 Verification.</strong> Solve small single-route instances exactly (Held-Karp) to measure how
+            far heuristics are from optimal.</li>
+          <li><strong>F6 ETA.</strong> Train a model on delivery history that predicts leg durations better than the
+            planner's naive estimate, and report MAE and RMSE for both.</li>
+          <li><strong>F7 Persistence.</strong> Store plans and actual deliveries in SQLite; reload them exactly.</li>
+          <li><strong>F8 Reporting.</strong> Compute KPIs (travel time, van time, waiting, on-time %, utilization) and
+            render Markdown or text.</li>
+          <li><strong>F9 CLI.</strong> <code>routewise generate | plan | report</code> with clear errors and exit codes.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Non-functional</h3>
+        <ul>
+          <li><strong>N1 Correctness.</strong> Every produced plan passes <code>check_plan</code>; this is tested on
+            every method.</li>
+          <li><strong>N2 Performance.</strong> Plan 200 customers in under 5 seconds on a laptop.</li>
+          <li><strong>N3 Determinism.</strong> The same seed produces the same city, history, model, and plan.</li>
+          <li><strong>N4 Offline.</strong> Standard library, NumPy, and scikit-learn only; no network.</li>
+          <li><strong>N5 Quality.</strong> Full type hints (mypy strict clean), Google docstrings, ruff clean,
+            Conventional Commits.</li>
+          <li><strong>N6 Tests.</strong> 50+ tests including property-based checks; at least 90% line coverage.</li>
+          <li><strong>N7 Observability.</strong> Library code returns values; the CLI prints. In your own repository,
+            log with structlog.</li>
+          <li><strong>N8 Maintainability.</strong> Modules with one responsibility each and no circular imports.</li>
+        </ul>
+      </div>
+    </div>
+    <aside class="callout pro"><p>Professionals write requirements that can be <em>checked</em>. "Plans should be
+      good" is not a requirement; "every plan passes <code>check_plan</code>, and on 9-customer instances the heuristic
+      is within 15% of Held-Karp" is. Each testable requirement becomes one or more tests.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>System architecture</h2>
+    <p>RouteWise is a pipeline of small modules. Data flows left to right; each arrow is a plain function call with
+      typed inputs and outputs, so every stage can be tested on its own. Dependencies point one way only:
+      <code>graph</code> knows nothing about customers, <code>routing</code> knows nothing about SQL, and only
+      <code>cli</code> touches everything.</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph Ingest
+    G[data.generate_city] --> CSV[(nodes / edges / customers CSV)]
+    CSV --> L[data.load_city]
+  end
+  subgraph Network
+    L --> RG[graph.RoadGraph]
+    RG --> SP[Dijkstra / A*]
+    SP --> DM[DistanceMatrix cache]
+  end
+  subgraph Optimize
+    DM --> INST[routing.Instance]
+    INST --> CON[nearest / savings / sweep]
+    CON --> OPT[2-opt per route]
+    OPT --> CHK[check_plan]
+    HK[Held-Karp exact] -. verifies .-> OPT
+  end
+  subgraph Predict
+    HIST[eta.generate_history] --> MOD[sklearn Pipeline]
+    MOD --> MET[MAE vs baseline]
+  end
+  CHK --> DB[(store: SQLite)]
+  SIM[eta.simulate_deliveries] --> DB
+  DB --> REP[report: KPIs + Markdown]
+  CLI[cli: generate / plan / report] --> G
+  CLI --> CON
+  CLI --> REP
+    </pre>
+    <p>The package layout mirrors the diagram:</p>
+    <table>
+      <thead><tr><th>Module</th><th>Responsibility</th><th>Key public API</th></tr></thead>
+      <tbody>
+        <tr><td><code>data</code></td><td>City model, generator, CSV</td><td><code>Node</code>, <code>Edge</code>, <code>Customer</code>, <code>City</code>, <code>generate_city</code>, <code>save_city</code>, <code>load_city</code></td></tr>
+        <tr><td><code>graph</code></td><td>Road network and shortest paths</td><td><code>RoadGraph</code>, <code>dijkstra</code>, <code>shortest_path</code>, <code>a_star</code>, <code>reconstruct_path</code>, <code>DistanceMatrix</code></td></tr>
+        <tr><td><code>routing</code></td><td>Plan model, feasibility, heuristics, exact DP</td><td><code>Instance</code>, <code>Route</code>, <code>Plan</code>, <code>schedule</code>, <code>check_plan</code>, <code>nearest_neighbor</code>, <code>clarke_wright</code>, <code>two_opt</code>, <code>held_karp</code></td></tr>
+        <tr><td><code>assign</code></td><td>Splitting customers across vans</td><td><code>polar_angle</code>, <code>sweep_clusters</code>, <code>sweep</code>, <code>plan_routes</code></td></tr>
+        <tr><td><code>eta</code></td><td>History, model, evaluation, simulation</td><td><code>generate_history</code>, <code>build_model</code>, <code>train_and_evaluate</code>, <code>evaluate</code>, <code>simulate_deliveries</code></td></tr>
+        <tr><td><code>store</code></td><td>SQLite persistence</td><td><code>Store.save_plan</code>, <code>load_plan</code>, <code>list_plans</code>, <code>save_deliveries</code>, <code>load_deliveries</code></td></tr>
+        <tr><td><code>report</code></td><td>KPIs and rendering</td><td><code>Kpis</code>, <code>compute_kpis</code>, <code>render_report</code></td></tr>
+        <tr><td><code>cli</code></td><td>User interface</td><td><code>main(argv)</code></td></tr>
+      </tbody>
+    </table>
+    <p>Here is the end-to-end data flow as records move through the stages. Try batch and streaming modes: the
+      nightly planning run is a batch job, while a live dispatch system would stream delivery events.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["ingest CSV", "validate", "route", "persist", "report"]}'></div>
+  </section>
+
+  <section class="lesson-section" id="data-model">
+    <h2>Data model</h2>
+    <p>Two kinds of data exist. The <em>city</em> (nodes, edges, customers) is input, stored as CSV so a human can
+      inspect and edit it. <em>Plans</em> and <em>deliveries</em> are outputs, stored in SQLite so they can be queried
+      and joined. In Python every record is a frozen dataclass (<a href="../modules/m13-dataclasses.html">M13</a>):
+      immutable, hashable, comparable, and printable for free.</p>
+    <pre class="mermaid">
+erDiagram
+  NODE ||--o{ EDGE : "connects"
+  NODE ||--o| CUSTOMER : "hosts"
+  PLAN ||--|{ PLAN_STOP : "contains"
+  CUSTOMER ||--o{ PLAN_STOP : "visited in"
+  PLAN ||--o{ DELIVERY : "executed as"
+  CUSTOMER ||--o{ DELIVERY : "receives"
+  NODE {
+    int id PK
+    float x
+    float y
+    bool is_depot
+  }
+  EDGE {
+    int u FK
+    int v FK
+    float minutes
+  }
+  CUSTOMER {
+    int id PK
+    int node FK
+    int demand
+    float ready
+    float due
+    float service
+  }
+  PLAN {
+    int id PK
+    text label
+    text method
+    float capacity
+    text created_at
+  }
+  PLAN_STOP {
+    int plan_id PK
+    int route_index PK
+    int position PK
+    int customer_id
+  }
+  DELIVERY {
+    int plan_id PK
+    int customer_id PK
+    int van
+    float planned_arrival
+    float actual_arrival
+    float due
+  }
+    </pre>
+    <p>Times are minutes after the start of the working day (minute 0 is, say, 05:00), and the day ends at the
+      <dfn>horizon</dfn>, 600 minutes, by which every van must be back. A customer's <dfn>time window</dfn>
+      <code>[ready, due]</code> bounds when service may <em>start</em>. Arriving early is allowed: the van waits.
+      Arriving after <code>due</code> makes the route infeasible.</p>
+    <aside class="callout warn"><p><code>PLAN_STOP</code> has a composite primary key <code>(plan_id, route_index,
+      position)</code> plus a <code>UNIQUE (plan_id, customer_id)</code> constraint. The database itself then refuses a
+      plan that visits a customer twice. Pushing invariants into the schema is defence in depth: even a buggy caller
+      cannot store corrupt data (<a href="../modules/m44-data-databases.html">M44</a>).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started with Pixi</h2>
+    <p>The capstone ships with starter code: every module, class, and function exists with its signature, type
+      hints, and docstring, and every body is a <code>TODO</code> followed by <code>raise NotImplementedError</code>.
+      The grading tests define the contract. Start your working copy and run the tests; almost all of them fail, and
+      your job is to turn them green milestone by milestone.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects                       # list every project
+pixi run start capstone                 # copy the starter into work/capstone_routewise/
+pixi run grade capstone                 # run all 100+ grading tests against your work/
+pixi run grade capstone -- -k graph -x  # one milestone, stop at the first failure
+pixi run grade capstone -- --lf         # rerun only what failed last time</code></pre>
+    <p>Once a milestone passes, use the CLI from inside your working copy:</p>
+    <pre data-label="Terminal"><code class="language-bash">cd work/capstone_routewise
+pixi run python -m routewise generate --customers 120 --seed 7 --out city
+pixi run python -m routewise plan --city city --db routewise.db --method savings --simulate
+pixi run python -m routewise report --city city --db routewise.db --format markdown --out report.md</code></pre>
+    <aside class="callout pixi"><p>Everything runs through Pixi. The course workspace already has NumPy and
+      scikit-learn; in your own portfolio repository you will <code>pixi init</code>, then <code>pixi add numpy
+      scikit-learn structlog</code> (conda-forge first) and <code>pixi add --feature dev pytest pytest-cov hypothesis
+      mypy ruff pre-commit</code>. See <a href="../modules/m41-pixi-packaging.html">M41</a> and the
+      <a href="../reference/pixi-cheatsheet.html">Pixi cheat sheet</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+    <p>Ten milestones, each a vertical slice you can finish, test, and commit in a session or two. Each lists the
+      concepts it uses with links back to the modules that teach them, an acceptance checklist (your progress is
+      saved), and hints. Work in order: later milestones import earlier ones.</p>
+
+    <div class="milestone">
+      <h3>Milestone 1: City data and a deterministic generator</h3>
+      <p><strong>Goal.</strong> Model the city with frozen dataclasses and generate realistic, reproducible test
+        cities of any size. Every later test depends on this, so determinism is not optional: use one
+        <code>random.Random(seed)</code> instance and never the global <code>random</code> functions.</p>
+      <p>The generator lays intersections on a jittered square grid (side about √(1.6 n)), joins horizontal and
+        vertical neighbours plus a few random diagonals, and gives each edge a travel time of <em>length ÷
+        MAX_SPEED × congestion</em> with congestion ≥ 1. That last detail matters in Milestone 2: because no road is
+        faster than <code>MAX_SPEED</code>, straight-line distance ÷ <code>MAX_SPEED</code> never overestimates travel
+        time. The depot sits at the centre; customers get distinct other nodes, demand 1–8 crates, a window opening
+        between minute 0 and 360 of width 60–180, and 2–8 minutes of service. Make sure every customer is reachable
+        before its window closes, or the instance is unsolvable.</p>
+      <p><strong>Concepts:</strong> dataclasses and validation in <code>__post_init__</code>
+        (<a href="../modules/m13-dataclasses.html">M13</a>), seeded randomness and <code>csv</code>
+        (<a href="../modules/m40-stdlib.html">M40</a>, <a href="../modules/m09-files-io.html">M09</a>), type hints
+        (<a href="../modules/m16-typing.html">M16</a>), raising good exceptions
+        (<a href="../modules/m07-exceptions.html">M07</a>).</p>
+      <div class="runnable" data-title="Same seed, same city">
+<textarea>
+import random
+
+def jittered_grid(side, seed):
+    rng = random.Random(seed)          # a private generator: no global state
+    return [(round(c * 0.5 + rng.uniform(-0.12, 0.12), 3),
+             round(r * 0.5 + rng.uniform(-0.12, 0.12), 3))
+            for r in range(side) for c in range(side)]
+
+a = jittered_grid(3, seed=42)
+b = jittered_grid(3, seed=42)
+c = jittered_grid(3, seed=43)
+print(a[:3])
+print("same seed equal:", a == b)
+print("different seed equal:", a == c)
+</textarea>
+      </div>
+      <ul class="checklist" data-id="capstone-m1">
+        <li><code>Customer</code> rejects ids below 1, negative demand, and <code>ready &gt; due</code></li>
+        <li><code>generate_city(n, seed)</code> is deterministic and different seeds give different cities</li>
+        <li>Customer ids are <code>1..n</code> on distinct non-depot nodes; the network is connected</li>
+        <li>No edge is faster than <code>MAX_SPEED</code>; every customer is reachable before <code>due</code></li>
+        <li><code>save_city</code> then <code>load_city</code> returns an equal <code>City</code></li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Rounding a travel time <em>down</em> could make it slightly faster than <code>MAX_SPEED</code>. Round
+            up (<code>math.ceil(x * 1000) / 1000</code>).</li>
+          <li>To guarantee reachability, compute Dijkstra from the depot inside the generator (that is why
+            <code>data</code> imports <code>graph</code>, never the other way round) and widen any window that closes
+            too early.</li>
+          <li>Python's <code>float</code> → <code>str</code> → <code>float</code> round trip is exact
+            (<code>repr</code> is shortest round-tripping), so CSV equality tests are fair.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 2: Road graph, Dijkstra, A*, and the distance matrix</h3>
+      <p><strong>Goal.</strong> A <code>RoadGraph</code> stored as an adjacency list (a dict from node to a list of
+        <code>(neighbour, minutes)</code> arcs), shortest paths with Dijkstra's algorithm and A*, path reconstruction,
+        and a <code>DistanceMatrix</code> that computes each row lazily and caches it.</p>
+      <p>Dijkstra settles nodes in order of distance using a binary heap; with lazy deletion (push duplicates, skip
+        stale pops) it runs in O((V + E) log V). A* orders the heap by <em>g + h</em>, where <em>g</em> is the cost so
+        far and <em>h</em> estimates the rest. If <em>h</em> never overestimates (it is <dfn>admissible</dfn>) and
+        satisfies the triangle inequality (it is <dfn>consistent</dfn>), A* returns the same optimal cost as Dijkstra
+        while settling fewer nodes. Our heuristic is straight-line distance ÷ the fastest arc speed in the graph,
+        which is admissible by construction.</p>
+      <p>Routing needs travel times between the depot and every customer, often millions of lookups. Running one
+        full Dijkstra per source (n + 1 runs) and caching the rows turns each lookup into a dict access.</p>
+      <p><strong>Concepts:</strong> graph representations (<a href="../modules/m26-graphs.html">M26</a>), Dijkstra
+        and A* (<a href="../modules/m31-graph-algorithms.html">M31</a>), heaps
+        (<a href="../modules/m25-heaps.html">M25</a>), hash maps as caches
+        (<a href="../modules/m23-hash-tables.html">M23</a>), complexity (<a href="../modules/m19-complexity.html">M19</a>),
+        NumPy arrays (<a href="../modules/m48-numpy.html">M48</a>).</p>
+      <div class="viz" data-viz="graph" data-config='{"preset": "weighted"}'></div>
+      <p>Draw some walls and compare Dijkstra with A*: both find a shortest path, but A* explores a narrow corridor
+        toward the goal.</p>
+      <div class="viz" data-viz="grid-path" data-config='{"rows": 12, "cols": 20}'></div>
+      <div class="runnable" data-title="Count the work: Dijkstra vs A* on a grid">
+<textarea>
+import heapq, math
+
+side = 30
+coords = {r * side + c: (c, r) for r in range(side) for c in range(side)}
+adj = {n: [] for n in coords}
+for n, (x, y) in coords.items():
+    for dx, dy in ((1, 0), (0, 1)):
+        m = (y + dy) * side + (x + dx)
+        if x + dx < side and y + dy < side:
+            w = 1.0 + ((x * 7 + y * 13) % 5) / 10      # every road at least 1 minute per unit
+            adj[n].append((m, w)); adj[m].append((n, w))
+
+def search(source, target, h):
+    g, closed, heap = {source: 0.0}, set(), [(h(source), 0.0, source)]
+    while heap:
+        _, cost, u = heapq.heappop(heap)
+        if u in closed:
+            continue
+        closed.add(u)
+        if u == target:
+            return cost, len(closed)
+        for v, w in adj[u]:
+            if cost + w < g.get(v, math.inf):
+                g[v] = cost + w
+                heapq.heappush(heap, (g[v] + h(v), g[v], v))
+
+source, target = 15 * side, 15 * side + side - 1     # middle of the left edge to middle of the right
+tx, ty = coords[target]
+zero = lambda n: 0.0                                      # Dijkstra is A* with h = 0
+euclid = lambda n: math.dist(coords[n], (tx, ty)) / 1.0   # max speed: 1 unit per minute
+print("Dijkstra (cost, settled):", search(source, target, zero))
+print("A*       (cost, settled):", search(source, target, euclid))
+</textarea>
+      </div>
+      <ul class="checklist" data-id="capstone-m2">
+        <li><code>add_edge</code> rejects unknown nodes (<code>KeyError</code>) and negative times (<code>ValueError</code>)</li>
+        <li><code>dijkstra</code> returns settled distances and predecessors, with optional early exit</li>
+        <li><code>a_star</code> equals Dijkstra's cost on random graphs, including directed and unreachable cases</li>
+        <li>A* settles fewer nodes than Dijkstra on generated cities</li>
+        <li><code>DistanceMatrix</code> computes each row at most once and is symmetric on two-way roads</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Return <code>PathResult(math.inf, ())</code> for unreachable targets rather than raising: "no path" is a
+            normal answer, not an error.</li>
+          <li><code>max_speed()</code> is the maximum of <em>length / minutes</em> over arcs. If some arc has zero
+            minutes but positive length, the speed is infinite and the only admissible heuristic is 0.</li>
+          <li>Put a tie-breaker in heap tuples (<code>(f, g, node)</code>) so Python never compares incomparable
+            payloads.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 3: Routes, plans, and feasibility</h3>
+      <p><strong>Goal.</strong> The core domain model. An <code>Instance</code> bundles the depot, customers, a
+        travel-time oracle, van capacity, and the horizon. A <code>Route</code> is a tuple of customer ids (the depot
+        is implicit at both ends); a <code>Plan</code> is a tuple of routes, one per van. <code>schedule(route,
+        inst)</code> simulates the van and returns a <code>Schedule</code> of <code>Visit</code>s plus every
+        violation; <code>check_plan</code> adds plan-level problems: unknown, duplicated, or missing customers.</p>
+      <p>The simulation is the heart of the system, so make it obviously correct: <code>arrival = clock +
+        travel</code>; <code>start = max(arrival, ready)</code> (waiting is allowed); late if <code>start &gt;
+        due</code>; <code>clock = start + service</code>. After the last stop, drive back and compare with the horizon.
+        Every heuristic later calls this function, so the tests for it are the foundation of trust.</p>
+      <p><strong>Concepts:</strong> frozen dataclasses and <code>dataclasses.replace</code>
+        (<a href="../modules/m13-dataclasses.html">M13</a>), <code>typing.Protocol</code> for the travel oracle
+        (<a href="../modules/m12-inheritance.html">M12</a>, <a href="../modules/m16-typing.html">M16</a>), the data
+        model (<a href="../modules/m11-data-model.html">M11</a>), designing APIs
+        (<a href="../modules/m46-design.html">M46</a>).</p>
+      <div class="runnable" data-title="Simulate a route with time windows">
+<textarea>
+travel = {("depot", "cafe"): 10, ("cafe", "office"): 10, ("depot", "office"): 20}
+window = {"cafe": (30, 60), "office": (0, 50)}     # (ready, due)
+service = 5
+
+def t(a, b):
+    return travel.get((a, b), travel.get((b, a)))  # two-way roads
+
+def simulate(order):
+    clock, here, out = 0, "depot", []
+    for name in order:
+        arrival = clock + t(here, name)
+        ready, due = window[name]
+        start = max(arrival, ready)                  # wait if early
+        out.append(f"{name}: arrive {arrival}, start {start} {'LATE' if start > due else 'ok'}")
+        clock, here = start + service, name
+    return out, clock + t(here, "depot")
+
+for order in (["cafe", "office"], ["office", "cafe"]):
+    visits, end = simulate(order)
+    print(order, visits, "back at", end)
+</textarea>
+      </div>
+      <p>The two orders have the same travel time, yet one waits 20 minutes and the other does not. Time windows make
+        route <em>direction</em> matter, which is why Clarke-Wright (Milestone 5) tries reversed merges.</p>
+      <ul class="checklist" data-id="capstone-m3">
+        <li><code>Route</code> and <code>Plan</code> are immutable and coerce lists to tuples</li>
+        <li><code>schedule</code> waits for windows and reports capacity, lateness, horizon, and unreachable stops</li>
+        <li><code>route_cost</code> includes both depot legs; <code>plan_cost</code> sums routes</li>
+        <li><code>check_plan</code> catches unknown, duplicated, and unserved customers</li>
+        <li><code>Instance.from_city</code>, <code>subset</code>, and <code>relaxed</code> work</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Use the pseudo id <code>DEPOT = 0</code> so <code>inst.time(a, b)</code> works for depot legs without
+            special cases. That is why customer ids start at 1.</li>
+          <li>Return violations as strings in a tuple; <code>feasible</code> is just <code>not violations</code>.</li>
+          <li>Compare floats with a small epsilon (<code>1e-9</code>) so 59.999999 vs 60 does not flip feasibility.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 4: An exact baseline with Held-Karp</h3>
+      <p><strong>Goal.</strong> Before writing heuristics, write the referee. Held-Karp solves the single-van TSP
+        exactly with dynamic programming over subsets: <em>best[S][j]</em> is the cheapest way to leave the depot,
+        visit exactly the customers in set <em>S</em>, and stop at <em>j</em>. Represent <em>S</em> as a bitmask, and
+        <em>best[S ∪ {k}][k] = min over j of best[S][j] + t(j, k)</em>. The answer closes the tour back to the depot.
+        That is O(n² 2ⁿ) time instead of brute force's O(n!): for n = 10, about 100,000 steps instead of 3.6 million
+        permutations.</p>
+      <p>Held-Karp ignores capacity and windows, so its answer is a <em>lower bound</em> for any route over the same
+        customers. Tests use it two ways: Held-Karp must equal brute force on 6 customers, and every heuristic must be
+        at least the optimum and, after 2-opt, within 15% of it on 9-customer instances.</p>
+      <p><strong>Concepts:</strong> dynamic programming and state design
+        (<a href="../modules/m32-dynamic-programming.html">M32</a>), bitmasks
+        (<a href="../modules/m34-strings-bits-math.html">M34</a>), recursion vs tabulation
+        (<a href="../modules/m28-recursion.html">M28</a>), test oracles (<a href="../modules/m17-testing.html">M17</a>).</p>
+      <div class="runnable" data-title="Held-Karp agrees with brute force">
+<textarea>
+import itertools, math, random
+
+rng = random.Random(1)
+pts = [(rng.uniform(0, 10), rng.uniform(0, 10)) for _ in range(8)]   # pts[0] is the depot
+t = [[math.dist(a, b) for b in pts] for a in pts]
+n = len(pts) - 1                                                     # customers 1..n
+
+def tour(order):
+    path = (0, *order, 0)
+    return sum(t[a][b] for a, b in itertools.pairwise(path))
+
+brute = min(tour(p) for p in itertools.permutations(range(1, n + 1)))
+
+best = {}
+for j in range(n):
+    best[(1 << j, j)] = t[0][j + 1]
+for mask in range(1, 1 << n):
+    for j in range(n):
+        if (mask, j) not in best:
+            continue
+        for k in range(n):
+            if not mask >> k & 1:
+                key = (mask | 1 << k, k)
+                cand = best[(mask, j)] + t[j + 1][k + 1]
+                if cand < best.get(key, math.inf):
+                    best[key] = cand
+full = (1 << n) - 1
+hk = min(best[(full, j)] + t[j + 1][0] for j in range(n))
+print(f"brute force {brute:.4f}  held-karp {hk:.4f}  states {len(best)}  permutations {math.factorial(n)}")
+</textarea>
+      </div>
+      <ul class="checklist" data-id="capstone-m4">
+        <li><code>held_karp</code> matches brute force on several random 6-customer instances</li>
+        <li>The returned order visits each customer once and achieves the returned cost</li>
+        <li>Empty input returns <code>(0.0, ())</code>; more than 12 customers raises <code>ValueError</code></li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Store a <code>parent[mask][k]</code> table alongside <code>best</code>, then walk it backwards from the
+            best final customer, removing each bit as you go.</li>
+          <li>Lists of lists indexed by <code>[mask][j]</code> are several times faster than a dict of tuples here.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 5: Construction heuristics and 2-opt</h3>
+      <p><strong>Goal.</strong> Three ways to build a feasible plan fast, and one way to polish it.</p>
+      <ul>
+        <li><strong>Nearest neighbour</strong> (greedy): from the current stop, drive to the closest customer that
+          keeps the route feasible (capacity, window, and still home by the horizon). If none fits, go home and start
+          a new van. O(n²), simple, and often 20–30% worse than optimal.</li>
+        <li><strong>Clarke-Wright savings</strong>: start with one van per customer. Serving <em>i</em> and <em>j</em>
+          on one route instead of two saves <em>s(i, j) = t(0, i) + t(0, j) − t(i, j)</em>. Process savings from
+          largest to smallest and merge two routes when <em>i</em> and <em>j</em> are at their ends and the merged
+          route is feasible. It is the classic workhorse of vehicle routing and usually beats nearest neighbour.</li>
+        <li><strong>2-opt</strong> local search: remove two edges and reconnect by reversing the segment between them.
+          The change in cost needs only four lookups, so you can test every pair in O(n²). Accept a move only if it
+          strictly shortens the route <em>and</em> keeps it feasible, and the route can never get worse.</li>
+      </ul>
+      <p><strong>Concepts:</strong> greedy algorithms and their limits
+        (<a href="../modules/m33-greedy-backtracking.html">M33</a>), sorting with keys and deterministic tie-breaks
+        (<a href="../modules/m29-sorting.html">M29</a>), slicing and reversal
+        (<a href="../modules/m20-arrays.html">M20</a>), problem-solving patterns: construct then improve
+        (<a href="../modules/m35-problem-solving.html">M35</a>).</p>
+      <div class="runnable" data-title="Predict: which merge saves the most?" data-predict>
+<textarea>
+# travel minutes: depot (0) to each customer, and between customers
+to_depot = {1: 10, 2: 12, 3: 4}
+between = {(1, 2): 3, (1, 3): 12, (2, 3): 14}
+savings = {pair: to_depot[pair[0]] + to_depot[pair[1]] - t for pair, t in between.items()}
+print(max(savings, key=savings.get), savings[max(savings, key=savings.get)])
+</textarea>
+      </div>
+      <div class="runnable" data-title="2-opt untangles a random tour">
+<textarea>
+import math, random
+import matplotlib.pyplot as plt
+
+rng = random.Random(3)
+pts = [(5.0, 5.0)] + [(rng.uniform(0, 10), rng.uniform(0, 10)) for _ in range(25)]
+d = lambda a, b: math.dist(pts[a], pts[b])
+cost = lambda r: sum(d(a, b) for a, b in zip([0, *r], [*r, 0]))
+
+route = list(range(1, 26))
+rng.shuffle(route)
+start_cost = cost(route)
+before = route[:]
+
+improved = True
+while improved:
+    improved = False
+    for i in range(len(route) - 1):
+        for j in range(i + 1, len(route)):
+            a = route[i - 1] if i else 0
+            b = route[j + 1] if j + 1 < len(route) else 0
+            delta = d(a, route[j]) + d(route[i], b) - d(a, route[i]) - d(route[j], b)
+            if delta < -1e-9:
+                route[i:j + 1] = reversed(route[i:j + 1])
+                improved = True
+print(f"random tour {start_cost:.1f}  after 2-opt {cost(route):.1f}")
+
+fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+for ax, r, title in ((axes[0], before, "random"), (axes[1], route, "2-opt")):
+    xs, ys = zip(*(pts[k] for k in [0, *r, 0]))
+    ax.plot(xs, ys, "-o", ms=3)
+    ax.plot(*pts[0], "s", ms=10)
+    ax.set_title(f"{title}: {cost(r):.1f}")
+</textarea>
+      </div>
+      <ul class="checklist" data-id="capstone-m5">
+        <li><code>nearest_neighbor</code> and <code>clarke_wright</code> produce feasible plans covering every customer</li>
+        <li>Both raise <code>InfeasibleCustomerError</code> for a customer no dedicated van could serve</li>
+        <li><code>two_opt</code> never lengthens a route, keeps the same customers, and preserves feasibility</li>
+        <li>Heuristic + 2-opt is at least Held-Karp's optimum and within 15% of it on 9 customers</li>
+        <li>Clarke-Wright beats nearest neighbour in total travel on generated cities</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>For Clarke-Wright, keep <code>routes: dict[key, list[int]]</code> and <code>owner: dict[customer,
+            key]</code> so finding a customer's route is O(1). Try the four merge orientations (a+b, b+a, a+reversed
+            b, reversed a+b) and take the first feasible one.</li>
+          <li>Sort savings with key <code>(-saving, i, j)</code> so ties break the same way every run.</li>
+          <li>In 2-opt, the O(1) delta assumes symmetric travel times. Double-check with a full
+            <code>route_cost</code> before accepting, then call <code>schedule</code> for feasibility.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 6: Assigning customers to vans (the sweep algorithm)</h3>
+      <p><strong>Goal.</strong> A cluster-first, route-second method. Imagine a clock hand rotating around the depot.
+        Sort customers by <dfn>polar angle</dfn> (<code>math.atan2(dy, dx)</code>, normalized to [0, 2π)) and fill a
+        van until the next customer would overflow its capacity, then start the next van. Route each cluster with
+        nearest neighbour, which may split it further if windows conflict. Finally, <code>plan_routes(inst,
+        method, improve=True)</code> becomes the single entry point the CLI calls.</p>
+      <p>Sweep produces geographically compact "pizza slice" routes, which drivers like, but it ignores time windows
+        while clustering, so on tight-window days it uses more vans than savings. Comparing the two on your
+        generated cities and writing down why is exactly the kind of analysis interviewers love.</p>
+      <p><strong>Concepts:</strong> trigonometry and floating point (<a href="../modules/m34-strings-bits-math.html">M34</a>),
+        sorting with composite keys (<a href="../modules/m29-sorting.html">M29</a>), strategy dispatch with a dict of
+        functions (<a href="../modules/m18-functional.html">M18</a>, <a href="../modules/m46-design.html">M46</a>).</p>
+      <ul class="checklist" data-id="capstone-m6">
+        <li><code>polar_angle</code> returns 0, π/2, π, 3π/2 for east, north, west, south</li>
+        <li><code>sweep_clusters</code> partitions the customers in angle order without overflowing a van</li>
+        <li><code>sweep</code> and every method of <code>plan_routes</code> return feasible plans</li>
+        <li><code>plan_routes</code> rejects unknown methods; 2-opt never makes a plan longer</li>
+        <li>A 200-customer city is planned feasibly in a few seconds</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Start the running load at infinity so the first customer always opens the first cluster: no special case.</li>
+          <li>Try several <code>start_angle</code> values and keep the cheapest plan: a cheap, effective improvement.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 7: Predicting delivery times (ETA model)</h3>
+      <p><strong>Goal.</strong> The planner assumes a leg takes <em>planned travel + service</em> minutes. Reality
+        differs: rush hour, rain, big orders, and one van with a sticky tail lift. Generate synthetic history whose
+        actual minutes depend on those factors plus noise, then train a scikit-learn <code>Pipeline</code>: a
+        <code>ColumnTransformer</code> that one-hot encodes weekday, weather, and van and passes numeric columns
+        through, feeding a <code>GradientBoostingRegressor</code> (or <code>Ridge</code> for a linear baseline).</p>
+      <p>The rule of honest ML evaluation: <strong>always compare with a naive baseline on held-out data.</strong>
+        A model with MAE 3 minutes is impressive if the planner's own estimate is off by 6, and worthless if it is off
+        by 2.5. Split deterministically, fit on the training part only, and report MAE and RMSE for model and baseline
+        side by side.</p>
+      <p><strong>Concepts:</strong> supervised learning, train/test splits, and baselines
+        (<a href="../modules/m55-ml-foundations.html">M55</a>), pipelines and encoders
+        (<a href="../modules/m56-scikit-learn.html">M56</a>), reproducibility and monitoring
+        (<a href="../modules/m59-ml-production.html">M59</a>), error metrics and noise
+        (<a href="../modules/m54-statistics.html">M54</a>).</p>
+      <div class="runnable" data-title="A model vs the naive estimate">
+<textarea>
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
+rng = np.random.default_rng(0)
+n = 800
+planned = rng.uniform(2, 30, n)
+hour = rng.integers(8, 18, n)
+weather = rng.choice(3, n, p=[0.7, 0.2, 0.1])          # 0 clear, 1 rain, 2 snow
+rush = np.where(np.isin(hour, [8, 16, 17]), 1.4, 1.0)
+actual = planned * rush * np.array([1.0, 1.2, 1.55])[weather] + rng.normal(0, 1.5, n)
+
+X = np.column_stack([planned, hour, weather])
+train, test = slice(0, 600), slice(600, n)
+model = Pipeline([
+    ("features", ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), [1, 2]),
+                                    ("num", "passthrough", [0])])),
+    ("gbr", GradientBoostingRegressor(random_state=0)),
+]).fit(X[train], actual[train])
+
+mae = lambda pred: np.mean(np.abs(pred - actual[test]))
+print(f"naive baseline MAE: {mae(planned[test]):.2f} min")
+print(f"model MAE:          {mae(model.predict(X[test])):.2f} min")
+</textarea>
+      </div>
+      <ul class="checklist" data-id="capstone-m7">
+        <li><code>generate_history</code> is deterministic with valid fields</li>
+        <li><code>split</code> is reproducible and rejects bad fractions</li>
+        <li>Both <code>gbr</code> and <code>ridge</code> beat the naive baseline's MAE on the test split</li>
+        <li>Gradient boosting cuts the baseline's MAE by more than half; training is reproducible</li>
+        <li><code>simulate_deliveries</code> yields one delivery per customer, deterministic per seed</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Encode records as a float matrix (weather as its index) and give <code>ColumnTransformer</code> column
+            indexes. No pandas needed.</li>
+          <li>Ridge needs scaled numeric features; gradient boosting does not. Choose the numeric transformer per model.</li>
+          <li>RMSE ≥ MAE always. If your RMSE is far above MAE, a few huge errors dominate: look at them.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 8: Persistence with SQLite</h3>
+      <p><strong>Goal.</strong> A <code>Store</code> class wrapping <code>sqlite3</code> with the schema from the ER
+        diagram. Saving a plan inserts one <code>plans</code> row and many <code>plan_stops</code> rows in a single
+        transaction (<code>with self._conn:</code> commits on success and rolls back on error). Always use
+        <code>?</code> placeholders, never f-strings: that is how you prevent SQL injection.</p>
+      <pre><code class="language-python">with self._conn:                      # one transaction
+    cur = self._conn.execute(
+        "INSERT INTO plans (label, method, capacity, created_at) VALUES (?, ?, ?, ?)",
+        (label, plan.method, capacity, stamp),
+    )
+    self._conn.executemany(
+        "INSERT INTO plan_stops (plan_id, route_index, position, customer_id) VALUES (?, ?, ?, ?)",
+        [(cur.lastrowid, r, p, c) for r, route in enumerate(plan.routes) for p, c in enumerate(route.stops)],
+    )</code></pre>
+      <p><strong>Concepts:</strong> relational modelling, keys, and transactions
+        (<a href="../modules/m44-data-databases.html">M44</a>), context managers
+        (<a href="../modules/m15-decorators.html">M15</a>), analytical SQL for KPIs
+        (<a href="../modules/m61-sql-duckdb.html">M61</a>), secure code (<a href="../modules/m43-debugging-security.html">M43</a>).</p>
+      <ul class="checklist" data-id="capstone-m8">
+        <li>A saved plan loads back equal, with route and stop order preserved</li>
+        <li>Plan ids increase; <code>latest_plan_id</code> and <code>list_plans</code> summarize correctly</li>
+        <li>Data survives closing and reopening the database file</li>
+        <li>Unknown plan ids raise <code>PlanNotFoundError</code></li>
+        <li>Deliveries round-trip, and re-recording a customer replaces its row</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Turn on <code>PRAGMA foreign_keys = ON</code> per connection; SQLite leaves it off by default.</li>
+          <li><code>list_plans</code> is one <code>LEFT JOIN</code> with <code>COUNT(DISTINCT route_index)</code>, not
+            a Python loop of queries (the N+1 query problem).</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 9: KPIs and the daily report</h3>
+      <p><strong>Goal.</strong> Turn a plan (and, after the day, its actual deliveries) into numbers the board cares
+        about: customers served, vans used, total travel and van time, waiting time, planned and actual on-time
+        percentage, mean delay, and van utilization (mean load ÷ capacity). Render them as a Markdown table for the
+        wiki or as aligned text for the terminal.</p>
+      <p>Keep calculation and presentation separate: <code>compute_kpis</code> returns a frozen <code>Kpis</code>
+        dataclass, and <code>render_report</code> only formats. You can then test the numbers exactly and the
+        rendering loosely, and add an HTML or JSON renderer later without touching the maths.</p>
+      <p><strong>Concepts:</strong> string formatting and f-string format specs
+        (<a href="../modules/m03-strings.html">M03</a>), summary statistics
+        (<a href="../modules/m54-statistics.html">M54</a>), communicating results
+        (<a href="../modules/m53-visualization.html">M53</a>), separation of concerns
+        (<a href="../modules/m46-design.html">M46</a>).</p>
+      <ul class="checklist" data-id="capstone-m9">
+        <li>KPIs for a hand-checked single-route plan match exactly (travel 40, van time 70, wait 20)</li>
+        <li>Utilization, actual on-time %, and mean delay are right with two vans and one late delivery</li>
+        <li>An empty plan gives 0 customers, 0 utilization, and 100% planned on-time</li>
+        <li>Markdown output has a KPI table and a routes table; text output has no pipes</li>
+        <li>Unknown formats raise <code>ValueError</code></li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Build a list of <code>(metric, value)</code> rows once, then format it two ways.</li>
+          <li>Use <code>f"{x:.1%}"</code> for percentages and <code>f"{x:+.1f}"</code> to show the sign of a delay.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 10: The CLI, end to end</h3>
+      <p><strong>Goal.</strong> An <code>argparse</code> interface with three subcommands. <code>generate</code>
+        writes a city; <code>plan</code> loads it, plans with the chosen method, stores the plan, and optionally
+        simulates the day; <code>report</code> loads a plan (the latest by default) and prints or writes the report.
+        <code>main(argv)</code> takes a list and returns an exit code, so tests call it directly with
+        <code>tmp_path</code> instead of spawning processes. Expected failures (no plans, unknown id) print to stderr
+        and return 1; usage errors exit with 2 (argparse does that for you).</p>
+      <p><strong>Concepts:</strong> modules, packages, and <code>__main__.py</code>
+        (<a href="../modules/m08-modules.html">M08</a>), packaging and entry points
+        (<a href="../modules/m41-pixi-packaging.html">M41</a>), testing with fixtures and <code>capsys</code>
+        (<a href="../modules/m17-testing.html">M17</a>), tooling (<a href="../modules/m42-tooling.html">M42</a>).</p>
+      <ul class="checklist" data-id="capstone-m10">
+        <li><code>generate</code>, <code>plan</code>, and <code>report</code> work end to end in a temporary directory</li>
+        <li><code>plan --simulate</code> stores deliveries and the report shows actual on-time %</li>
+        <li><code>report --out</code> writes a file and uses the stored capacity</li>
+        <li>Missing plans return exit code 1 with a message on stderr; bad arguments exit with 2</li>
+        <li>All grading tests pass and ruff is clean</li>
+      </ul>
+      <details class="reveal"><summary>Hints</summary>
+        <ul>
+          <li>Dispatch with a dict: <code>{"generate": _generate, "plan": _plan, "report": _report}[args.command](args)</code>.</li>
+          <li>Close the store before rendering (use <code>with Store(path) as store:</code>) so tests on Windows can
+            delete the temporary database.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Testing strategy</h2>
+    <p>The grading suite has over 100 tests in eight files, one per area. Read them: they are the executable
+      specification, and they model how a professional tests an optimization system.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Unit tests</h4><p>Small, hand-checked cases: a three-node line where you can compute
+        every arrival on paper, a diamond graph with a known shortest path, a square whose optimal tour is its
+        perimeter. If these fail, the bug is local.</p></div>
+      <div class="card"><h4>Oracle tests</h4><p>A slow, obviously correct implementation checks a fast clever one:
+        brute-force permutations check Held-Karp, Dijkstra checks A*, Held-Karp bounds every heuristic.</p></div>
+      <div class="card"><h4>Property tests</h4><p>Invariants that must hold for <em>every</em> input: A* cost equals
+        Dijkstra cost on random graphs; 2-opt never increases cost and keeps the same customers; every plan from
+        every method passes <code>check_plan</code>; the same seed gives the same output.</p></div>
+      <div class="card"><h4>Integration tests</h4><p>The CLI writes CSVs, plans into a SQLite file, and reports, all
+        inside <code>tmp_path</code>, so nothing leaks between tests.</p></div>
+    </div>
+    <p>The suite uses parametrized seeds as a lightweight form of property-based testing. In your portfolio version,
+      go further with <a href="https://hypothesis.readthedocs.io/">Hypothesis</a> (<code>pixi add --feature dev
+      hypothesis</code>), which generates inputs and shrinks failures to a minimal example:</p>
+    <pre><code class="language-python">from hypothesis import given, strategies as st
+
+@given(st.permutations(list(range(1, 9))), st.integers(0, 10_000))
+def test_two_opt_never_worsens(order, seed):
+    inst = tiny_tsp(seed, 8)
+    assert route_cost(two_opt(Route(tuple(order)), inst), inst) &lt;= route_cost(order, inst) + 1e-9</code></pre>
+    <p>Coverage follows the repository standard: <code>pytest --cov --cov-fail-under=90</code>. The reference
+      solution reaches 97%. Coverage tells you what was <em>executed</em>, not what was <em>checked</em>, so pair it with
+      good assertions; a test with no assertion still counts as covered.</p>
+    <pre data-label="Your repository's pixi tasks"><code class="language-bash">pixi run test     # pytest tests/unit/ (milliseconds)
+pixi run cov      # pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=90</code></pre>
+    <aside class="callout tip"><p>When a heuristic test fails on one seed, freeze that seed into a named regression
+      test (<code>test_savings_seed_17_overflow</code>) after you fix the bug. Your suite then remembers every bug
+      you have ever fixed.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Professional practice</h2>
+    <p>The capstone is graded on more than passing tests. Publish it as your own repository, set up the way a
+      professional team would. Every item below is something interviewers look for.</p>
+    <h3>A Pixi workspace with standard tasks</h3>
+    <pre data-label="pixi.toml (excerpt)"><code class="language-toml">[workspace]
+name = "routewise"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "win-64"]
+
+[dependencies]
+python = "3.14.*"
+numpy = "*"
+scikit-learn = "*"
+structlog = "*"
+
+[pypi-dependencies]
+routewise = { path = ".", editable = true }
+
+[feature.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"
+hypothesis = "*"
+mypy = "*"
+ruff = "*"
+pre-commit = "*"
+
+[feature.dev.tasks]
+fmt = "ruff format ."
+lint = "ruff check ."
+check = "mypy src/"
+test = "pytest tests/unit/"
+cov = "pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=90"
+ci = { depends-on = ["lint", "check", "cov"] }
+
+[environments]
+default = { features = ["dev"] }</code></pre>
+    <h3>Quality gates</h3>
+    <ul>
+      <li><strong>ruff</strong> for linting and formatting (rules E, F, I, UP, B, RUF, D with Google docstrings), and
+        <strong>mypy</strong> with <code>strict = true</code> (<a href="../modules/m42-tooling.html">M42</a>,
+        <a href="../modules/m16-typing.html">M16</a>).</li>
+      <li><strong>pre-commit</strong> runs ruff and mypy before every commit and checks Conventional Commit messages
+        at the <code>commit-msg</code> stage. Never bypass it with <code>--no-verify</code>; fix the problem.</li>
+      <li><strong>structlog</strong> instead of <code>print</code> in library code, configured with a JSON renderer
+        so logs are machine-readable (<a href="../modules/m43-debugging-security.html">M43</a>):
+        <code>log.info("plan.saved", plan_id=7, routes=5, minutes=812.4)</code>.</li>
+    </ul>
+    <h3>Continuous integration</h3>
+    <pre data-label=".github/workflows/ci.yml"><code class="language-yaml">name: CI
+on:
+  push: { branches: ["main"] }
+  pull_request: { branches: ["main"] }
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+      - run: pixi run ci</code></pre>
+    <h3>Commits, README, and ADRs</h3>
+    <ul>
+      <li><strong>Conventional Commits</strong>: <code>feat(routing): add Clarke-Wright savings</code>,
+        <code>fix(graph): reject negative edge weights</code>, <code>test(eta): baseline comparison</code>. Generate
+        a changelog with git-cliff.</li>
+      <li><strong>README</strong>: one-line pitch, a screenshot or report excerpt, install (<code>pixi
+        install</code>), quick start (the three CLI commands), architecture diagram, results table (heuristic vs
+        optimal gap, ETA MAE vs baseline), and how to run tests.</li>
+      <li><strong>Architecture Decision Records</strong> (ADRs): short Markdown files in <code>docs/adr/</code>, one
+        per significant decision, with <em>Context, Decision, Consequences</em>. Write at least three, for example:
+        "Use Clarke-Wright as the default planner", "Store plans in SQLite, cities in CSV", and "Precompute a
+        depot-and-customer distance matrix instead of querying A* per leg".</li>
+    </ul>
+    <pre data-label="docs/adr/0002-default-planner.md"><code class="language-diff"># 2. Use Clarke-Wright savings as the default planner
+
+Status: accepted
+
+## Context
+Nearest neighbour is simple but was 31% longer than savings on our 10 benchmark cities.
+Sweep gives compact routes but used 2x the vans on tight-window days.
+
+## Decision
+Default to `--method savings` followed by 2-opt.
+
+## Consequences
+Planning 200 customers takes ~0.5 s. Sweep stays available for comparison.</code></pre>
+    <aside class="callout pro"><p>Read <a href="../modules/m46-design.html">M46</a> again before you start: the
+      capstone is where layered design, dependency direction, and small interfaces stop being theory. If adding a
+      feature means editing five modules, the boundaries are in the wrong place.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <p>Grade yourself honestly (or ask a peer). The automated tests cover most of <em>Correctness</em> and part of
+      <em>Tests</em>; the rest is judged by reading your repository and watching your demo.</p>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Weight</th><th>Excellent</th><th>Needs work</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>25%</td><td>All grading tests pass; every plan from every method is feasible and complete; CLI handles errors with proper exit codes</td><td>Some plans violate windows or capacity; crashes on edge cases</td></tr>
+        <tr><td>Algorithms and efficiency</td><td>15%</td><td>Heap-based Dijkstra, admissible A*, cached matrix, O(1) 2-opt deltas; 200 customers in seconds; complexity stated in docstrings</td><td>Re-running shortest paths per lookup; quadratic scans inside loops; minutes per plan</td></tr>
+        <tr><td>Code quality</td><td>10%</td><td>Typed (mypy strict clean), documented, ruff clean; small functions; no circular imports; immutable records</td><td>Long functions, duplicated logic, missing types, mutable shared state</td></tr>
+        <tr><td>Tests</td><td>15%</td><td>Unit, oracle, property, and integration tests; ≥ 90% coverage; regression tests for fixed bugs</td><td>Only happy-path tests or tests without meaningful assertions</td></tr>
+        <tr><td>Data pipeline</td><td>10%</td><td>Deterministic generation, validated loading, schema with keys and constraints, transactional writes</td><td>Unvalidated CSV, SQL built with f-strings, partial writes on error</td></tr>
+        <tr><td>ML evaluation</td><td>10%</td><td>Held-out split, naive baseline, MAE and RMSE reported side by side, reproducible training, honest discussion of limits</td><td>Metrics on training data, no baseline, unreproducible results</td></tr>
+        <tr><td>Documentation</td><td>7%</td><td>README with quick start and results, architecture diagram, three or more ADRs, changelog</td><td>No README or one that does not explain how to run the project</td></tr>
+        <tr><td>Demo</td><td>8%</td><td>A 5-minute walkthrough: problem, live CLI run, one design trade-off, results, what you would do next</td><td>No demo, or a code scroll without a story</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Quality checks"><code class="language-bash">pixi run grade capstone
+pixi run ruff check work/capstone_routewise
+pixi run ruff format --check work/capstone_routewise
+pixi run mypy --strict work/capstone_routewise/routewise</code></pre>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>A FastAPI service</h4><p>Add <code>pixi add fastapi uvicorn</code> in a
+        <code>service</code> feature and expose <code>POST /plans</code> (body: city id, method, capacity) and
+        <code>GET /plans/{id}/report</code>. Use Pydantic models at the boundary and keep the domain code unchanged
+        (<a href="../modules/m45-web-apis.html">M45</a>).</p></div>
+      <div class="card"><h4>A map visualization</h4><p>Plot the road network in light grey and each van's route in
+        its own colour with matplotlib, annotate late stops in red, and embed the PNG in the report
+        (<a href="../modules/m53-visualization.html">M53</a>).</p></div>
+      <div class="card"><h4>Real streets with osmnx</h4><p>In a separate, network-enabled Pixi feature,
+        <code>pixi add osmnx</code> and convert a real neighbourhood's OpenStreetMap graph into a
+        <code>RoadGraph</code> (travel time from length and speed limits). Cache the download so tests stay offline.</p></div>
+      <div class="card"><h4>Free-threaded parallel optimization</h4><p>On the free-threaded 3.14 build
+        (<code>pixi add python-freethreading</code>), run 2-opt on each route concurrently, or try many sweep start
+        angles in parallel, with a <code>ThreadPoolExecutor</code>. Measure the speedup honestly
+        (<a href="../modules/m37-concurrency.html">M37</a>, <a href="../modules/m39-performance.html">M39</a>).</p></div>
+      <div class="card"><h4>Lazy imports in 3.15 <span class="tag v315">3.15</span></h4><p>scikit-learn takes a
+        noticeable fraction of a second to import, yet <code>routewise generate</code> never uses it. Python 3.15's
+        explicit lazy imports defer the cost until first use (<a href="../reference/python-315.html">3.15
+        preview</a>).</p></div>
+      <div class="card"><h4>Better optimization</h4><p>Add Or-opt (move a run of 1–3 stops elsewhere) and an
+        inter-route relocate move, or a simulated-annealing loop around them. Report the gap to Held-Karp on small
+        cases and to your best previous plan on large ones.</p></div>
+    </div>
+    <div class="runnable" data-local="Parallel speedup needs a local free-threaded Python 3.14 build." data-title="Parallel 2-opt with threads">
+<textarea>
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+from routewise.assign import plan_routes
+from routewise.data import generate_city
+from routewise.routing import Instance, Plan, two_opt
+
+print("GIL enabled:", sys._is_gil_enabled())
+inst = Instance.from_city(generate_city(200, seed=1), capacity=60)
+for row in inst.travel.nodes:      # warm the cache so threads do not race to compute the same rows
+    inst.travel.cost(row, inst.depot)
+plan = plan_routes(inst, "savings", improve=False)
+with ThreadPoolExecutor() as pool:
+    improved = Plan(tuple(pool.map(lambda r: two_opt(r, inst), plan.routes)), plan.method)
+print(len(improved.routes), "routes improved in parallel")
+</textarea>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="Lazy imports keep the CLI fast">
+<textarea>
+lazy import sklearn.ensemble       # not imported yet
+import sys, time
+
+start = time.perf_counter()
+print("sklearn loaded?", "sklearn.ensemble" in sys.modules)
+model = sklearn.ensemble.GradientBoostingRegressor()   # first use triggers the real import
+print("sklearn loaded?", "sklearn.ensemble" in sys.modules, f"{time.perf_counter() - start:.2f}s")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="alternatives">
+    <h2>Alternative capstone tracks</h2>
+    <p>If delivery routing does not excite you, build one of these instead. They exercise the same skills and are
+      assessed with <a href="#rubric">the same rubric</a>; there is no grading suite, so writing the 50+ tests yourself
+      is part of the work.</p>
+    <div class="two-col">
+      <div class="card"><h4>Personal-finance insights platform</h4>
+        <ul>
+          <li><strong>Data pipeline:</strong> ingest bank CSV exports in several formats, normalize, de-duplicate,
+            and load into SQLite or DuckDB.</li>
+          <li><strong>Algorithms:</strong> detect recurring subscriptions with interval analysis and hashing; budget
+            allocation as a knapsack-style DP.</li>
+          <li><strong>ML:</strong> categorize transactions from descriptions (TF-IDF + logistic regression) against a
+            keyword-rule baseline; forecast monthly spend; flag anomalies.</li>
+          <li><strong>Report:</strong> monthly Markdown statement with charts. Builds on
+            <a href="p01-budget-ledger.html">Project 1</a> and <a href="p09-etl-pipeline.html">Project 9</a>.</li>
+        </ul>
+      </div>
+      <div class="card"><h4>Community-event scheduler</h4>
+        <ul>
+          <li><strong>Data pipeline:</strong> import events, rooms, volunteers, and attendee preferences; validate
+            conflicts.</li>
+          <li><strong>Algorithms:</strong> interval scheduling and graph colouring for room assignment, backtracking
+            with constraint propagation for volunteer rosters, shortest paths between venues.</li>
+          <li><strong>ML:</strong> predict attendance from past events against a "same as last time" baseline, and use
+            it to pick room sizes.</li>
+          <li><strong>Report:</strong> a schedule, utilization KPIs, and a conflicts report. Builds on
+            <a href="p04-puzzle-solver.html">Project 4</a> and <a href="p06-habit-tracker.html">Project 6</a>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="present">
+    <h2>How to present your capstone</h2>
+    <p>A capstone that nobody understands is worth little to your career. Treat the presentation as part of the
+      project.</p>
+    <h3>In your portfolio</h3>
+    <ul>
+      <li><strong>Lead with the problem, not the code.</strong> First line of the README: "RouteWise plans delivery
+        routes for 200 customers in under a second, with every time window respected."</li>
+      <li><strong>Show results with numbers.</strong> A table: nearest neighbour vs savings vs sweep (vans, minutes),
+        gap to Held-Karp on small cases, ETA MAE vs baseline. Numbers prove you measured.</li>
+      <li><strong>Make it run in one minute.</strong> <code>pixi install</code> and three commands. If a reviewer
+        cannot run it, it does not exist.</li>
+      <li><strong>Show the green CI badge and the coverage figure.</strong> They signal professionalism before anyone
+        reads a line.</li>
+    </ul>
+    <h3>In an interview</h3>
+    <ul>
+      <li><strong>Use a story structure:</strong> situation (the bakery), task (plan feasible routes), action (your
+        architecture and one hard decision), result (the numbers), and what you learned.</li>
+      <li><strong>Prepare one deep trade-off.</strong> "Why savings and not an exact solver?" Explain NP-hardness,
+        the O(n² 2ⁿ) cost of Held-Karp, and how you used it as a test oracle instead.</li>
+      <li><strong>Prepare one bug story.</strong> For example, the 2-opt delta that silently assumed symmetric travel
+        times, and the property test that caught it.</li>
+      <li><strong>Know your limits.</strong> Synthetic data, a single depot, no driver breaks, static traffic. Saying
+        what you would do next shows judgement.</li>
+      <li><strong>Be ready to extend it live:</strong> "How would you add a second depot?" Walk through which modules
+        change (the instance and the construction heuristics) and which do not (graph, store, report).</li>
+    </ul>
+    <aside class="callout think"><p>Record a five-minute screen capture of your demo and watch it back. Where did you
+      lose the thread? That is where your explanation, or your code, needs work.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Final self-assessment</h2>
+    <p>Fifteen questions across the whole capstone. Aim for at least 80% before presenting your work.</p>
+    <div class="quiz" data-id="capstone-quiz">
+<script type="application/json">
+{"title": "Capstone self-assessment", "passScore": 0.8, "questions": [
+  {"type": "single", "prompt": "Why is <code>euclidean(n, target) / max_speed</code> a safe A* heuristic for RouteWise's road graph?", "options": ["It is always exactly equal to the true travel time", "No road is faster than <code>max_speed</code>, so it never overestimates the remaining time", "It makes A* explore every node, like Dijkstra", "It is fast to compute, which is all A* needs"], "answer": 1, "explanation": "<p>A* is optimal when the heuristic is <em>admissible</em> (never overestimates). Straight-line distance is the shortest possible distance, and dividing by the fastest speed gives the least possible time, so the estimate is a lower bound.</p>"},
+  {"type": "single", "prompt": "Held-Karp solves a 10-customer single route exactly. What is its time complexity?", "options": ["O(n!)", "O(n<sup>2</sup> 2<sup>n</sup>)", "O(n log n)", "O(2<sup>n</sup>) with O(1) memory"], "answer": 1, "explanation": "<p>There are n·2<sup>n</sup> states (subset, last customer), and each tries n next customers. That is exponential but far better than the n! permutations of brute force: about 10<sup>5</sup> vs 3.6×10<sup>6</sup> for n = 10.</p>"},
+  {"type": "output", "prompt": "What is the Clarke-Wright saving of serving customers 1 and 2 on one route?", "code": "t0 = {1: 10, 2: 12}\nt12 = 3\nprint(t0[1] + t0[2] - t12)", "answer": "19", "explanation": "<p>Two separate routes cost 2·10 + 2·12 = 44; one route 0→1→2→0 costs 10 + 3 + 12 = 25. The saving is 44 − 25 = 19 = t(0,1) + t(0,2) − t(1,2).</p>"},
+  {"type": "multi", "prompt": "Which statements about 2-opt as implemented in RouteWise are true?", "options": ["It reverses a segment of the route", "It only accepts moves that strictly reduce cost and keep the route feasible", "It guarantees an optimal route", "Its cost change can be computed from four travel times when travel is symmetric"], "answer": [0, 1, 3], "explanation": "<p>2-opt replaces two edges by reversing the segment between them. Accepting only strict, feasible improvements means it can never worsen a route, but it stops at a <em>local</em> optimum, not necessarily the global one.</p>"},
+  {"type": "single", "prompt": "A van arrives at a cafe at minute 20; the cafe's window is [30, 60] and service takes 5 minutes. When does the van leave?", "options": ["25", "35", "60", "The route is infeasible"], "answer": 1, "explanation": "<p>Waiting is allowed: service starts at max(20, 30) = 30 and ends at 35. Arriving early is fine; only starting after <code>due</code> is a violation.</p>"},
+  {"type": "single", "prompt": "Your ETA model has a test MAE of 3.1 minutes. What do you need before you can call it good?", "options": ["A training MAE that is lower", "The MAE of a naive baseline on the same test data", "A deeper model", "An R<sup>2</sup> above 0.99"], "answer": 1, "explanation": "<p>A metric means nothing without a comparison. If the planner's own estimate already has MAE 2.5, the model is worse than doing nothing. Always report the baseline beside the model on held-out data.</p>"},
+  {"type": "multi", "prompt": "Which of these are good property-based tests for RouteWise?", "options": ["A* and Dijkstra return equal costs on random graphs", "2-opt never increases route cost", "<code>generate_city(30, 1)</code> has exactly 1,234 edges", "Every plan returned by <code>plan_routes</code> passes <code>check_plan</code>"], "answer": [0, 1, 3], "explanation": "<p>Properties are invariants that hold for every input. An exact edge count is a brittle example test tied to one implementation detail of the generator.</p>"},
+  {"type": "single", "prompt": "Why does <code>DistanceMatrix</code> run one full Dijkstra per source instead of A* per pair?", "options": ["A* is not correct on road graphs", "One Dijkstra from a source gives the distances to all targets at once, and rows are cached, so n + 1 runs answer all (n + 1)<sup>2</sup> lookups", "Dijkstra uses less memory per query", "Caching is impossible with A*"], "answer": 1, "explanation": "<p>Routing does millions of travel-time lookups between the same few hundred points. Single-source Dijkstra amortizes beautifully: each run answers a whole row. A* shines for one-off point-to-point queries.</p>"},
+  {"type": "text", "prompt": "Which SQL feature (one word) do you use to make saving a plan and its stops all-or-nothing?", "answer": ["transaction", "transactions"], "explanation": "<p>A transaction groups statements so they either all commit or all roll back. In <code>sqlite3</code>, <code>with conn:</code> commits on success and rolls back on an exception.</p>"},
+  {"type": "single", "prompt": "Which query is safe from SQL injection?", "options": ["<code>conn.execute(f\"SELECT * FROM plans WHERE label = '{label}'\")</code>", "<code>conn.execute(\"SELECT * FROM plans WHERE label = ?\", (label,))</code>", "<code>conn.execute(\"SELECT * FROM plans WHERE label = '%s'\" % label)</code>", "All of them, since SQLite is local"], "answer": 1, "explanation": "<p>Placeholders send the value separately from the SQL text, so it can never be parsed as SQL. Local databases are still vulnerable: the input comes from users or files.</p>"},
+  {"type": "single", "prompt": "The sweep algorithm used many more vans than Clarke-Wright on a tight-window day. What is the most likely reason?", "options": ["It sorts customers incorrectly", "It clusters by angle and capacity only, ignoring time windows, so clusters later split into several routes", "It does not use the distance matrix", "Sweep always uses exactly one van per customer"], "answer": 1, "explanation": "<p>Sweep is cluster-first, route-second. Customers that are close in angle may have incompatible windows; nearest neighbour then has to split the cluster. Savings checks full feasibility at every merge.</p>"},
+  {"type": "multi", "prompt": "Which practices belong in a professional capstone repository?", "options": ["Conventional Commit messages and a generated changelog", "<code>git commit --no-verify</code> when pre-commit is slow", "Architecture Decision Records for major choices", "CI running lint, type checks, and tests on every pull request"], "answer": [0, 2, 3], "explanation": "<p>Bypassing hooks hides problems instead of fixing them. Commits, ADRs, and CI make the history, the reasoning, and the quality visible to reviewers.</p>"},
+  {"type": "single", "prompt": "Why does <code>cli.main</code> take <code>argv</code> and return an exit code instead of calling <code>sys.exit</code> itself?", "options": ["argparse requires it", "So tests can call it directly with a list of arguments and check the result, without spawning a process", "It makes the CLI faster", "To avoid printing"], "answer": 1, "explanation": "<p>A pure-ish <code>main(argv) -&gt; int</code> is trivially testable with <code>capsys</code> and <code>tmp_path</code>. The thin <code>__main__.py</code> wrapper does <code>raise SystemExit(main())</code>.</p>"},
+  {"type": "text", "prompt": "Which Python 3.15 soft keyword defers a module import until the name is first used?", "answer": ["lazy"], "explanation": "<p>PEP 810 adds <code>lazy import x</code> and <code>lazy from x import y</code> at module scope. The CLI can then start quickly when a subcommand never touches scikit-learn.</p>"},
+  {"type": "single", "prompt": "In an interview someone asks: why not solve the whole problem exactly? What is the strongest answer?", "options": ["Exact solvers do not exist", "The problem is NP-hard; exact methods like Held-Karp grow exponentially, so I use fast heuristics and verify them against the exact method on small instances", "Heuristics are always optimal for small cities", "Python is too slow for exact algorithms"], "answer": 1, "explanation": "<p>This answer shows you know the theory (NP-hardness), the numbers (exponential growth), and the engineering response (heuristics plus an exact oracle in tests). That is the judgement interviewers look for.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Real problems start with stakeholders and checkable requirements, then a data model and an architecture with
+        one-way dependencies.</li>
+      <li>Shortest paths (Dijkstra, admissible A*) and a cached matrix turn a road network into fast travel-time lookups.</li>
+      <li>Vehicle routing is NP-hard: build plans with greedy construction (nearest neighbour, savings, sweep), polish
+        with 2-opt, and verify with an exact Held-Karp oracle on small cases.</li>
+      <li>One trusted feasibility simulator underpins every algorithm and test.</li>
+      <li>ML is only as good as its evaluation: held-out data, a naive baseline, and reproducible training.</li>
+      <li>SQLite with keys, constraints, transactions, and placeholders keeps outputs correct and safe.</li>
+      <li>Professional practice (Pixi tasks, strict typing, linting, CI, ADRs, a README, and a demo) is what turns a
+        working program into a portfolio piece.</li>
+    </ul>
+    <div class="flashcards" data-title="Capstone key ideas">
+<script type="application/json">
+[{"front": "CVRPTW", "back": "Capacitated vehicle routing problem with time windows: serve every customer once, within van capacity and each customer's window."},
+ {"front": "Admissible heuristic", "back": "Never overestimates the true remaining cost; guarantees A* returns an optimal path."},
+ {"front": "Clarke-Wright saving s(i, j)", "back": "t(0, i) + t(0, j) − t(i, j): the travel saved by serving i and j on one route instead of two."},
+ {"front": "2-opt move", "back": "Remove two edges and reverse the segment between them; accept only if the route gets shorter and stays feasible."},
+ {"front": "Held-Karp state", "back": "best[S][j]: cheapest path from the depot visiting exactly set S and ending at j. O(n² 2ⁿ) time."},
+ {"front": "Sweep algorithm", "back": "Sort customers by polar angle around the depot and fill vans up to capacity: cluster first, route second."},
+ {"front": "Naive baseline", "back": "The simplest reasonable prediction (here planned travel + service). A model must beat it on held-out data."},
+ {"front": "Oracle test", "back": "A slow, obviously correct implementation used to check a fast one (brute force checks Held-Karp)."},
+ {"front": "ADR", "back": "Architecture Decision Record: a short document with context, decision, and consequences for one significant choice."},
+ {"front": "Why main(argv) -> int?", "back": "So tests can call the CLI in-process with arguments and assert on the exit code and captured output."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/heapq.html">heapq</a>,
+        <a href="https://docs.python.org/3/library/sqlite3.html">sqlite3</a>, and
+        <a href="https://docs.python.org/3/library/argparse.html">argparse</a> in the Python documentation</li>
+      <li><a href="https://scikit-learn.org/stable/modules/compose.html">scikit-learn: pipelines and composite estimators</a></li>
+      <li><a href="https://developers.google.com/optimization/routing">Google OR-Tools vehicle routing guide</a>, for
+        how industrial solvers approach the same problem</li>
+      <li><a href="https://adr.github.io/">adr.github.io</a> for ADR templates</li>
+      <li><a href="https://www.conventionalcommits.org/">Conventional Commits</a> and
+        <a href="https://pixi.sh/">pixi.sh</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Complexity Cheat Sheet · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-complexity">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Algorithms</p>
+    <h1>Complexity Cheat Sheet</h1>
+    <p class="lede">What each operation costs, in one place: Python's built-in containers, the classic data structures,
+      sorting, graph algorithms, dynamic programming, and vectorized NumPy and pandas. Use it to choose a structure
+      before you write code, and to explain why slow code is slow.</p>
+    <div class="lesson-meta"><span>⏱ Keep open while you work</span><span>Theory: <a href="../modules/m19-complexity.html">M19 Complexity &amp; Big-O</a></span><span>Source for built-ins: <a href="https://wiki.python.org/moin/TimeComplexity">Python wiki: TimeComplexity</a></span></div>
+    <ul class="objectives">
+      <li>Read Big-O, average vs worst case, and amortized cost correctly</li>
+      <li>Know the cost of every common <code>list</code>, <code>dict</code>, <code>set</code>, <code>deque</code>, <code>heapq</code>, <code>str</code>, and <code>bisect</code> operation</li>
+      <li>Compare sorting, graph, and DP algorithms by time, space, and stability</li>
+      <li>Choose the right structure for a job with a decision flowchart</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="growth">
+    <h2>Growth rates</h2>
+    <p>Big-O describes how cost grows with input size <var>n</var>, ignoring constant factors. Below,
+      <var>n</var> is the container size, <var>k</var> is the size of the argument or result, <var>V</var>/<var>E</var>
+      are vertices and edges. "Amortized O(1)" means an occasional expensive step averages out to constant per
+      operation. "Average" for hash tables assumes a decent hash function; the worst case (all keys colliding) is
+      O(n).</p>
+    <table>
+      <thead><tr><th>Class</th><th>Name</th><th>n = 1,000</th><th>n = 1,000,000</th><th>Typical example</th></tr></thead>
+      <tbody>
+        <tr><td>O(1)</td><td>constant</td><td>1</td><td>1</td><td>dict lookup, list index</td></tr>
+        <tr><td>O(log n)</td><td>logarithmic</td><td>~10</td><td>~20</td><td>binary search, heap push</td></tr>
+        <tr><td>O(n)</td><td>linear</td><td>1,000</td><td>1,000,000</td><td>scan a list, <code>x in list</code></td></tr>
+        <tr><td>O(n log n)</td><td>linearithmic</td><td>~10,000</td><td>~20,000,000</td><td><code>sorted()</code>, merge sort</td></tr>
+        <tr><td>O(n²)</td><td>quadratic</td><td>1,000,000</td><td>10<sup>12</sup> (hours)</td><td>nested loops over the same data</td></tr>
+        <tr><td>O(2<sup>n</sup>)</td><td>exponential</td><td>10<sup>301</sup></td><td>-</td><td>all subsets, naive recursion</td></tr>
+        <tr><td>O(n!)</td><td>factorial</td><td>-</td><td>-</td><td>all permutations (brute-force TSP)</td></tr>
+      </tbody>
+    </table>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["1", "log n", "n", "n log n", "n^2", "2^n"], "maxN": 32}'></div>
+    <aside class="callout tip"><p>Rule of thumb for pure Python: roughly 10<sup>7</sup> simple operations per second.
+      With n = 10<sup>5</sup>, O(n log n) finishes instantly and O(n²) takes minutes.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="builtins">
+    <h2>Python built-in operation costs (CPython)</h2>
+    <div class="tabs">
+      <div class="tab" data-label="list">
+        <table>
+          <thead><tr><th>Operation</th><th>Average</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>xs[i]</code>, <code>xs[i] = v</code>, <code>len(xs)</code></td><td>O(1)</td><td>Contiguous array of pointers</td></tr>
+            <tr><td><code>xs.append(v)</code></td><td>O(1) amortized</td><td>Occasional resize copies everything (<a href="../modules/m20-arrays.html">M20</a>)</td></tr>
+            <tr><td><code>xs.pop()</code></td><td>O(1)</td><td>From the end</td></tr>
+            <tr><td><code>xs.pop(0)</code>, <code>xs.insert(0, v)</code></td><td>O(n)</td><td>Shifts every element; use <code>deque</code></td></tr>
+            <tr><td><code>xs.pop(i)</code>, <code>xs.insert(i, v)</code>, <code>del xs[i]</code></td><td>O(n - i)</td><td>Shifts the tail</td></tr>
+            <tr><td><code>v in xs</code>, <code>xs.index(v)</code>, <code>xs.count(v)</code>, <code>xs.remove(v)</code></td><td>O(n)</td><td>Linear scan</td></tr>
+            <tr><td><code>xs[a:b]</code></td><td>O(k)</td><td>k = b - a; creates a copy</td></tr>
+            <tr><td><code>xs.extend(ys)</code>, <code>xs + ys</code></td><td>O(k) / O(n + k)</td><td><code>+</code> builds a new list</td></tr>
+            <tr><td><code>xs.sort()</code>, <code>sorted(xs)</code></td><td>O(n log n)</td><td>O(n) if already sorted (Timsort/Powersort)</td></tr>
+            <tr><td><code>min</code>, <code>max</code>, <code>sum</code>, <code>xs.reverse()</code>, <code>xs.copy()</code></td><td>O(n)</td><td></td></tr>
+            <tr><td><code>xs * k</code></td><td>O(nk)</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="dict">
+        <table>
+          <thead><tr><th>Operation</th><th>Average</th><th>Worst</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>d[k]</code>, <code>d[k] = v</code>, <code>del d[k]</code>, <code>k in d</code>, <code>d.get(k)</code></td><td>O(1)</td><td>O(n)</td><td>Hash table with open addressing (<a href="../modules/m23-hash-tables.html">M23</a>)</td></tr>
+            <tr><td><code>d.pop(k)</code>, <code>d.setdefault(k, v)</code></td><td>O(1)</td><td>O(n)</td><td></td></tr>
+            <tr><td><code>d.popitem()</code></td><td>O(1)</td><td>O(1)</td><td>Removes the last inserted</td></tr>
+            <tr><td>Iterate <code>keys</code>/<code>values</code>/<code>items</code></td><td>O(n)</td><td>O(n)</td><td>Insertion order</td></tr>
+            <tr><td><code>d.copy()</code>, <code>d | other</code></td><td>O(n)</td><td>O(n)</td><td></td></tr>
+            <tr><td><code>len(d)</code></td><td>O(1)</td><td>O(1)</td><td></td></tr>
+          </tbody>
+        </table>
+        <p><code>Counter</code> and <code>defaultdict</code> are dicts, with the same costs. <code>Counter.most_common(k)</code> is O(n log k).</p>
+      </div>
+      <div class="tab" data-label="set">
+        <table>
+          <thead><tr><th>Operation</th><th>Average</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>x in s</code>, <code>s.add(x)</code>, <code>s.discard(x)</code></td><td>O(1)</td><td>Worst O(n)</td></tr>
+            <tr><td><code>s | t</code></td><td>O(len(s) + len(t))</td><td></td></tr>
+            <tr><td><code>s &amp; t</code></td><td>O(min(len(s), len(t)))</td><td>Iterates the smaller set</td></tr>
+            <tr><td><code>s - t</code></td><td>O(len(s))</td><td></td></tr>
+            <tr><td><code>s ^ t</code></td><td>O(len(s) + len(t))</td><td></td></tr>
+            <tr><td><code>s &lt;= t</code> (subset)</td><td>O(len(s))</td><td></td></tr>
+            <tr><td><code>set(iterable)</code></td><td>O(n)</td><td>Pays off after a few membership tests</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="deque">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>append</code>, <code>appendleft</code>, <code>pop</code>, <code>popleft</code></td><td>O(1)</td><td>Doubly linked list of fixed-size blocks (<a href="../modules/m22-stacks-queues.html">M22</a>)</td></tr>
+            <tr><td><code>dq[0]</code>, <code>dq[-1]</code></td><td>O(1)</td><td></td></tr>
+            <tr><td><code>dq[i]</code> in the middle</td><td>O(n)</td><td>Use a list for random access</td></tr>
+            <tr><td><code>dq.rotate(k)</code></td><td>O(k)</td><td></td></tr>
+            <tr><td><code>x in dq</code>, <code>dq.remove(x)</code></td><td>O(n)</td><td></td></tr>
+            <tr><td><code>deque(maxlen=k).append</code></td><td>O(1)</td><td>Drops from the other end: a ring buffer</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="heapq">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>heapify(xs)</code>, <code>heapify_max(xs)</code> (3.14)</td><td>O(n)</td><td>Bottom-up build (<a href="../modules/m25-heaps.html">M25</a>)</td></tr>
+            <tr><td><code>heappush</code>, <code>heappop</code>, <code>heappushpop</code>, <code>heapreplace</code> (and the <code>_max</code> versions)</td><td>O(log n)</td><td>Sift up / sift down</td></tr>
+            <tr><td><code>heap[0]</code></td><td>O(1)</td><td>Peek at the smallest (or largest for a max-heap)</td></tr>
+            <tr><td><code>nlargest(k, xs)</code>, <code>nsmallest(k, xs)</code></td><td>O(n log k)</td><td>For k close to n, just sort</td></tr>
+            <tr><td><code>merge(*sorted_iterables)</code></td><td>O(N log k)</td><td>k inputs, N items total, lazy</td></tr>
+            <tr><td>Remove an arbitrary item / <code>x in heap</code></td><td>O(n)</td><td>Use lazy deletion instead</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="str">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>s[i]</code>, <code>len(s)</code></td><td>O(1)</td><td>Fixed-width internal storage (PEP 393)</td></tr>
+            <tr><td><code>s[a:b]</code></td><td>O(k)</td><td>Copies</td></tr>
+            <tr><td><code>s + t</code></td><td>O(n + m)</td><td>Builds a new string</td></tr>
+            <tr><td><code>s += t</code> in a loop</td><td>O(n²) total (worst)</td><td>Collect parts and use <code>"".join(parts)</code>: O(total)</td></tr>
+            <tr><td><code>sub in s</code>, <code>s.find(sub)</code>, <code>s.count(sub)</code></td><td>O(n) typical</td><td>CPython uses fast search (Two-Way for long needles)</td></tr>
+            <tr><td><code>s.split()</code>, <code>s.replace()</code>, <code>s.lower()</code>, <code>s.strip()</code></td><td>O(n)</td><td></td></tr>
+            <tr><td><code>hash(s)</code></td><td>O(n) once</td><td>Cached on the object afterwards</td></tr>
+            <tr><td><code>s == t</code></td><td>O(n)</td><td>Short-circuits on length or first difference</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="bisect">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>bisect_left(xs, x)</code>, <code>bisect_right(xs, x)</code></td><td>O(log n)</td><td>xs must be sorted (<a href="../modules/m30-searching.html">M30</a>)</td></tr>
+            <tr><td><code>insort(xs, x)</code></td><td>O(n)</td><td>O(log n) search + O(n) list insert</td></tr>
+            <tr><td><code>bisect_left(xs, x, key=f)</code></td><td>O(log n)</td><td><code>key</code> since 3.10</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="runnable" data-title="Feel the difference: list vs set membership, list vs deque at the front">
+<textarea>
+import timeit
+from collections import deque
+
+n = 20_000
+as_list = list(range(n))
+as_set = set(as_list)
+probe = n - 1                       # worst case for the list
+
+t_list = timeit.timeit(lambda: probe in as_list, number=200)
+t_set = timeit.timeit(lambda: probe in as_set, number=200)
+print(f"membership  list O(n): {t_list * 1e3:7.2f} ms   set O(1): {t_set * 1e3:6.3f} ms")
+
+def drain_list():
+    xs = list(range(n))
+    while xs:
+        xs.pop(0)                   # O(n) each
+
+def drain_deque():
+    dq = deque(range(n))
+    while dq:
+        dq.popleft()                # O(1) each
+
+print(f"drain front list O(n^2): {timeit.timeit(drain_list, number=1) * 1e3:7.2f} ms")
+print(f"drain front deque O(n):  {timeit.timeit(drain_deque, number=1) * 1e3:7.2f} ms")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="structures">
+    <h2>Data structure operations</h2>
+    <table>
+      <thead><tr><th>Structure</th><th>Access</th><th>Search</th><th>Insert</th><th>Delete</th><th>Space</th><th>Python</th></tr></thead>
+      <tbody>
+        <tr><td>Dynamic array</td><td>O(1)</td><td>O(n)</td><td>O(1)* end, O(n) middle</td><td>O(1) end, O(n) middle</td><td>O(n)</td><td><code>list</code></td></tr>
+        <tr><td>Sorted array</td><td>O(1)</td><td>O(log n)</td><td>O(n)</td><td>O(n)</td><td>O(n)</td><td><code>list</code> + <code>bisect</code></td></tr>
+        <tr><td>Singly linked list</td><td>O(n)</td><td>O(n)</td><td>O(1) at head / known node</td><td>O(1) at head, O(n) otherwise</td><td>O(n)</td><td>hand-rolled (<a href="../modules/m21-linked-lists.html">M21</a>)</td></tr>
+        <tr><td>Doubly linked list</td><td>O(n)</td><td>O(n)</td><td>O(1) at a known node</td><td>O(1) at a known node</td><td>O(n)</td><td>hand-rolled; <code>deque</code> for ends</td></tr>
+        <tr><td>Stack</td><td>O(1) top</td><td>O(n)</td><td>O(1) push</td><td>O(1) pop</td><td>O(n)</td><td><code>list</code></td></tr>
+        <tr><td>Queue / deque</td><td>O(1) ends</td><td>O(n)</td><td>O(1)</td><td>O(1)</td><td>O(n)</td><td><code>collections.deque</code></td></tr>
+        <tr><td>Hash table</td><td>-</td><td>O(1) avg, O(n) worst</td><td>O(1) avg</td><td>O(1) avg</td><td>O(n)</td><td><code>dict</code>, <code>set</code></td></tr>
+        <tr><td>Binary heap</td><td>O(1) min</td><td>O(n)</td><td>O(log n)</td><td>O(log n) min</td><td>O(n)</td><td><code>heapq</code></td></tr>
+        <tr><td>BST (unbalanced)</td><td>-</td><td>O(log n) avg, O(n) worst</td><td>same</td><td>same</td><td>O(n)</td><td>hand-rolled (<a href="../modules/m24-trees.html">M24</a>)</td></tr>
+        <tr><td>Balanced BST (AVL, red-black)</td><td>-</td><td>O(log n)</td><td>O(log n)</td><td>O(log n)</td><td>O(n)</td><td>third-party <code>sortedcontainers</code></td></tr>
+        <tr><td>Trie</td><td>-</td><td>O(L)</td><td>O(L)</td><td>O(L)</td><td>O(total chars)</td><td>dict of dicts (<a href="../modules/m27-advanced-structures.html">M27</a>)</td></tr>
+        <tr><td>Union-find</td><td>-</td><td>O(α(n)) find</td><td>O(α(n)) union</td><td>-</td><td>O(n)</td><td>two lists</td></tr>
+        <tr><td>Fenwick / segment tree</td><td>O(log n) query</td><td>-</td><td>O(log n) update</td><td>-</td><td>O(n)</td><td>a list</td></tr>
+        <tr><td>Bloom filter</td><td>-</td><td>O(k), false positives</td><td>O(k)</td><td>not supported</td><td>O(m) bits</td><td><code>bytearray</code> / <code>int</code></td></tr>
+        <tr><td>LRU cache</td><td>O(1) get</td><td>-</td><td>O(1) put</td><td>O(1) evict</td><td>O(capacity)</td><td><code>OrderedDict</code>, <code>functools.lru_cache</code></td></tr>
+      </tbody>
+    </table>
+    <p>* amortized. L = key length; α = inverse Ackermann (at most 4 for any practical n); k = number of hash functions.</p>
+  </section>
+
+  <section class="lesson-section" id="sorting">
+    <h2>Sorting algorithms</h2>
+    <table>
+      <thead><tr><th>Algorithm</th><th>Best</th><th>Average</th><th>Worst</th><th>Extra space</th><th>Stable?</th><th>When to use</th></tr></thead>
+      <tbody>
+        <tr><td>Bubble sort</td><td>O(n)</td><td>O(n²)</td><td>O(n²)</td><td>O(1)</td><td>Yes</td><td>Teaching only</td></tr>
+        <tr><td>Selection sort</td><td>O(n²)</td><td>O(n²)</td><td>O(n²)</td><td>O(1)</td><td>No</td><td>Minimizes writes</td></tr>
+        <tr><td>Insertion sort</td><td>O(n)</td><td>O(n²)</td><td>O(n²)</td><td>O(1)</td><td>Yes</td><td>Tiny or nearly sorted inputs</td></tr>
+        <tr><td>Shell sort</td><td>O(n log n)</td><td>gap-dependent (~n<sup>1.3</sup>)</td><td>O(n<sup>1.5</sup>) or better</td><td>O(1)</td><td>No</td><td>Embedded, no recursion</td></tr>
+        <tr><td>Merge sort</td><td>O(n log n)</td><td>O(n log n)</td><td>O(n log n)</td><td>O(n)</td><td>Yes</td><td>Linked lists, external sorting</td></tr>
+        <tr><td>Quicksort</td><td>O(n log n)</td><td>O(n log n)</td><td>O(n²)</td><td>O(log n) stack</td><td>No</td><td>In-place general purpose (random pivot)</td></tr>
+        <tr><td>Heapsort</td><td>O(n log n)</td><td>O(n log n)</td><td>O(n log n)</td><td>O(1)</td><td>No</td><td>Guaranteed bound, constant space</td></tr>
+        <tr><td>Counting sort</td><td>O(n + k)</td><td>O(n + k)</td><td>O(n + k)</td><td>O(n + k)</td><td>Yes</td><td>Small integer range k</td></tr>
+        <tr><td>Radix sort (LSD)</td><td>O(d(n + b))</td><td>O(d(n + b))</td><td>O(d(n + b))</td><td>O(n + b)</td><td>Yes</td><td>Fixed-width keys (d digits, base b)</td></tr>
+        <tr><td>Bucket sort</td><td>O(n + k)</td><td>O(n + k)</td><td>O(n²)</td><td>O(n + k)</td><td>Yes*</td><td>Uniformly distributed floats</td></tr>
+        <tr><td><strong>Python <code>sorted</code> / <code>list.sort</code></strong> (Timsort with Powersort merging)</td><td>O(n)</td><td>O(n log n)</td><td>O(n log n)</td><td>O(n)</td><td>Yes</td><td>Always, in real Python code</td></tr>
+      </tbody>
+    </table>
+    <p>* if the per-bucket sort is stable. A sort is <dfn>stable</dfn> when equal keys keep their original order, which
+      lets you sort by several keys in passes. Comparison sorts cannot beat O(n log n) in the worst case. Watch them
+      race in <a href="../modules/m29-sorting.html">M29 Sorting</a>:</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["insertion", "merge", "quick", "heap"], "size": 24}'></div>
+  </section>
+
+  <section class="lesson-section" id="graphs">
+    <h2>Graph algorithms</h2>
+    <table>
+      <thead><tr><th>Algorithm</th><th>Solves</th><th>Time</th><th>Space</th><th>Requirements</th></tr></thead>
+      <tbody>
+        <tr><td>BFS</td><td>Shortest path in edges, levels, components</td><td>O(V + E)</td><td>O(V)</td><td>Unweighted</td></tr>
+        <tr><td>DFS</td><td>Reachability, cycles, components, ordering</td><td>O(V + E)</td><td>O(V)</td><td>Iterative to avoid recursion limits</td></tr>
+        <tr><td>Topological sort (Kahn / DFS)</td><td>Order tasks with dependencies</td><td>O(V + E)</td><td>O(V)</td><td>DAG; <code>graphlib.TopologicalSorter</code></td></tr>
+        <tr><td>Dijkstra (binary heap)</td><td>Single-source shortest paths</td><td>O((V + E) log V)</td><td>O(V)</td><td>Non-negative weights</td></tr>
+        <tr><td>Bellman-Ford</td><td>Shortest paths, detects negative cycles</td><td>O(VE)</td><td>O(V)</td><td>Any weights</td></tr>
+        <tr><td>Floyd-Warshall</td><td>All-pairs shortest paths</td><td>O(V³)</td><td>O(V²)</td><td>Small dense graphs</td></tr>
+        <tr><td>A*</td><td>Shortest path to one goal</td><td>O(E log V) worst; often far less</td><td>O(V)</td><td>Admissible heuristic</td></tr>
+        <tr><td>Prim (binary heap)</td><td>Minimum spanning tree</td><td>O(E log V)</td><td>O(V)</td><td>Connected, undirected</td></tr>
+        <tr><td>Kruskal</td><td>Minimum spanning tree</td><td>O(E log E)</td><td>O(V)</td><td>Union-find</td></tr>
+        <tr><td>Tarjan / Kosaraju</td><td>Strongly connected components</td><td>O(V + E)</td><td>O(V)</td><td>Directed</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Representation</th><th>Space</th><th>Edge check</th><th>Iterate neighbors</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td>Adjacency list (<code>dict[node, list]</code>)</td><td>O(V + E)</td><td>O(deg)</td><td>O(deg)</td><td>Sparse graphs (most real ones)</td></tr>
+        <tr><td>Adjacency set (<code>dict[node, set]</code>)</td><td>O(V + E)</td><td>O(1) avg</td><td>O(deg)</td><td>Sparse graphs with edge queries</td></tr>
+        <tr><td>Adjacency matrix</td><td>O(V²)</td><td>O(1)</td><td>O(V)</td><td>Dense graphs, NumPy math</td></tr>
+      </tbody>
+    </table>
+    <p>Depth: <a href="../modules/m26-graphs.html">M26 Graphs</a>, <a href="../modules/m31-graph-algorithms.html">M31 Graph Algorithms</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="dp">
+    <h2>Dynamic programming problems</h2>
+    <table>
+      <thead><tr><th>Problem</th><th>State</th><th>Time</th><th>Space (optimized)</th></tr></thead>
+      <tbody>
+        <tr><td>Fibonacci / climbing stairs</td><td><code>dp[i]</code></td><td>O(n)</td><td>O(1)</td></tr>
+        <tr><td>Coin change (min coins / ways)</td><td><code>dp[amount]</code></td><td>O(n · amount)</td><td>O(amount)</td></tr>
+        <tr><td>0/1 knapsack</td><td><code>dp[i][w]</code></td><td>O(n · W) pseudo-polynomial</td><td>O(W)</td></tr>
+        <tr><td>Longest common subsequence</td><td><code>dp[i][j]</code></td><td>O(m · n)</td><td>O(min(m, n))</td></tr>
+        <tr><td>Edit (Levenshtein) distance</td><td><code>dp[i][j]</code></td><td>O(m · n)</td><td>O(min(m, n))</td></tr>
+        <tr><td>Longest increasing subsequence</td><td><code>dp[i]</code> / tails + bisect</td><td>O(n²) / O(n log n)</td><td>O(n)</td></tr>
+        <tr><td>Grid paths</td><td><code>dp[r][c]</code></td><td>O(r · c)</td><td>O(c)</td></tr>
+        <tr><td>Subset sum / partition</td><td><code>dp[s]</code></td><td>O(n · S)</td><td>O(S)</td></tr>
+        <tr><td>Matrix-chain multiplication</td><td><code>dp[i][j]</code> intervals</td><td>O(n³)</td><td>O(n²)</td></tr>
+        <tr><td>Traveling salesman (Held-Karp)</td><td><code>dp[mask][i]</code></td><td>O(n² · 2<sup>n</sup>)</td><td>O(n · 2<sup>n</sup>)</td></tr>
+      </tbody>
+    </table>
+    <p>The cost of a DP is (number of states) × (work per state). Depth:
+      <a href="../modules/m32-dynamic-programming.html">M32 Dynamic Programming</a>.</p>
+    <div class="viz" data-viz="dp-table" data-config='{"problem": "lcs", "a": "PIXI", "b": "PYTHON"}'></div>
+  </section>
+
+  <section class="lesson-section" id="vectorization">
+    <h2>NumPy and pandas vectorization</h2>
+    <p>NumPy and pandas operations have the same Big-O as the equivalent Python loop, often O(n), but the loop runs
+      in compiled code over contiguous memory, so the constant is 10–100× smaller. The rule: <strong>push loops into the
+      library</strong>.</p>
+    <table>
+      <thead><tr><th>Operation</th><th>Cost</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>a + b</code>, <code>a * 2</code>, <code>np.sqrt(a)</code>, comparisons</td><td>O(n), vectorized</td><td>Broadcasting avoids copies of the smaller operand</td></tr>
+        <tr><td><code>a.sum()</code>, <code>a.mean()</code>, <code>a.max()</code></td><td>O(n)</td><td>Pairwise summation for floats</td></tr>
+        <tr><td><code>a[i]</code>, basic slice <code>a[2:10]</code></td><td>O(1)</td><td>A slice is a <em>view</em>: no copy</td></tr>
+        <tr><td>Boolean mask <code>a[a &gt; 0]</code>, fancy index <code>a[[1, 5]]</code></td><td>O(n) / O(k)</td><td>Always a copy</td></tr>
+        <tr><td><code>np.append</code>, <code>np.concatenate</code> in a loop</td><td>O(n²) total</td><td>Preallocate, or collect in a list then concatenate once</td></tr>
+        <tr><td><code>np.sort(a)</code></td><td>O(n log n)</td><td>Introsort by default; <code>kind="stable"</code> for stable</td></tr>
+        <tr><td><code>A @ B</code> (n × n)</td><td>O(n³)</td><td>BLAS-optimized and multithreaded</td></tr>
+        <tr><td><code>np.linalg.solve</code> (n × n)</td><td>O(n³)</td><td>Never compute <code>inv(A) @ b</code></td></tr>
+        <tr><td><code>np.searchsorted</code></td><td>O(log n) per query</td><td>Vectorized bisect</td></tr>
+        <tr><td>pandas <code>df.groupby(k).agg(...)</code></td><td>O(n) hashing (+ sort if <code>sort=True</code>)</td><td></td></tr>
+        <tr><td>pandas <code>merge</code> / <code>join</code></td><td>O(n + m) hash join typical</td><td>Can explode for many-to-many keys</td></tr>
+        <tr><td>pandas <code>df.apply(f, axis=1)</code>, <code>iterrows()</code></td><td>O(n) Python calls</td><td>Slow; prefer column expressions</td></tr>
+        <tr><td>pandas <code>df.loc[label]</code> on a unique index</td><td>O(1) avg</td><td>Hash-based index lookup</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Loop vs vectorized">
+<textarea>
+import timeit
+import numpy as np
+
+values = np.random.default_rng(0).random(200_000)
+as_list = values.tolist()
+
+def python_loop():
+    return sum(x * x for x in as_list)
+
+def vectorized():
+    return float(np.dot(values, values))
+
+t_loop = timeit.timeit(python_loop, number=5) / 5
+t_vec = timeit.timeit(vectorized, number=5) / 5
+print(f"python loop: {t_loop * 1e3:7.2f} ms")
+print(f"numpy dot:   {t_vec * 1e3:7.2f} ms  ({t_loop / t_vec:,.0f}x faster, same O(n))")
+</textarea>
+    </div>
+    <p>Depth: <a href="../modules/m48-numpy.html">M48 NumPy</a>, <a href="../modules/m51-pandas.html">M51 pandas</a>,
+      <a href="../modules/m52-polars-arrow.html">M52 Polars &amp; Arrow</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="choose">
+    <h2>Which structure should I use?</h2>
+    <pre class="mermaid">
+flowchart TD
+  Q{"What do you mostly do?"} --> A["Look up by key"]
+  Q --> B["Keep things in order"]
+  Q --> C["Take the smallest or largest next"]
+  Q --> D["Add and remove at the ends"]
+  Q --> E["Test membership or de-duplicate"]
+  Q --> F["Heavy numeric math"]
+  A --> A1{"Need the keys sorted?"}
+  A1 -- no --> A2["dict  O(1)"]
+  A1 -- yes --> A3["sorted list + bisect, or a balanced tree"]
+  B --> B1{"Mostly append and index?"}
+  B1 -- yes --> B2["list"]
+  B1 -- "insert in the middle often" --> B3["bisect.insort for small n, else a balanced tree"]
+  C --> C1["heapq  O(log n)"]
+  D --> D1{"Only one end?"}
+  D1 -- "yes, LIFO" --> D2["list as a stack"]
+  D1 -- "both ends or FIFO" --> D3["collections.deque"]
+  E --> E1{"Need counts?"}
+  E1 -- no --> E2["set  O(1)"]
+  E1 -- yes --> E3["Counter"]
+  F --> F1["NumPy array or pandas / Polars"]
+    </pre>
+    <aside class="callout think"><p>You need the 10 most recent log lines, constantly updated, from a stream of
+      millions. Which structure? (A <code>deque(maxlen=10)</code>: O(1) append, the oldest line falls off
+      automatically.)</p></aside>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-complexity-quiz">
+<script type="application/json">
+{"title": "Complexity quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the average cost of <code>x in s</code> for a <code>set</code>?", "options": ["O(1)", "O(log n)", "O(n)", "O(n log n)"], "answer": 0, "explanation": "<p>Sets are hash tables: hash the key, check one slot (or a few). Worst case is O(n) with pathological collisions.</p>"},
+  {"type": "single", "prompt": "Why is <code>xs.pop(0)</code> slow on a long list?", "options": ["It sorts the list", "Every remaining element shifts left: O(n)", "It copies the list twice", "It is not slow"], "answer": 1, "explanation": "<p>Lists are contiguous arrays. Use <code>collections.deque.popleft()</code>, which is O(1).</p>"},
+  {"type": "multi", "prompt": "Which sorting algorithms are stable?", "options": ["Merge sort", "Quicksort (classic in-place)", "Insertion sort", "Heapsort", "Python's <code>sorted</code>"], "answer": [0, 2, 4], "explanation": "<p>Merge, insertion, and Timsort/Powersort keep equal keys in order. In-place quicksort and heapsort can reorder them.</p>"},
+  {"type": "single", "prompt": "Building a string with <code>s += piece</code> in a loop over n pieces can cost:", "options": ["O(n) always", "O(n²) in the worst case; use <code>\"\".join(parts)</code>", "O(log n)", "O(1)"], "answer": 1, "explanation": "<p>Strings are immutable, so each <code>+=</code> may copy everything so far. <code>join</code> computes the total size once.</p>"},
+  {"type": "single", "prompt": "Dijkstra's algorithm with a binary heap runs in:", "options": ["O(V + E)", "O((V + E) log V)", "O(VE)", "O(V³)"], "answer": 1, "explanation": "<p>Each edge may push to the heap (O(log V)); each vertex is popped once. It requires non-negative weights.</p>"},
+  {"type": "text", "prompt": "Which <code>collections</code> type gives O(1) appends and pops at both ends?", "answer": ["deque", "collections.deque"], "explanation": "<p><code>deque</code> is a linked list of blocks, so both ends are O(1).</p>"},
+  {"type": "single", "prompt": "What does <code>heapq.heapify(xs)</code> cost?", "options": ["O(n)", "O(n log n)", "O(log n)", "O(n²)"], "answer": 0, "explanation": "<p>The bottom-up build does most work on the many small subtrees near the leaves; the sum is O(n).</p>"},
+  {"type": "single", "prompt": "0/1 knapsack with n items and capacity W runs in O(nW). Why is it called pseudo-polynomial?", "options": ["Because it uses recursion", "Because W is a number whose size in bits is log W, so O(nW) is exponential in the input length", "Because it is approximate", "Because it uses floating point"], "answer": 1, "explanation": "<p>Doubling the number of bits in W squares W, so running time is not polynomial in the input size.</p>"},
+  {"type": "single", "prompt": "<code>numpy</code> addition of two arrays and a Python loop adding the same lists are both O(n). Why is NumPy faster?", "options": ["It has better Big-O", "The loop runs in compiled code over contiguous memory, with a much smaller constant factor", "It caches results", "It uses fewer elements"], "answer": 1, "explanation": "<p>Vectorization changes the constant, not the complexity class.</p>"},
+  {"type": "single", "prompt": "You must repeatedly take the most urgent job from a changing set of jobs. Best structure?", "options": ["Sorted list re-sorted every time", "<code>heapq</code> priority queue", "<code>set</code>", "<code>deque</code>"], "answer": 1, "explanation": "<p>A heap gives O(log n) push and pop-min; re-sorting is O(n log n) each time.</p>"}
+]}
+</script>
+    </div>
+    <div class="flashcards" data-title="Costs to know by heart">
+<script type="application/json">
+[{"front": "<code>dict</code> get/set", "back": "O(1) average"},
+ {"front": "<code>list.append</code>", "back": "O(1) amortized"},
+ {"front": "<code>list.insert(0, x)</code>", "back": "O(n): use <code>deque.appendleft</code>"},
+ {"front": "<code>x in list</code>", "back": "O(n)"},
+ {"front": "<code>sorted(xs)</code>", "back": "O(n log n), stable, O(n) when already sorted"},
+ {"front": "<code>heappush</code> / <code>heappop</code>", "back": "O(log n)"},
+ {"front": "BFS / DFS", "back": "O(V + E)"},
+ {"front": "Binary search", "back": "O(log n) on sorted data (<code>bisect</code>)"}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://wiki.python.org/moin/TimeComplexity">Python wiki: TimeComplexity</a></li>
+      <li><a href="https://docs.python.org/3.14/library/timeit.html">timeit</a> for measuring, and <a href="../modules/m39-performance.html">M39 Performance &amp; Profiling</a></li>
+      <li><a href="../modules/m35-problem-solving.html">M35 Problem-Solving Patterns</a> for choosing an approach under pressure</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

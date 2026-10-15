@@ -1,0 +1,1260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M20 · Arrays &amp; Dynamic Arrays · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m20">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 20</p>
+    <h1>Arrays &amp; Dynamic Arrays</h1>
+    <p class="lede">The array is the most important data structure in computing: a row of equal-sized slots side by side in
+      memory. Python's <code>list</code> is built on one. In this module you will see exactly how, build your own dynamic
+      array, and meet Python's typed arrays, raw bytes, and zero-copy views.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m19-complexity.html">M19</a>,
+      <a href="m06-collections.html">M06</a>, <a href="m11-data-model.html">M11</a></span></div>
+    <ul class="objectives">
+      <li>Explain why contiguous memory makes indexing O(1), using the address formula</li>
+      <li>Contrast static and dynamic arrays, and explain over-allocation and amortized append</li>
+      <li>Describe how CPython's <code>list</code> stores an array of <code>PyObject*</code> pointers</li>
+      <li>Implement a <code>DynamicArray</code> class with indexing, append, insert, and remove</li>
+      <li>Use <code>array.array</code>, <code>bytes</code>, <code>bytearray</code>, and <code>memoryview</code> appropriately</li>
+      <li>Build 2-D lists correctly and explain the <code>[[0] * n] * m</code> aliasing bug</li>
+    </ul>
+  </header>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="motivation">
+    <h2>The problem: find item 700,000 instantly</h2>
+    <p>Suppose you store a million sensor readings and someone asks for reading number 700,000. If the readings were
+      scattered around memory with each one pointing to the next, you would have to walk 700,000 steps. With an array, you
+      compute where reading 700,000 lives with one multiplication and one addition, and jump straight there. That is the
+      whole idea: <strong>position determines address</strong>.</p>
+    <div class="runnable" data-title="Indexing time doesn't depend on position">
+<textarea>
+import timeit
+
+data = list(range(1_000_000))
+for i in [0, 1_000, 500_000, 999_999]:
+    t = min(timeit.repeat(f"data[{i}]", globals={"data": data}, number=100_000, repeat=3))
+    print(f"data[{i:>7}] -> {t / 100_000 * 1e9:5.1f} ns per access")
+</textarea>
+    </div>
+    <p>Every access takes about the same time. Position 0 and position 999,999 are equally easy to reach. Hold onto that
+      fact; the rest of the module explains why it is true and what it costs.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="contiguous">
+    <h2>Contiguous memory and the indexing formula</h2>
+    <p>Computer memory is a giant numbered sequence of bytes. Each byte has an <strong>address</strong>, an integer. An
+      <strong>array</strong> reserves one unbroken (<strong>contiguous</strong>) run of addresses and divides it into
+      <strong>slots</strong> of equal size. If the array starts at address <code>base</code> and each slot is
+      <code>size</code> bytes wide, then slot <code>i</code> starts at</p>
+    <p style="text-align:center"><strong>address(i) = base + i × size</strong></p>
+    <p>That is one multiply and one add, whatever <code>i</code> is: O(1). It is also why indexes start at 0: index 0 is
+      the base address itself, with offset zero.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 170" role="img" aria-label="An array of five 8-byte slots starting at address 1000">
+        <g font-size="13" text-anchor="middle">
+          <g fill="var(--viz-1)" opacity="0.18" stroke="var(--viz-1)" stroke-width="1.5">
+            <rect x="40" y="50" width="96" height="50"/><rect x="136" y="50" width="96" height="50"/>
+            <rect x="232" y="50" width="96" height="50"/><rect x="328" y="50" width="96" height="50"/>
+            <rect x="424" y="50" width="96" height="50"/>
+          </g>
+          <g fill="var(--fg)">
+            <text x="88" y="80">42</text><text x="184" y="80">7</text><text x="280" y="80">19</text>
+            <text x="376" y="80">3</text><text x="472" y="80">88</text>
+          </g>
+          <g fill="var(--fg-muted)" font-size="12">
+            <text x="88" y="40">index 0</text><text x="184" y="40">index 1</text><text x="280" y="40">index 2</text>
+            <text x="376" y="40">index 3</text><text x="472" y="40">index 4</text>
+            <text x="40" y="120">1000</text><text x="136" y="120">1008</text><text x="232" y="120">1016</text>
+            <text x="328" y="120">1024</text><text x="424" y="120">1032</text><text x="520" y="120">1040</text>
+          </g>
+          <text x="280" y="155" fill="var(--viz-2)">address(3) = 1000 + 3 × 8 = 1024</text>
+        </g>
+      </svg>
+      <figcaption>An array of five 8-byte slots. Every slot's address is computable from its index.</figcaption>
+    </figure>
+    <p>Two requirements make the formula work: the slots must be <strong>equal size</strong> and the memory must be
+      <strong>contiguous</strong>. Keep both in mind; they explain both the strengths (fast indexing, great cache behaviour)
+      and the weaknesses (inserting in the middle means shifting, growing means moving) of arrays.</p>
+    <div class="runnable" data-title="Compute addresses yourself">
+<textarea>
+base = 1000
+size = 8     # bytes per slot, e.g. a 64-bit integer or pointer
+
+def address(i):
+    return base + i * size
+
+for i in [0, 1, 3, 1_000_000]:
+    print(f"slot {i:>9} starts at byte {address(i):,}")
+</textarea>
+    </div>
+    <aside class="callout note" data-title="Cache locality"><p>CPUs don't fetch single bytes from main memory; they fetch
+      64-byte <strong>cache lines</strong>, and they prefetch the next lines when they notice you reading sequentially.
+      Scanning an array therefore runs at close to the hardware's peak speed. Structures that scatter data around memory,
+      like the linked lists in <a href="m21-linked-lists.html">M21</a>, lose this advantage.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> address = base + index × slot size. Contiguous, equal-sized
+      slots give O(1) indexing and cache-friendly scans.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="static-dynamic">
+    <h2>Static vs dynamic arrays</h2>
+    <p>A <strong>static array</strong> has a fixed capacity chosen when it is created. In C, <code>int a[10];</code> is ten
+      ints, forever. You cannot append an eleventh: the memory right after the array may already belong to something else.</p>
+    <p>A <strong>dynamic array</strong> (also called a growable array, resizable array, or vector) hides that limit. It keeps
+      a static array internally, plus two numbers:</p>
+    <ul>
+      <li><strong>size</strong> (or length): how many slots are in use;</li>
+      <li><strong>capacity</strong>: how many slots the internal array has.</li>
+    </ul>
+    <p>Appending writes into slot <code>size</code> and increments it, as long as <code>size &lt; capacity</code>. When the
+      array is full, it <strong>resizes</strong>: allocate a bigger static array, copy every element across, release the old
+      one. That copy is O(n), but as you proved in <a href="m19-complexity.html#amortized">M19</a>, growing by a constant
+      <em>factor</em> makes it rare enough that appends are amortized O(1).</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 190" role="img" aria-label="A full array of capacity 4 being copied into a new array of capacity 8">
+        <g font-size="13" text-anchor="middle">
+          <text x="20" y="35" text-anchor="start" fill="var(--fg-muted)">old (cap 4, full)</text>
+          <g stroke="var(--viz-1)" stroke-width="1.5" fill="var(--viz-1)" fill-opacity="0.2">
+            <rect x="160" y="15" width="50" height="34"/><rect x="210" y="15" width="50" height="34"/>
+            <rect x="260" y="15" width="50" height="34"/><rect x="310" y="15" width="50" height="34"/>
+          </g>
+          <g fill="var(--fg)"><text x="185" y="37">a</text><text x="235" y="37">b</text><text x="285" y="37">c</text><text x="335" y="37">d</text></g>
+          <text x="20" y="145" text-anchor="start" fill="var(--fg-muted)">new (cap 8)</text>
+          <g stroke="var(--viz-2)" stroke-width="1.5" fill="var(--viz-2)" fill-opacity="0.2">
+            <rect x="160" y="125" width="50" height="34"/><rect x="210" y="125" width="50" height="34"/>
+            <rect x="260" y="125" width="50" height="34"/><rect x="310" y="125" width="50" height="34"/>
+            <rect x="360" y="125" width="50" height="34"/><rect x="410" y="125" width="50" height="34"/>
+            <rect x="460" y="125" width="50" height="34"/><rect x="510" y="125" width="50" height="34"/>
+          </g>
+          <g fill="var(--fg)"><text x="185" y="147">a</text><text x="235" y="147">b</text><text x="285" y="147">c</text><text x="335" y="147">d</text>
+            <text x="385" y="147" fill="var(--viz-3)">e</text></g>
+          <g stroke="var(--fg-muted)" stroke-width="1.2" stroke-dasharray="4 3">
+            <line x1="185" y1="49" x2="185" y2="125"/><line x1="235" y1="49" x2="235" y2="125"/>
+            <line x1="285" y1="49" x2="285" y2="125"/><line x1="335" y1="49" x2="335" y2="125"/>
+          </g>
+          <text x="440" y="92" fill="var(--fg-muted)" font-size="12">copy 4 items (O(n)),</text>
+          <text x="440" y="108" fill="var(--fg-muted)" font-size="12">then write "e"</text>
+        </g>
+      </svg>
+      <figcaption>A resize: allocate double the space, copy everything, then append. Rare, so cheap on average.</figcaption>
+    </figure>
+    <div class="viz" data-viz="dynamic-array" data-config='{"growth": 2}'></div>
+    <aside class="callout tip"><p><strong>Remember:</strong> a dynamic array is a static array plus size and capacity.
+      When size reaches capacity, it allocates a bigger array and copies.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="cpython-list">
+    <h2>How CPython's list really works</h2>
+    <p>A Python list can hold anything: <code>[1, "two", 3.0, None]</code>. But an array needs equal-sized slots, and a
+      string is not the same size as an integer. CPython's solution: the list does not store the objects themselves. It
+      stores <strong>pointers</strong> to them. Every pointer is 8 bytes on a 64-bit machine, so the slots are equal-sized
+      even though the objects are not.</p>
+    <p>In C, CPython's list object (<code>PyListObject</code>) looks roughly like this:</p>
+    <pre><code class="language-python"># Simplified view of Include/cpython/listobject.h
+# typedef struct {
+#     PyObject_VAR_HEAD          /* reference count, type pointer, ob_size (the length) */
+#     PyObject **ob_item;        /* pointer to a C array of PyObject* pointers */
+#     Py_ssize_t allocated;      /* capacity: number of slots in ob_item */
+# } PyListObject;</code></pre>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 230" role="img" aria-label="A list header points to an array of pointers, each pointing to an object elsewhere in memory">
+        <g font-size="12" text-anchor="middle">
+          <rect x="20" y="20" width="130" height="90" rx="6" fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)"/>
+          <text x="85" y="40" fill="var(--fg)">PyListObject</text>
+          <text x="85" y="62" fill="var(--fg-muted)">ob_size = 3</text>
+          <text x="85" y="80" fill="var(--fg-muted)">allocated = 4</text>
+          <text x="85" y="98" fill="var(--fg-muted)">ob_item ──►</text>
+          <g stroke="var(--viz-2)" fill="var(--viz-2)" fill-opacity="0.15">
+            <rect x="200" y="70" width="70" height="40"/><rect x="270" y="70" width="70" height="40"/>
+            <rect x="340" y="70" width="70" height="40"/><rect x="410" y="70" width="70" height="40"/>
+          </g>
+          <text x="235" y="95" fill="var(--fg)">ptr</text><text x="305" y="95" fill="var(--fg)">ptr</text>
+          <text x="375" y="95" fill="var(--fg)">ptr</text><text x="445" y="95" fill="var(--fg-muted)">(spare)</text>
+          <line x1="150" y1="94" x2="200" y2="90" stroke="var(--fg-muted)" stroke-width="1.5"/>
+          <g fill="var(--viz-3)" fill-opacity="0.15" stroke="var(--viz-3)">
+            <rect x="170" y="170" width="90" height="40" rx="6"/><rect x="290" y="170" width="90" height="40" rx="6"/>
+            <rect x="410" y="170" width="110" height="40" rx="6"/>
+          </g>
+          <text x="215" y="195" fill="var(--fg)">int 1</text><text x="335" y="195" fill="var(--fg)">str "two"</text>
+          <text x="465" y="195" fill="var(--fg)">float 3.0</text>
+          <g stroke="var(--fg-muted)" stroke-width="1.5" fill="none">
+            <line x1="235" y1="110" x2="215" y2="170"/><line x1="305" y1="110" x2="335" y2="170"/>
+            <line x1="375" y1="110" x2="465" y2="170"/>
+          </g>
+          <text x="440" y="50" fill="var(--fg-muted)">8 bytes per slot</text>
+        </g>
+      </svg>
+      <figcaption><code>[1, "two", 3.0]</code>: the list's array holds pointers; the objects live elsewhere on the heap.</figcaption>
+    </figure>
+    <p>Consequences you can now explain:</p>
+    <ul>
+      <li><code>sys.getsizeof(a_list)</code> counts the header plus the pointer array, <em>not</em> the objects pointed to.</li>
+      <li>Two lists can share the same objects, which is why copying a list is "shallow" (<a href="m06-collections.html">M06</a>).</li>
+      <li>A list of a million floats costs 8 bytes per pointer <em>plus</em> 24 bytes per float object: about four times
+        more than a packed array of doubles. This is why <code>array.array</code> and NumPy exist.</li>
+    </ul>
+
+    <h3>Over-allocation</h3>
+    <p>When an append needs more room, CPython's <code>list_resize</code> computes the new capacity roughly as</p>
+    <pre><code class="language-python">new_allocated = (newsize + (newsize &gt;&gt; 3) + 6) &amp; ~3   # about 1.125 × newsize, rounded to a multiple of 4</code></pre>
+    <p>That is a growth factor of about 1.125, much gentler than doubling. Less memory is wasted, at the price of more
+      frequent resizes; amortized append is still O(1) because growth is still proportional. The capacities you will see
+      are 0, 4, 8, 16, 24, 32, 40, 52, 64, 76, …</p>
+    <div class="runnable" data-title="Reverse-engineer the capacity">
+<textarea>
+import sys
+
+empty = sys.getsizeof([])
+pointer = 8
+a = []
+last_cap = None
+for i in range(80):
+    cap = (sys.getsizeof(a) - empty) // pointer
+    if cap != last_cap:
+        print(f"len={len(a):3}  capacity={cap}")
+        last_cap = cap
+    a.append(i)
+</textarea>
+    </div>
+    <div class="viz" data-viz="dynamic-array" data-config='{"growth": 1.125}'></div>
+    <aside class="callout pro"><p>When you know the final size, build the list in one go: a comprehension,
+      <code>list(iterable)</code>, or <code>[None] * n</code>. These size the array once instead of resizing repeatedly.
+      Lists also shrink: when you pop below half the capacity, CPython reallocates smaller.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> a <code>list</code> is a dynamic array of 8-byte pointers that
+      grows by about 12.5%. The objects live elsewhere.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="costs">
+    <h2>What each operation costs, and why</h2>
+    <table>
+      <thead><tr><th>Operation</th><th>Cost</th><th>What happens in the array</th></tr></thead>
+      <tbody>
+        <tr><td><code>a[i]</code>, <code>a[i] = x</code></td><td>O(1)</td><td>address arithmetic</td></tr>
+        <tr><td><code>a.append(x)</code></td><td>O(1) amortized</td><td>write slot <code>size</code>; occasionally resize</td></tr>
+        <tr><td><code>a.pop()</code></td><td>O(1)</td><td>clear the last slot</td></tr>
+        <tr><td><code>a.insert(i, x)</code></td><td>O(n − i)</td><td>shift slots <code>i..n−1</code> one to the right</td></tr>
+        <tr><td><code>a.pop(i)</code>, <code>del a[i]</code></td><td>O(n − i)</td><td>shift slots <code>i+1..n−1</code> one to the left</td></tr>
+        <tr><td><code>a.remove(x)</code></td><td>O(n)</td><td>scan to find <code>x</code>, then shift</td></tr>
+        <tr><td><code>x in a</code></td><td>O(n)</td><td>linear scan</td></tr>
+        <tr><td><code>a[i:j]</code></td><td>O(j − i)</td><td>copy that many pointers into a new list</td></tr>
+      </tbody>
+    </table>
+    <p>Inserting at index <code>i</code> must make a gap, and in a contiguous block the only way to make a gap is to move
+      everything after it. Insert at the front, and every element moves.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 120" role="img" aria-label="Inserting X at index 1 shifts b, c, d one slot right">
+        <g font-size="13" text-anchor="middle">
+          <g stroke="var(--viz-1)" fill="var(--viz-1)" fill-opacity="0.15">
+            <rect x="40" y="20" width="60" height="34"/><rect x="100" y="20" width="60" height="34"/><rect x="160" y="20" width="60" height="34"/>
+            <rect x="220" y="20" width="60" height="34"/><rect x="280" y="20" width="60" height="34"/>
+          </g>
+          <g fill="var(--fg)"><text x="70" y="42">a</text><text x="130" y="42">b</text><text x="190" y="42">c</text><text x="250" y="42">d</text></g>
+          <g stroke="var(--viz-2)" stroke-width="1.5" fill="none">
+            <path d="M130,58 q30,22 60,0"/><path d="M190,58 q30,22 60,0"/><path d="M250,58 q30,22 60,0"/>
+          </g>
+          <text x="420" y="42" fill="var(--fg-muted)">insert(1, "X")</text>
+          <text x="420" y="62" fill="var(--fg-muted)">moves 3 items first</text>
+          <g stroke="var(--viz-2)" fill="var(--viz-2)" fill-opacity="0.15">
+            <rect x="40" y="80" width="60" height="34"/><rect x="100" y="80" width="60" height="34"/><rect x="160" y="80" width="60" height="34"/>
+            <rect x="220" y="80" width="60" height="34"/><rect x="280" y="80" width="60" height="34"/>
+          </g>
+          <g fill="var(--fg)"><text x="70" y="102">a</text><text x="130" y="102" fill="var(--viz-3)">X</text><text x="190" y="102">b</text><text x="250" y="102">c</text><text x="310" y="102">d</text></g>
+        </g>
+      </svg>
+      <figcaption>Shifting is the price of contiguity.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Front vs back">
+<textarea>
+import time
+
+for n in [20_000, 40_000, 80_000]:
+    a = []
+    t0 = time.perf_counter()
+    for i in range(n):
+        a.append(i)
+    t1 = time.perf_counter()
+    b = []
+    for i in range(n):
+        b.insert(0, i)
+    t2 = time.perf_counter()
+    print(f"n={n:6}: append {t1 - t0:.4f}s   insert(0) {t2 - t1:.4f}s")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+a = [10, 20, 30, 40]
+a.insert(2, 25)
+a.pop(0)
+print(a, len(a))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> arrays are fast at the end and at random access; slow at the
+      front and in the middle. If you need fast front operations, use <code>collections.deque</code> (<a href="m22-stacks-queues.html">M22</a>).</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="build">
+    <h2>Building a DynamicArray</h2>
+    <p>Let's build our own dynamic array. To keep things honest we will pretend Python only gives us a fixed-size block:
+      we create storage with <code>[None] * capacity</code> and then only <em>index</em> into it, never calling
+      <code>append</code>, <code>insert</code>, or slicing on it. That simulates a C static array.</p>
+    <pre><code class="language-python">class DynamicArray:
+    def __init__(self):
+        self._size = 0                       # slots in use
+        self._capacity = 1                   # slots allocated
+        self._data = [None] * self._capacity # our "static array"
+
+    def __len__(self):
+        return self._size
+
+    @property
+    def capacity(self):
+        return self._capacity
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):          # the O(n) copy
+            new_data[i] = self._data[i]
+        self._data = new_data
+        self._capacity = new_capacity</code></pre>
+    <p>The special methods you met in <a href="m11-data-model.html">M11</a> make it feel built-in: <code>__len__</code> for
+      <code>len()</code>, <code>__getitem__</code> for <code>a[i]</code>, <code>__iter__</code> for <code>for</code> loops.
+      The exercises in <a href="#practice">Practice</a> build the rest step by step: indexing with negative indexes, append
+      with resizing, insert with shifting, and remove.</p>
+    <div class="tracer" data-title="Trace a resize">
+<textarea>
+size, capacity = 0, 1
+data = [None] * capacity
+for value in ["a", "b", "c"]:
+    if size == capacity:
+        capacity *= 2
+        new_data = [None] * capacity
+        for i in range(size):
+            new_data[i] = data[i]
+        data = new_data
+    data[size] = value
+    size += 1
+</textarea>
+    </div>
+    <aside class="callout think"><p>Why do we set the vacated slot back to <code>None</code> after a pop or remove, even though
+      <code>size</code> already says it is unused? (Answer: the slot still holds a reference, which would keep the object
+      alive and stop the garbage collector from freeing it. CPython's list does the same.)</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="array-module">
+    <h2>Typed arrays: the <code>array</code> module</h2>
+    <p>When every element is the same primitive type, storing pointers to separate objects is wasteful. The standard
+      library's <code>array.array</code> stores raw machine values directly in a contiguous buffer, like a C array, while
+      still growing like a list. You pick a <strong>typecode</strong>:</p>
+    <table>
+      <thead><tr><th>Typecode</th><th>C type</th><th>Typical bytes</th><th>Python type</th></tr></thead>
+      <tbody>
+        <tr><td><code>'b'</code> / <code>'B'</code></td><td>signed / unsigned char</td><td>1</td><td>int</td></tr>
+        <tr><td><code>'h'</code> / <code>'H'</code></td><td>short</td><td>2</td><td>int</td></tr>
+        <tr><td><code>'i'</code> / <code>'I'</code></td><td>int</td><td>4</td><td>int</td></tr>
+        <tr><td><code>'q'</code> / <code>'Q'</code></td><td>long long</td><td>8</td><td>int</td></tr>
+        <tr><td><code>'f'</code> / <code>'d'</code></td><td>float / double</td><td>4 / 8</td><td>float</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="list vs array memory">
+<textarea>
+import sys
+from array import array
+
+n = 100_000
+floats_list = [float(i) for i in range(n)]
+floats_arr = array("d", floats_list)
+
+list_total = sys.getsizeof(floats_list) + sum(sys.getsizeof(x) for x in floats_list)
+print(f"list : {list_total:>10,} bytes (pointers + float objects)")
+print(f"array: {sys.getsizeof(floats_arr):>10,} bytes (raw doubles)")
+print("itemsize:", floats_arr.itemsize, "typecode:", floats_arr.typecode)
+
+small = array("b", [1, 2, 3])
+try:
+    small.append(200)          # a signed byte holds -128..127
+except OverflowError as e:
+    print("OverflowError:", e)
+</textarea>
+    </div>
+    <p>Typed arrays enforce the type and range of every value, support <code>append</code>, <code>extend</code>, slicing, and
+      <code>tobytes()</code>/<code>frombytes()</code> for fast binary I/O. Reading an element creates a fresh Python object
+      ("boxing"), so element-by-element Python loops are not faster than with a list; the win is memory and I/O. For fast
+      arithmetic over whole arrays you want NumPy.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>array.array</code> is a compact, typed dynamic array.
+      Use it for large homogeneous numeric data when NumPy is overkill.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="bytes">
+    <h2>Bytes and bytearray</h2>
+    <p><code>bytes</code> is an immutable array of integers 0–255, one byte each: exactly how files, network packets, and
+      images are stored. <code>bytearray</code> is its mutable twin, a dynamic array of bytes.</p>
+    <div class="runnable" data-title="Bytes are arrays of small ints">
+<textarea>
+data = b"Hi!"
+print(data[0], data[1:], list(data))     # indexing gives an int; slicing gives bytes
+
+buf = bytearray(b"hello")
+buf[0] = ord("J")                         # mutable: assign an int 0..255
+buf.extend(b" world")
+print(buf, len(buf))
+
+print("café".encode("utf-8"))        # text -> bytes needs an encoding
+print(bytes([72, 105]).decode("ascii"))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: indexing bytes" data-predict>
+<textarea>
+b = b"ABC"
+print(b[1], b[1:2])
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Indexing <code>bytes</code> returns an <code>int</code>, but slicing returns
+      <code>bytes</code>. So <code>b"ABC"[1] == 66</code> while <code>b"ABC"[1:2] == b"B"</code>. This surprises everyone once.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="memoryview">
+    <h2>memoryview and the buffer protocol</h2>
+    <p>Slicing a <code>bytes</code> or <code>bytearray</code> <em>copies</em> the data: O(k) time and memory. For big
+      binary data (a 500 MB video frame, a network buffer) that is wasteful. The <strong>buffer protocol</strong> is a C-level
+      agreement that lets objects such as <code>bytes</code>, <code>bytearray</code>, <code>array.array</code>, and NumPy
+      arrays expose their raw memory directly. A <code>memoryview</code> is a Python window onto such memory:
+      slicing a memoryview creates another view, <strong>without copying</strong>.</p>
+    <div class="runnable" data-title="Zero-copy views">
+<textarea>
+from array import array
+
+buf = bytearray(b"abcdefgh")
+view = memoryview(buf)
+middle = view[2:6]                # no copy: a window onto buf
+print(bytes(middle))
+middle[0] = ord("Z")              # writing through the view changes buf
+print(buf)
+
+nums = array("i", [1, 2, 3, 4])
+mv = memoryview(nums)
+print(mv.format, mv.itemsize, mv.nbytes, mv.tolist())
+raw = mv.cast("B")                # reinterpret the same memory as unsigned bytes
+print(len(raw), "bytes:", list(raw[:8]))
+mv.release()                      # release the view when finished
+</textarea>
+    </div>
+    <p>Professional uses include parsing binary file formats without copying, reading into a pre-allocated buffer with
+      <code>file.readinto(view)</code> or <code>socket.recv_into(view)</code>, and handing data between libraries (Pillow,
+      NumPy, PyArrow) without conversion. While a memoryview exists, the underlying <code>bytearray</code> cannot be
+      resized, because resizing could move the memory out from under the view.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> slicing bytes copies; slicing a memoryview doesn't. The buffer
+      protocol is how Python objects share raw memory.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="two-d">
+    <h2>2-D lists and the <code>[[0] * n] * m</code> bug</h2>
+    <p>A grid is naturally a list of rows, each row a list. The tempting way to build one is a classic bug:</p>
+    <div class="runnable" data-title="Predict: what happens to the grid?" data-predict>
+<textarea>
+grid = [[0] * 3] * 2
+grid[0][0] = 9
+print(grid)
+</textarea>
+    </div>
+    <p>Both rows change. <code>[0] * 3</code> creates <em>one</em> row list; multiplying the outer list by 2 copies the
+      <em>pointer</em> to that row, not the row. So <code>grid[0]</code> and <code>grid[1]</code> are the same object.
+      Remember: lists store pointers, and <code>*</code> repeats pointers.</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "nested"}'></div>
+    <div class="tracer" data-title="See the shared row (watch the obj tags)">
+<textarea>
+bad = [[0] * 3] * 2
+good = [[0] * 3 for _ in range(2)]
+bad[0][0] = 9
+good[0][0] = 9
+same_bad = bad[0] is bad[1]
+same_good = good[0] is good[1]
+</textarea>
+    </div>
+    <p>The fix is a comprehension, which evaluates <code>[0] * 3</code> afresh for every row. <code>[0] * 3</code> itself is
+      fine because integers are immutable: sharing the same <code>0</code> object is harmless, since you can only replace a
+      slot, not mutate the 0.</p>
+    <pre><code class="language-python">rows, cols = 3, 4
+grid = [[0] * cols for _ in range(rows)]   # correct
+grid[r][c]                                 # row r, column c
+column_2 = [row[2] for row in grid]       # columns need a loop
+transposed = [list(col) for col in zip(*grid)]</code></pre>
+    <p>A list of lists is not a contiguous 2-D array: each row is a separate list somewhere on the heap. For a true
+      contiguous grid, you would store a flat list of <code>rows * cols</code> items and compute
+      <code>index = r * cols + c</code>, which is exactly what NumPy does internally ("row-major order").</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> never build nested lists with <code>*</code> on the outer level.
+      Use <code>[[0] * cols for _ in range(rows)]</code>.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="numpy-preview">
+    <h2>Preview: NumPy arrays</h2>
+    <p>NumPy's <code>ndarray</code> combines everything in this module: a contiguous typed buffer (like
+      <code>array.array</code>), a shape and strides for multi-dimensional indexing (the <code>r * cols + c</code> formula,
+      generalised), the buffer protocol, and vectorised operations that loop in C instead of Python.</p>
+    <div class="runnable" data-title="A taste of NumPy">
+<textarea>
+import numpy as np
+
+grid = np.zeros((3, 4), dtype=np.int64)   # contiguous 3x4 block of 8-byte ints
+grid[0, 0] = 9
+print(grid)
+print("shape", grid.shape, "strides", grid.strides, "bytes", grid.nbytes)
+
+x = np.arange(1_000_000, dtype=np.float64)
+print("sum of squares:", (x * x).sum())     # no Python loop
+</textarea>
+    </div>
+    <p>The strides <code>(32, 8)</code> say "move 32 bytes for the next row, 8 bytes for the next column": the address formula
+      in two dimensions. You will study NumPy properly in <a href="m48-numpy.html">M48</a>.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls and when to use what</h2>
+    <ul>
+      <li><strong>Front operations on lists.</strong> <code>insert(0, x)</code> and <code>pop(0)</code> in a loop are O(n²)
+        overall. Use <code>collections.deque</code>.</li>
+      <li><strong>Membership tests in loops.</strong> <code>x in a_list</code> is O(n). Use a <code>set</code>.</li>
+      <li><strong>Building strings or lists by repeated concatenation.</strong> <code>a = a + [x]</code> copies every time
+        (O(n²) overall); use <code>append</code>, <code>extend</code>, or <code>"".join</code>.</li>
+      <li><strong>Modifying a list while iterating over it.</strong> Removing items shifts the rest, so the loop skips
+        elements. Iterate over a copy or build a new list.</li>
+      <li><strong>Aliased rows.</strong> <code>[[0] * n] * m</code>.</li>
+    </ul>
+    <table>
+      <thead><tr><th>Need</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td>General-purpose sequence of anything</td><td><code>list</code></td></tr>
+        <tr><td>Fixed record, hashable</td><td><code>tuple</code></td></tr>
+        <tr><td>Millions of numbers, compact, simple I/O</td><td><code>array.array</code></td></tr>
+        <tr><td>Fast math on numeric arrays and grids</td><td>NumPy <code>ndarray</code></td></tr>
+        <tr><td>Binary data, immutable / mutable</td><td><code>bytes</code> / <code>bytearray</code></td></tr>
+        <tr><td>Slicing big buffers without copying</td><td><code>memoryview</code></td></tr>
+        <tr><td>Fast appends and pops at both ends</td><td><code>collections.deque</code></td></tr>
+      </tbody>
+    </table>
+    <h3>Interview classics on arrays</h3>
+    <p>Many interview problems are array problems in disguise: rotate an array in place, move zeros to the end, find the
+      maximum subarray sum (Kadane's algorithm), merge two sorted arrays, and two-pointer and sliding-window problems.
+      You will practise these techniques in <a href="m30-searching.html">M30</a> and <a href="m35-problem-solving.html">M35</a>.</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "two-sum-sorted", "array": [1, 3, 4, 6, 8, 11, 15], "target": 14}'></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice: build DynamicArray</h2>
+    <p>Each exercise adds to the same class. The starter code contains the parts you have already built. Remember the rule:
+      treat <code>self._data</code> as a fixed-size block. Only read or assign <code>self._data[i]</code>; never call
+      list methods on it.</p>
+
+    <div class="exercise" data-id="m20-e1" data-title="__getitem__ and __setitem__ with bounds checks">
+      <div class="exercise-prompt">
+        <p>Implement <code>__getitem__(self, index)</code> and <code>__setitem__(self, index, value)</code>. Support negative
+          indexes like a list (<code>-1</code> is the last item). Raise <code>IndexError</code> for anything out of range,
+          including indexes beyond <code>size</code> even if they are below <code>capacity</code>.</p>
+      </div>
+<textarea class="starter">
+class DynamicArray:
+    def __init__(self, items=()):
+        self._capacity = max(1, len(items))
+        self._data = [None] * self._capacity
+        self._size = 0
+        for x in items:                    # pre-load without append (not built yet)
+            self._data[self._size] = x
+            self._size += 1
+
+    def __len__(self):
+        return self._size
+
+    def _normalize(self, index):
+        # TODO: convert negative index, raise IndexError if out of range, return index
+        ...
+
+    def __getitem__(self, index):
+        ...
+
+    def __setitem__(self, index, value):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_positive_indexes():
+    a = DynamicArray(["a", "b", "c"])
+    assert a[0] == "a" and a[2] == "c", "a[0] and a[2] should return the stored items"
+
+def test_negative_indexes():
+    a = DynamicArray(["a", "b", "c"])
+    assert a[-1] == "c", "a[-1] should be the last item"
+    assert a[-3] == "a", "a[-3] should be the first item"
+
+def test_out_of_range():
+    a = DynamicArray(["a", "b", "c"])
+    for bad in [3, 10, -4]:
+        try:
+            a[bad]
+        except IndexError:
+            pass
+        else:
+            raise AssertionError(f"a[{bad}] should raise IndexError")
+
+def test_beyond_size_below_capacity():
+    a = DynamicArray(["a"])
+    a._capacity = 4
+    a._data = ["a", None, None, None]
+    try:
+        a[1]
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("indexes >= size must raise IndexError even if capacity is larger")
+
+def test_setitem():
+    a = DynamicArray([1, 2, 3])
+    a[1] = 20
+    a[-1] = 30
+    assert [a[0], a[1], a[2]] == [1, 20, 30], "assignment should replace items, negative indexes included"
+    try:
+        a[3] = 4
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("assigning past the end should raise IndexError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>If <code>index &lt; 0</code>, add <code>self._size</code>. Then check
+        <code>0 &lt;= index &lt; self._size</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class DynamicArray:
+    def __init__(self, items=()):
+        self._capacity = max(1, len(items))
+        self._data = [None] * self._capacity
+        self._size = 0
+        for x in items:
+            self._data[self._size] = x
+            self._size += 1
+
+    def __len__(self):
+        return self._size
+
+    def _normalize(self, index):
+        if index &lt; 0:
+            index += self._size
+        if not 0 &lt;= index &lt; self._size:
+            raise IndexError("DynamicArray index out of range")
+        return index
+
+    def __getitem__(self, index):
+        return self._data[self._normalize(index)]
+
+    def __setitem__(self, index, value):
+        self._data[self._normalize(index)] = value</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m20-e2" data-title="append with doubling">
+      <div class="exercise-prompt">
+        <p>Implement <code>_resize(new_capacity)</code> (allocate <code>[None] * new_capacity</code> and copy items one by
+          one) and <code>append(value)</code>, which doubles the capacity when the array is full. Also count copies in
+          <code>self.copies</code> so you can see the amortized cost.</p>
+      </div>
+<textarea class="starter">
+class DynamicArray:
+    def __init__(self):
+        self._capacity = 1
+        self._data = [None] * self._capacity
+        self._size = 0
+        self.copies = 0
+
+    def __len__(self):
+        return self._size
+
+    @property
+    def capacity(self):
+        return self._capacity
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += self._size
+        if not 0 <= index < self._size:
+            raise IndexError("DynamicArray index out of range")
+        return self._data[index]
+
+    def _resize(self, new_capacity):
+        # TODO: new block, copy self._size items (count each in self.copies), swap in
+        ...
+
+    def append(self, value):
+        # TODO: grow (double) if full, then write at self._size
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_append_and_read():
+    a = DynamicArray()
+    for ch in "hello":
+        a.append(ch)
+    assert len(a) == 5, "len should be 5 after 5 appends"
+    assert "".join(a[i] for i in range(5)) == "hello", "items should be stored in order"
+
+def test_capacity_doubles():
+    a = DynamicArray()
+    caps = []
+    for i in range(9):
+        a.append(i)
+        caps.append(a.capacity)
+    assert caps == [1, 2, 4, 4, 8, 8, 8, 8, 16], f"capacity should double when full, got {caps}"
+
+def test_storage_is_fixed_block():
+    a = DynamicArray()
+    for i in range(5):
+        a.append(i)
+    assert len(a._data) == a.capacity, "the internal block must be exactly capacity slots long"
+
+def test_amortized_copies():
+    a = DynamicArray()
+    for i in range(1000):
+        a.append(i)
+    assert a.copies < 2 * 1000, f"doubling should copy fewer than 2n items, copied {a.copies}"
+    assert a.copies == 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512, "copies should be 1+2+...+512"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>append</code>: <code>if self._size == self._capacity:
+        self._resize(2 * self._capacity)</code>, then <code>self._data[self._size] = value</code> and increment.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class DynamicArray:
+    def __init__(self):
+        self._capacity = 1
+        self._data = [None] * self._capacity
+        self._size = 0
+        self.copies = 0
+
+    def __len__(self):
+        return self._size
+
+    @property
+    def capacity(self):
+        return self._capacity
+
+    def __getitem__(self, index):
+        if index &lt; 0:
+            index += self._size
+        if not 0 &lt;= index &lt; self._size:
+            raise IndexError("DynamicArray index out of range")
+        return self._data[index]
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+            self.copies += 1
+        self._data = new_data
+        self._capacity = new_capacity
+
+    def append(self, value):
+        if self._size == self._capacity:
+            self._resize(2 * self._capacity)
+        self._data[self._size] = value
+        self._size += 1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m20-e3" data-title="insert with shifting">
+      <div class="exercise-prompt">
+        <p>Implement <code>insert(index, value)</code>. Like <code>list.insert</code>, a negative index counts from the end,
+          and an index past either end is clamped (so <code>insert(100, x)</code> appends and <code>insert(-100, x)</code>
+          prepends). Grow if full, then shift items <strong>right, starting from the end</strong>, and write the value.</p>
+      </div>
+<textarea class="starter">
+class DynamicArray:
+    def __init__(self):
+        self._capacity = 1
+        self._data = [None] * self._capacity
+        self._size = 0
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        for i in range(self._size):
+            yield self._data[i]
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+        self._data, self._capacity = new_data, new_capacity
+
+    def append(self, value):
+        if self._size == self._capacity:
+            self._resize(2 * self._capacity)
+        self._data[self._size] = value
+        self._size += 1
+
+    def insert(self, index, value):
+        # TODO: normalise/clamp index to 0..size, grow if full, shift right from the end, write
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def make(items):
+    a = DynamicArray()
+    for x in items:
+        a.append(x)
+    return a
+
+def test_insert_middle():
+    a = make([1, 2, 4])
+    a.insert(2, 3)
+    assert list(a) == [1, 2, 3, 4], f"expected [1, 2, 3, 4], got {list(a)}"
+
+def test_insert_front_and_end():
+    a = make([2, 3])
+    a.insert(0, 1)
+    a.insert(len(a), 4)
+    assert list(a) == [1, 2, 3, 4], f"front and end inserts failed: {list(a)}"
+
+def test_matches_list_semantics():
+    import random
+    rng = random.Random(7)
+    a, ref = DynamicArray(), []
+    for step in range(300):
+        i = rng.randint(-15, 15)
+        a.insert(i, step)
+        ref.insert(i, step)
+    assert list(a) == ref, "insert should behave exactly like list.insert, including negative and clamped indexes"
+
+def test_grows():
+    a = DynamicArray()
+    for i in range(10):
+        a.insert(0, i)
+    assert len(a) == 10 and list(a) == list(range(9, -1, -1)), "inserting at 0 repeatedly should reverse order"
+    assert len(a._data) >= 10, "storage must grow"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Normalise: <code>if index &lt; 0: index = max(0, index + size)</code>;
+        <code>index = min(index, size)</code>. Shift with <code>for i in range(self._size, index, -1):
+        self._data[i] = self._data[i - 1]</code>. Why must you go from the end backwards?</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class DynamicArray:
+    def __init__(self):
+        self._capacity = 1
+        self._data = [None] * self._capacity
+        self._size = 0
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        for i in range(self._size):
+            yield self._data[i]
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+        self._data, self._capacity = new_data, new_capacity
+
+    def append(self, value):
+        if self._size == self._capacity:
+            self._resize(2 * self._capacity)
+        self._data[self._size] = value
+        self._size += 1
+
+    def insert(self, index, value):
+        if index &lt; 0:
+            index = max(0, index + self._size)
+        index = min(index, self._size)
+        if self._size == self._capacity:
+            self._resize(2 * self._capacity)
+        for i in range(self._size, index, -1):
+            self._data[i] = self._data[i - 1]
+        self._data[index] = value
+        self._size += 1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m20-e4" data-title="remove, pop, and shrinking">
+      <div class="exercise-prompt">
+        <p>Implement <code>pop(index=-1)</code> (remove and return the item; <code>IndexError</code> if empty or out of range)
+          and <code>remove(value)</code> (delete the first item equal to <code>value</code>; <code>ValueError</code> if absent).
+          Both shift items left and set the vacated slot to <code>None</code>. After removal, if the size drops to a quarter
+          of the capacity or less (and capacity &gt; 1), halve the capacity.</p>
+      </div>
+<textarea class="starter">
+class DynamicArray:
+    def __init__(self, items=()):
+        self._capacity = max(1, len(items))
+        self._data = [None] * self._capacity
+        self._size = 0
+        for x in items:
+            self._data[self._size] = x
+            self._size += 1
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        for i in range(self._size):
+            yield self._data[i]
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+        self._data, self._capacity = new_data, new_capacity
+
+    def pop(self, index=-1):
+        ...
+
+    def remove(self, value):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_pop_last_and_middle():
+    a = DynamicArray([1, 2, 3, 4])
+    assert a.pop() == 4, "pop() returns the last item"
+    assert a.pop(0) == 1, "pop(0) returns the first item"
+    assert list(a) == [2, 3], f"remaining items should be [2, 3], got {list(a)}"
+
+def test_pop_errors():
+    a = DynamicArray()
+    try:
+        a.pop()
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("pop on empty should raise IndexError")
+    b = DynamicArray([1])
+    try:
+        b.pop(5)
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("pop(5) on a 1-item array should raise IndexError")
+
+def test_remove_first_match():
+    a = DynamicArray(["x", "y", "x", "z"])
+    a.remove("x")
+    assert list(a) == ["y", "x", "z"], "remove deletes only the first match"
+    try:
+        a.remove("nope")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("removing a missing value should raise ValueError")
+
+def test_vacated_slot_cleared():
+    a = DynamicArray([1, 2, 3, 4, 5, 6, 7, 8])
+    a.pop(0)
+    assert a._data[len(a)] is None, "the slot just past the end must be reset to None to release the reference"
+
+def test_shrinks():
+    a = DynamicArray(list(range(16)))
+    for _ in range(13):
+        a.pop()
+    assert len(a) == 3, "three items should remain"
+    assert a._capacity <= 8, f"capacity should shrink when a quarter full, got {a._capacity}"
+    assert len(a._data) == a._capacity, "storage block length must match capacity"
+    assert list(a) == [0, 1, 2], "shrinking must keep the items"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write a helper <code>_delete_at(i)</code> that saves the item, shifts
+        <code>self._data[j] = self._data[j + 1]</code> for <code>j</code> in <code>range(i, size - 1)</code>, clears the old
+        last slot, decrements size, maybe shrinks, and returns the item. Then <code>pop</code> and <code>remove</code> both call it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class DynamicArray:
+    def __init__(self, items=()):
+        self._capacity = max(1, len(items))
+        self._data = [None] * self._capacity
+        self._size = 0
+        for x in items:
+            self._data[self._size] = x
+            self._size += 1
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        for i in range(self._size):
+            yield self._data[i]
+
+    def _resize(self, new_capacity):
+        new_data = [None] * new_capacity
+        for i in range(self._size):
+            new_data[i] = self._data[i]
+        self._data, self._capacity = new_data, new_capacity
+
+    def _delete_at(self, i):
+        item = self._data[i]
+        for j in range(i, self._size - 1):
+            self._data[j] = self._data[j + 1]
+        self._data[self._size - 1] = None
+        self._size -= 1
+        if self._capacity &gt; 1 and self._size &lt;= self._capacity // 4:
+            self._resize(max(1, self._capacity // 2))
+        return item
+
+    def pop(self, index=-1):
+        if index &lt; 0:
+            index += self._size
+        if not 0 &lt;= index &lt; self._size:
+            raise IndexError("pop index out of range")
+        return self._delete_at(index)
+
+    def remove(self, value):
+        for i in range(self._size):
+            if self._data[i] == value:
+                self._delete_at(i)
+                return
+        raise ValueError(f"{value!r} not in DynamicArray")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m20-e5" data-title="A flat, row-major grid">
+      <div class="exercise-prompt">
+        <p>Write a class <code>Grid(rows, cols, fill=0)</code> that stores all cells in <strong>one flat list</strong> of
+          length <code>rows * cols</code> (attribute <code>cells</code>) and maps <code>(r, c)</code> to
+          <code>r * cols + c</code>. Support <code>g[r, c]</code> and <code>g[r, c] = v</code> (the key arrives as a tuple),
+          raising <code>IndexError</code> for out-of-range coordinates, plus <code>row(r)</code> and <code>column(c)</code>
+          that return new lists, and <code>transpose()</code> that returns a new <code>Grid</code>.</p>
+      </div>
+<textarea class="starter">
+class Grid:
+    def __init__(self, rows, cols, fill=0):
+        ...
+
+    def _index(self, key):
+        ...
+
+    def __getitem__(self, key):
+        ...
+
+    def __setitem__(self, key, value):
+        ...
+
+    def row(self, r):
+        ...
+
+    def column(self, c):
+        ...
+
+    def transpose(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_flat_storage():
+    g = Grid(2, 3)
+    assert g.cells == [0] * 6, "cells should be one flat list of rows*cols fill values"
+
+def test_independent_cells():
+    g = Grid(2, 3)
+    g[0, 0] = 9
+    assert g[1, 0] == 0, "setting (0, 0) must not change (1, 0); no aliasing!"
+    assert g.cells[0] == 9, "(0, 0) lives at flat index 0"
+
+def test_row_major_mapping():
+    g = Grid(3, 4)
+    g[2, 1] = "x"
+    assert g.cells[2 * 4 + 1] == "x", "(r, c) maps to r * cols + c"
+
+def test_bounds():
+    g = Grid(2, 2)
+    for key in [(2, 0), (0, 2), (-1, 0)]:
+        try:
+            g[key]
+        except IndexError:
+            pass
+        else:
+            raise AssertionError(f"g[{key}] should raise IndexError")
+
+def test_rows_columns_transpose():
+    g = Grid(2, 3)
+    n = 0
+    for r in range(2):
+        for c in range(3):
+            g[r, c] = n
+            n += 1
+    assert g.row(1) == [3, 4, 5], "row(1) should be [3, 4, 5]"
+    assert g.column(2) == [2, 5], "column(2) should be [2, 5]"
+    t = g.transpose()
+    assert (t.rows, t.cols) == (3, 2), "transpose swaps the dimensions"
+    assert t.row(0) == [0, 3] and t[2, 1] == 5, "t[c, r] should equal g[r, c]"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>_index</code> unpacks <code>r, c = key</code>, checks
+        <code>0 &lt;= r &lt; rows</code> and <code>0 &lt;= c &lt; cols</code>, returns <code>r * self.cols + c</code>.
+        <code>row(r)</code> is the slice <code>cells[r*cols:(r+1)*cols]</code>; <code>column(c)</code> is the slice
+        <code>cells[c::cols]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Grid:
+    def __init__(self, rows, cols, fill=0):
+        self.rows = rows
+        self.cols = cols
+        self.cells = [fill] * (rows * cols)
+
+    def _index(self, key):
+        r, c = key
+        if not (0 &lt;= r &lt; self.rows and 0 &lt;= c &lt; self.cols):
+            raise IndexError(f"cell {key} out of range")
+        return r * self.cols + c
+
+    def __getitem__(self, key):
+        return self.cells[self._index(key)]
+
+    def __setitem__(self, key, value):
+        self.cells[self._index(key)] = value
+
+    def row(self, r):
+        return self.cells[r * self.cols:(r + 1) * self.cols]
+
+    def column(self, c):
+        return self.cells[c::self.cols]
+
+    def transpose(self):
+        t = Grid(self.cols, self.rows)
+        for r in range(self.rows):
+            for c in range(self.cols):
+                t[c, r] = self[r, c]
+        return t</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a ring-buffer log</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">RingLog: keep the last N log lines</span></div>
+      <div class="widget-body">
+        <p>Servers often keep the most recent N log messages in memory so that a crash report can include "what happened just
+          before". Storing everything would leak memory; using a list with <code>pop(0)</code> would be O(n) per message. The
+          standard answer is a <strong>ring buffer</strong> (circular buffer): a fixed-size array plus a <code>head</code>
+          index that wraps around with modulo arithmetic. When full, a new message overwrites the oldest one in O(1).</p>
+        <figure class="figure">
+          <svg class="diagram" viewBox="0 0 440 120" role="img" aria-label="A ring buffer of capacity 5 with the write position wrapping around">
+            <g font-size="13" text-anchor="middle">
+              <g stroke="var(--viz-1)" fill="var(--viz-1)" fill-opacity="0.15">
+                <rect x="40" y="30" width="70" height="40"/><rect x="110" y="30" width="70" height="40"/>
+                <rect x="180" y="30" width="70" height="40"/><rect x="250" y="30" width="70" height="40"/>
+                <rect x="320" y="30" width="70" height="40"/>
+              </g>
+              <g fill="var(--fg)"><text x="75" y="55">m6</text><text x="145" y="55">m7</text><text x="215" y="55">m3</text>
+                <text x="285" y="55">m4</text><text x="355" y="55">m5</text></g>
+              <text x="215" y="20" fill="var(--viz-2)">oldest (head)</text>
+              <text x="145" y="90" fill="var(--viz-3)">last write</text>
+              <path d="M390,50 C430,50 430,105 220,105 C40,105 20,90 40,60" fill="none" stroke="var(--fg-muted)" stroke-dasharray="4 3"/>
+              <text x="220" y="118" fill="var(--fg-muted)" font-size="11">index = (head + i) % capacity</text>
+            </g>
+          </svg>
+          <figcaption>After writing m1–m7 into capacity 5, m1 and m2 were overwritten. Reading starts at head.</figcaption>
+        </figure>
+        <h4>Set up</h4>
+        <pre data-label="Terminal"><code class="language-bash">pixi init ringlog
+cd ringlog
+pixi add python=3.14 pytest
+pixi run python -m pytest -q</code></pre>
+        <h4>Spec: <code>ringlog.py</code></h4>
+        <ul>
+          <li><code>RingLog(capacity)</code> allocates <code>[None] * capacity</code> once; it never grows. Reject capacity &lt; 1 with <code>ValueError</code>.</li>
+          <li><code>append(message)</code> is O(1); when full it overwrites the oldest message and increments a <code>dropped</code> counter.</li>
+          <li><code>__len__</code>, <code>__iter__</code> (oldest to newest), and <code>__getitem__</code> where <code>0</code> is the oldest and <code>-1</code> the newest.</li>
+          <li><code>latest(n)</code> returns the newest <code>n</code> messages, oldest first.</li>
+          <li><code>clear()</code> and a <code>__repr__</code> like <code>RingLog(3/5, dropped=0)</code>.</li>
+          <li>Each stored entry is a <code>(timestamp, level, text)</code> tuple; add <code>dump(path)</code> to write them as lines.</li>
+          <li>Write <code>test_ringlog.py</code> with at least ten pytest tests, including the wrap-around boundary.</li>
+        </ul>
+        <ul class="checklist" data-id="m20-mini">
+          <li>The storage list is allocated once and never resized</li>
+          <li><code>append</code> is O(1) with no shifting (only modulo arithmetic)</li>
+          <li>Iteration order is oldest to newest, before and after wrap-around</li>
+          <li>Indexing supports negative indexes and raises <code>IndexError</code> out of range</li>
+          <li><code>latest(n)</code> handles n larger than the current length</li>
+          <li><code>dump(path)</code> writes one line per entry (test it with <code>tmp_path</code>)</li>
+          <li><code>pixi run python -m pytest -q</code> passes</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Compare your class with <code>collections.deque(maxlen=N)</code> using <code>timeit</code>.</li>
+          <li>Make <code>RingLog</code> generic over the entry type with type parameters (<a href="m16-typing.html">M16</a>).</li>
+          <li>Store numeric samples in an <code>array.array("d", ...)</code> ring and compute a moving average in O(1) per sample.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m20-quiz">
+<script type="application/json">
+{"title": "Arrays & dynamic arrays quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "An array starts at address 2000 with 4-byte slots. Where does index 5 start?", "options": ["2005", "2020", "2024", "2009"], "answer": 1, "explanation": "<p>address = base + index × size = 2000 + 5 × 4 = 2020.</p>"},
+  {"type": "single", "prompt": "Why can a Python list hold objects of different sizes in equal-sized slots?", "options": ["It pads every object to the largest size", "It stores pointers to objects, and all pointers are the same size", "It compresses objects", "It uses a linked list internally"], "answer": 1, "explanation": "<p>A CPython list is an array of <code>PyObject*</code> pointers (8 bytes on 64-bit systems). The objects themselves live elsewhere on the heap.</p>"},
+  {"type": "single", "prompt": "Roughly what growth factor does CPython use when a list resizes?", "options": ["1.125×", "1.5×", "2×", "+10 slots"], "answer": 0, "explanation": "<p><code>list_resize</code> allocates about <code>newsize + newsize/8 + 6</code>, rounded to a multiple of 4. Any proportional growth keeps append amortized O(1); a small factor wastes less memory.</p>"},
+  {"type": "multi", "prompt": "Which operations on a list of n items are O(n) in the worst case?", "options": ["<code>a.insert(0, x)</code>", "<code>a[n // 2]</code>", "<code>a.pop(0)</code>", "<code>a.pop()</code>", "<code>a.remove(x)</code>"], "answer": [0, 2, 4], "explanation": "<p>Front insertion and front popping shift every element; <code>remove</code> searches then shifts. Indexing is O(1), and popping the last item needs no shifting.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "grid = [[0] * 2] * 2\ngrid[1][0] = 5\nprint(grid)", "answer": "[[5, 0], [5, 0]]", "explanation": "<p>The outer <code>* 2</code> repeats a pointer to the same inner list, so both rows are one object. Use <code>[[0] * 2 for _ in range(2)]</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "b = b\"AB\"\nprint(b[0], b[:1])", "answer": "65 b'A'", "explanation": "<p>Indexing <code>bytes</code> gives an <code>int</code> (the byte value 65 for 'A'); slicing gives a <code>bytes</code> object.</p>"},
+  {"type": "single", "prompt": "What does <code>sys.getsizeof(my_list)</code> measure?", "options": ["The list header and its pointer array only", "The total memory of the list and all its elements", "Only the elements", "The number of elements"], "answer": 0, "explanation": "<p><code>getsizeof</code> is shallow: it reports the list object and its pointer array, not the objects the pointers refer to.</p>"},
+  {"type": "single", "prompt": "What is the main advantage of <code>array.array('d', ...)</code> over a list of floats?", "options": ["Faster element-by-element Python loops", "Much less memory: raw 8-byte doubles instead of pointers to float objects", "It can hold strings too", "It is immutable"], "answer": 1, "explanation": "<p>A typed array stores the raw values contiguously. Reading an element still creates a Python float, so Python-level loops are not faster; the gains are memory and fast binary I/O.</p>"},
+  {"type": "single", "prompt": "What does slicing a <code>memoryview</code> do?", "options": ["Copies the bytes", "Creates a new view of the same memory without copying", "Converts to a list", "Raises TypeError"], "answer": 1, "explanation": "<p>A memoryview is a window onto another object's buffer. Slicing creates another window; writes through it change the original.</p>"},
+  {"type": "text", "prompt": "Which built-in type is the mutable version of <code>bytes</code>?", "answer": ["bytearray"], "explanation": "<p><code>bytearray</code> is a dynamic array of bytes you can change in place, append to, and extend.</p>"},
+  {"type": "single", "prompt": "In your DynamicArray, why shift right starting from the end during insert?", "options": ["It is faster", "Shifting from the front would overwrite items before they are moved", "Python requires it", "To keep capacity a power of two"], "answer": 1, "explanation": "<p>Copying <code>data[i] = data[i-1]</code> from the left would copy the same item repeatedly. Starting at the end moves each item into an empty slot first.</p>"},
+  {"type": "single", "prompt": "Why reset a vacated slot to <code>None</code> after popping?", "options": ["To make len() correct", "So the array no longer holds a reference that would keep the object alive", "To trigger a resize", "It has no effect"], "answer": 1, "explanation": "<p>A stale reference in an unused slot keeps the object reachable, preventing it from being freed: a memory leak. CPython's list clears its slots too.</p>"},
+  {"type": "single", "prompt": "In a row-major flat grid with <code>cols</code> columns, where is cell (r, c)?", "options": ["<code>c * rows + r</code>", "<code>r * cols + c</code>", "<code>r + c</code>", "<code>r * c</code>"], "answer": 1, "explanation": "<p>Each full row before r takes <code>cols</code> slots, then you move c more. NumPy's strides generalise this.</p>"},
+  {"type": "multi", "prompt": "Which objects support the buffer protocol (can be wrapped by <code>memoryview</code>)?", "options": ["<code>bytes</code>", "<code>bytearray</code>", "<code>array.array</code>", "<code>list</code>", "<code>str</code>"], "answer": [0, 1, 2], "explanation": "<p>bytes, bytearray, array.array, and NumPy arrays expose raw contiguous memory. A list stores pointers to objects and a str has no public buffer, so neither supports it.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>An array is contiguous, equal-sized slots: address = base + index × size, so indexing is O(1).</li>
+      <li>A dynamic array is a static array plus size and capacity; it resizes by a factor, making append amortized O(1).</li>
+      <li>CPython's <code>list</code> is a dynamic array of <code>PyObject*</code> pointers growing by about 1.125×.</li>
+      <li>Insert and delete shift everything after the position: O(n − i). Front operations are O(n).</li>
+      <li><code>array.array</code> stores raw typed values compactly; <code>bytes</code>/<code>bytearray</code> are byte arrays.</li>
+      <li><code>memoryview</code> gives zero-copy slices of any buffer-protocol object.</li>
+      <li>Build grids with a comprehension; <code>[[0] * n] * m</code> aliases rows.</li>
+    </ul>
+    <div class="flashcards" data-title="Arrays">
+<script type="application/json">
+[{"front": "Array address formula", "back": "address(i) = base + i × slot_size"},
+ {"front": "Size vs capacity", "back": "Size: slots in use. Capacity: slots allocated. Resize when size == capacity."},
+ {"front": "What does a CPython list store?", "back": "An array of pointers (PyObject*) to objects elsewhere on the heap."},
+ {"front": "CPython list growth", "back": "About 1.125× plus a small constant: capacities 0, 4, 8, 16, 24, 32, 40, 52, …"},
+ {"front": "Cost of <code>a.insert(i, x)</code>", "back": "O(n − i): shift everything after i one slot right."},
+ {"front": "<code>array.array</code>", "back": "A compact typed dynamic array of raw C values (typecodes like 'i', 'd')."},
+ {"front": "<code>bytes</code> vs <code>bytearray</code>", "back": "Immutable vs mutable arrays of ints 0–255."},
+ {"front": "<code>memoryview</code>", "back": "A zero-copy window onto another object's buffer; slicing does not copy."},
+ {"front": "Why is <code>[[0]*3]*2</code> a bug?", "back": "Both rows are the same list object; changing one changes both."},
+ {"front": "Row-major index of (r, c)", "back": "r * cols + c"}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/array.html">array: efficient arrays of numeric values</a></li>
+      <li><a href="https://docs.python.org/3/library/stdtypes.html#binary-sequence-types-bytes-bytearray-memoryview">Binary sequence types: bytes, bytearray, memoryview</a></li>
+      <li><a href="https://docs.python.org/3/c-api/buffer.html">The buffer protocol (C API)</a></li>
+      <li><a href="https://docs.python.org/3/faq/design.html#how-are-lists-implemented-in-cpython">Design FAQ: how are lists implemented in CPython?</a></li>
+      <li>Next: <a href="m21-linked-lists.html">M21 Linked Lists</a>, the structure that trades O(1) indexing for O(1) insertion.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

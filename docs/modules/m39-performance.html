@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M39 · Performance &amp; Profiling · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m39">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Module 39</p>
+    <h1>Performance &amp; Profiling</h1>
+    <p class="lede">Fast Python is mostly the result of a disciplined process, not clever tricks: measure, find the
+      real bottleneck, fix the algorithm, and only then reach for micro-optimizations, caching, vectorization, or native
+      code. This module teaches that process and the tools behind it, from <code>timeit</code> and
+      <code>cProfile</code> to 3.15's sampling profiler, plus what the 3.14 interpreter itself does to make your code
+      faster.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m19-complexity.html">M19 Complexity</a>, <a href="m38-asyncio.html">M38 asyncio</a></span></div>
+    <ul class="objectives">
+      <li>Follow a measure-first workflow and write trustworthy benchmarks with <code>timeit</code> and <code>perf_counter</code></li>
+      <li>Profile with <code>cProfile</code> and read <code>pstats</code> output (ncalls, tottime, cumtime)</li>
+      <li>Preview 3.15's <code>profiling</code> package: deterministic tracing vs the Tachyon sampling profiler, flame graphs, and live mode</li>
+      <li>Measure memory with <code>tracemalloc</code> and understand what <code>sys.getsizeof</code> does and doesn't count</li>
+      <li>Prioritize algorithmic improvements, then apply proven micro-optimizations and caching</li>
+      <li>Explain the 3.14 interpreter's speed features (specialization, tail-call interpreter, experimental JIT, incremental GC) and check which your build has</li>
+      <li>Choose among native options (NumPy, Cython, Rust/PyO3, mypyc) and use 3.15 lazy imports for startup time</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="measure-first">
+    <h2>Measure first</h2>
+    <p>Donald Knuth's line is usually quoted half-way. The full version: <em>"We should forget about small
+      efficiencies, say about 97% of the time: premature optimization is the root of all evil. Yet we should not pass
+      up our opportunities in that critical 3%."</em> The skill is finding that 3%. Programmers are famously bad at
+      guessing where time goes; the slow part is rarely the line that looks slow.</p>
+    <ol>
+      <li><strong>Define "fast enough"</strong>: a target with a number ("the report must build in under 2 s for
+        100k rows"). Without one, optimization never ends.</li>
+      <li><strong>Make it correct and tested first.</strong> Tests let you optimize fearlessly; every speedup must keep
+        them green.</li>
+      <li><strong>Benchmark</strong> the realistic workload, so you know the baseline.</li>
+      <li><strong>Profile</strong> to find where the time actually goes.</li>
+      <li><strong>Fix the biggest cost</strong>, preferably with a better algorithm or data structure.</li>
+      <li><strong>Re-measure</strong>, and stop when you hit the target.</li>
+    </ol>
+    <aside class="callout think"><p>A function takes 10% of total runtime. If you make it infinitely fast, how much
+      faster is the program? (Amdahl's law from <a href="m37-concurrency.html">M37</a> applies here too: at most
+      1/0.9 ≈ 1.11×.) This is why profiling comes before optimizing.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="timing">
+    <h2>Timing code correctly</h2>
+    <p>Choose the right clock:</p>
+    <table>
+      <thead><tr><th>Clock</th><th>Measures</th><th>Use for</th></tr></thead>
+      <tbody>
+        <tr><td><code>time.perf_counter()</code></td><td>Highest-resolution monotonic wall time</td><td>Benchmarks and elapsed time</td></tr>
+        <tr><td><code>time.perf_counter_ns()</code></td><td>Same, as integer nanoseconds (no float rounding)</td><td>Very short intervals</td></tr>
+        <tr><td><code>time.process_time()</code></td><td>CPU time of this process (excludes sleep/I/O waits)</td><td>"Is it CPU or waiting?"</td></tr>
+        <tr><td><code>time.monotonic()</code></td><td>Monotonic wall time, coarser</td><td>Timeouts, rate limiting</td></tr>
+        <tr><td><code>time.time()</code></td><td>Calendar time; can jump (NTP adjustments)</td><td>Timestamps, never for measuring durations</td></tr>
+      </tbody>
+    </table>
+    <p>Single measurements are noisy: other processes, CPU frequency scaling, caches, and the garbage collector all
+      interfere. <code>timeit</code> handles the basics: it runs the statement many times per measurement
+      (<code>number</code>), repeats the measurement (<code>repeat</code>), and disables the GC during timing. Report
+      the <strong>minimum</strong> (or median) of the repeats: the minimum is the run with the least interference, the
+      best estimate of the code's intrinsic cost.</p>
+    <div class="runnable" data-title="timeit and perf_counter">
+<textarea>
+import timeit
+import time
+
+setup = "data = list(range(1000))"
+for label, stmt in [("sum()", "sum(data)"), ("for loop", "t = 0\nfor x in data: t += x")]:
+    timer = timeit.Timer(stmt, setup=setup)
+    number, _ = timer.autorange()                  # pick a number that takes >= 0.2 s
+    best = min(timer.repeat(repeat=5, number=number)) / number
+    print(f"{label:<9} {best * 1e6:8.2f} µs per call  (number={number})")
+
+# perf_counter for one-off measurements of bigger chunks
+start = time.perf_counter()
+squares = [i * i for i in range(200_000)]
+print(f"list comprehension: {(time.perf_counter() - start) * 1000:.1f} ms")
+cpu0 = time.process_time(); time.sleep(0.05); print("process_time during sleep:", round(time.process_time() - cpu0, 3))
+</textarea>
+    </div>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -m timeit -s "data = list(range(1000))" "sum(data)"
+# 50000 loops, best of 5: 4.1 usec per loop</code></pre>
+    <aside class="callout warn"><p>Benchmark pitfalls: timing the first call (imports, caches, and the specializing
+      interpreter all warm up), measuring something the compiler optimizes away, benchmarking toy inputs when
+      production inputs are 1000× larger, and comparing runs on a laptop that is throttling. For serious comparisons
+      use <code>pyperf</code> (<code>pixi add pyperf</code>), which spawns worker processes, calibrates, and reports
+      the spread.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="cprofile">
+    <h2>Profiling with <code>cProfile</code> and <code>pstats</code></h2>
+    <p>A <dfn>profiler</dfn> tells you where time goes across a whole program. <code>cProfile</code> is a
+      <dfn>deterministic</dfn> (tracing) profiler: it records every function call and return, so call counts are exact.
+      The price is overhead on every call, which inflates the cost of small, frequently called functions. Use it to
+      find hotspots, not to measure absolute speed.</p>
+    <div class="runnable" data-title="Profile a slow program">
+<textarea>
+import cProfile
+import io
+import pstats
+
+def parse(line):
+    return [int(x) for x in line.split(",")]
+
+def is_prime(n):
+    if n < 2:
+        return False
+    return all(n % d for d in range(2, int(n ** 0.5) + 1))
+
+def unique_primes(rows):
+    seen = []                                  # list membership is O(n)...
+    for row in rows:
+        for n in row:
+            if is_prime(n) and n not in seen:
+                seen.append(n)
+    return sorted(seen)
+
+def main():
+    lines = [",".join(str((i * 7919 + j) % 5000) for j in range(20)) for i in range(400)]
+    rows = [parse(line) for line in lines]
+    return len(unique_primes(rows))
+
+profiler = cProfile.Profile()
+profiler.enable()
+result = main()
+profiler.disable()
+
+out = io.StringIO()
+stats = pstats.Stats(profiler, stream=out).strip_dirs().sort_stats("tottime")
+stats.print_stats(8)
+print("result:", result)
+print(out.getvalue())
+</textarea>
+    </div>
+    <h3>Reading the output</h3>
+    <table>
+      <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>ncalls</code></td><td>Number of calls. <code>12/1</code> means 12 total calls, 1 primitive (non-recursive) call: recursion.</td></tr>
+        <tr><td><code>tottime</code></td><td>Time spent <em>in this function's own code</em>, excluding functions it called. High tottime = the work is here.</td></tr>
+        <tr><td><code>percall</code> (first)</td><td><code>tottime / ncalls</code></td></tr>
+        <tr><td><code>cumtime</code></td><td>Time from entry to exit, <em>including</em> callees. High cumtime but low tottime = it's a coordinator; look at what it calls.</td></tr>
+        <tr><td><code>percall</code> (second)</td><td><code>cumtime / primitive calls</code></td></tr>
+        <tr><td><code>filename:lineno(function)</code></td><td>Where the function is defined; <code>{built-in method ...}</code> entries are C functions.</td></tr>
+      </tbody>
+    </table>
+    <p>Sort by <code>tottime</code> to find where the CPU actually burns; sort by <code>cumtime</code> to see which
+      high-level operations are expensive. <code>stats.print_callers("is_prime")</code> shows who calls a function, and
+      <code>print_callees</code> what it calls. In this example most time is in <code>is_prime</code> and its generator
+      expression, and the list-membership test also shows up: two different fixes (memoize or sieve; use a set).</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -m cProfile -s cumtime app.py | head -25     # quick look
+pixi run python -m cProfile -o app.prof app.py               # save for later analysis
+pixi run python -m pstats app.prof                           # interactive browser: sort tottime, stats 10
+pixi add snakeviz &amp;&amp; pixi run snakeviz app.prof              # icicle/sunburst view in the browser</code></pre>
+  </section>
+
+  <section class="lesson-section" id="profiling-315">
+    <h2>Preview: the <code>profiling</code> package in 3.15</h2>
+    <aside class="callout py315"><p>Python 3.15 adds a <code>profiling</code> package (<a href="https://peps.python.org/pep-0799/">PEP 799</a>)
+      that organizes the standard library's profilers under one roof:</p>
+      <ul>
+        <li><code>profiling.tracing</code>: the deterministic profiler (what <code>cProfile</code> is today; the old name keeps working).</li>
+        <li><code>profiling.sampling</code>: <strong>Tachyon</strong>, a new <dfn>statistical sampling profiler</dfn>.
+          Instead of hooking every call, it wakes up thousands of times per second and records the stack of the target
+          process from the outside. Overhead is tiny and doesn't distort small functions, and it can attach to an
+          already-running process (useful in production).</li>
+      </ul></aside>
+    <pre data-label="Terminal (Python 3.15)"><code class="language-bash">pixi exec --spec "python=3.15" python -m profiling.sampling run app.py                     # summary table
+pixi exec --spec "python=3.15" python -m profiling.sampling run --flamegraph -o flame.html app.py
+pixi exec --spec "python=3.15" python -m profiling.sampling run --live app.py              # top-like live TUI
+pixi exec --spec "python=3.15" python -m profiling.sampling attach --live 12345             # attach to a running PID
+pixi exec --spec "python=3.15" python -m profiling.sampling run --mode cpu -r 10khz app.py  # CPU time only, 10 kHz
+pixi exec --spec "python=3.15" python -m profiling.tracing -s tottime app.py               # cProfile under its new name</code></pre>
+    <p>A <dfn>flame graph</dfn> draws every sampled stack as a tower of boxes: the x-axis is the share of samples (not
+      time order), the y-axis is call depth, and wide boxes are where time goes. You read it top-down for "what is the
+      CPU doing" and bottom-up for "which entry point is expensive". The <code>--mode</code> option chooses what a
+      sample counts: wall-clock time (including waiting), CPU time, time holding the GIL, or time handling exceptions.</p>
+    <div class="runnable" data-python="3.15" data-title="Using the new namespace from code (3.15)">
+<textarea>
+import profiling.tracing          # 3.15: same API as cProfile
+import pstats
+
+def work():
+    return sum(i * i for i in range(300_000))
+
+with profiling.tracing.Profile() as prof:
+    work()
+
+pstats.Stats(prof).sort_stats("tottime").print_stats(5)
+</textarea>
+    </div>
+    <table>
+      <thead><tr><th></th><th>Tracing (<code>cProfile</code> / <code>profiling.tracing</code>)</th><th>Sampling (<code>profiling.sampling</code>)</th></tr></thead>
+      <tbody>
+        <tr><td>Call counts</td><td>Exact</td><td>None (only sample counts)</td></tr>
+        <tr><td>Overhead</td><td>High for many small calls</td><td>Low and roughly constant</td></tr>
+        <tr><td>Accuracy for tiny functions</td><td>Distorted by overhead</td><td>Statistically fair</td></tr>
+        <tr><td>Attach to a running process</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Best for</td><td>Development, "how many times is this called?"</td><td>Production, realistic loads, long runs</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="line-level">
+    <h2>Thinking at the line level</h2>
+    <p>Function-level profiles tell you <em>which</em> function is hot. Inside a long function, you need to know which
+      <em>lines</em> are. Options:</p>
+    <ul>
+      <li><strong><code>line_profiler</code></strong> (<code>pixi add line_profiler</code>): decorate a function with
+        <code>@profile</code> and run <code>pixi run kernprof -l -v app.py</code> to get time per line.</li>
+      <li><strong>Sampling profilers</strong> (Tachyon in 3.15, or <code>py-spy</code>) attribute samples to lines too.</li>
+      <li><strong>Manual sections</strong>: a tiny timer context manager is often all you need.</li>
+    </ul>
+    <div class="runnable" data-title="A section timer">
+<textarea>
+import time
+from collections import defaultdict
+from contextlib import contextmanager
+
+totals = defaultdict(float)
+
+@contextmanager
+def section(name):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        totals[name] += time.perf_counter() - start
+
+def build_report(n):
+    with section("generate"):
+        rows = [(i, f"user{i % 97}", i * 3.5) for i in range(n)]
+    with section("group"):
+        groups = defaultdict(list)
+        for _, user, amount in rows:
+            groups[user].append(amount)
+    with section("format"):
+        out = ""
+        for user in sorted(groups):
+            out += f"{user}: {sum(groups[user]):.2f}\n"     # string += (only 97 users: cheap here; measure!)
+    return out
+
+build_report(200_000)
+total = sum(totals.values())
+for name, secs in sorted(totals.items(), key=lambda kv: -kv[1]):
+    print(f"{name:<9} {secs * 1000:7.1f} ms  {secs / total:5.1%}")
+</textarea>
+    </div>
+    <p>When you look at a hot line, ask: how many times does it run (move work out of loops), how much does each run
+      cost (an O(n) operation like <code>x in list</code> inside an O(n) loop is O(n²)), and does it allocate (building
+      temporary lists or strings)? <code>dis.dis(func)</code> shows the bytecode if you're curious what a line really
+      does.</p>
+  </section>
+
+  <section class="lesson-section" id="memory">
+    <h2>Memory: <code>sys.getsizeof</code> and <code>tracemalloc</code></h2>
+    <p>Memory is performance too: allocation costs time, big working sets fall out of CPU caches, and running out of
+      RAM means swapping or crashing. <code>sys.getsizeof(obj)</code> returns the size of the object itself in bytes,
+      <strong>shallowly</strong>: for a list, the list's header and pointer array, but not the objects it points to.</p>
+    <div class="runnable" data-title="What getsizeof measures">
+<textarea>
+import sys
+
+print("int 0:", sys.getsizeof(0), "| int 2**100:", sys.getsizeof(2 ** 100))
+print("empty str:", sys.getsizeof(""), "| 'a'*100:", sys.getsizeof("a" * 100), "| 'é'*100:", sys.getsizeof("é" * 100))
+print("empty list:", sys.getsizeof([]), "| empty dict:", sys.getsizeof({}), "| empty tuple:", sys.getsizeof(()))
+
+small = (1, 2, 3)
+big_items = ("x" * 10_000, "y" * 10_000, "z" * 10_000)
+print("tuple of 3 ints:", sys.getsizeof(small), "| tuple of 3 huge strings:", sys.getsizeof(big_items))  # same!
+
+lst = []
+sizes = []
+for i in range(20):
+    lst.append(i)
+    sizes.append(sys.getsizeof(lst))
+print("list size as it grows (over-allocation):", sorted(set(sizes)))
+
+gen = (i for i in range(10**6))
+print("generator:", sys.getsizeof(gen), "bytes vs list of a million:", sys.getsizeof(list(range(10**6))))
+</textarea>
+    </div>
+    <p><code>tracemalloc</code> tracks every allocation made by Python, with the line that made it. Take snapshots
+      before and after an operation and compare them to find what's eating memory. Its numbers include the full cost of
+      the objects created, which is what you actually care about.</p>
+    <div class="runnable" data-title="Find the allocating lines with tracemalloc">
+<textarea>
+import tracemalloc
+
+def load_records(n):
+    return [{"id": i, "name": f"user{i}", "tags": ["a", "b"]} for i in range(n)]
+
+def load_tuples(n):
+    return [(i, f"user{i}", ("a", "b")) for i in range(n)]
+
+tracemalloc.start()
+snap0 = tracemalloc.take_snapshot()
+records = load_records(50_000)
+snap1 = tracemalloc.take_snapshot()
+tuples = load_tuples(50_000)
+snap2 = tracemalloc.take_snapshot()
+current, peak = tracemalloc.get_traced_memory()
+tracemalloc.stop()
+
+def total(diff):
+    return sum(stat.size_diff for stat in diff) / 1e6
+
+print(f"dict records: {total(snap1.compare_to(snap0, 'lineno')):.1f} MB")
+print(f"tuples:       {total(snap2.compare_to(snap1, 'lineno')):.1f} MB")
+print(f"current {current / 1e6:.1f} MB, peak {peak / 1e6:.1f} MB")
+for stat in snap1.compare_to(snap0, "lineno")[:2]:
+    print("  top:", stat)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Common memory wins: stream with generators instead of building lists
+      (<a href="m14-iterators.html">M14</a>), use tuples, <code>__slots__</code> or <code>@dataclass(slots=True)</code>
+      for many small records (<a href="m36-metaprogramming.html">M36</a>), store numbers in NumPy arrays (8 bytes each
+      instead of ~32 for a boxed int plus an 8-byte pointer), and intern repeated strings or use categoricals.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="algorithms">
+    <h2>Algorithmic wins vs micro-optimizations</h2>
+    <p>The biggest speedups come from doing less work: a better algorithm or data structure changes the growth rate,
+      and no amount of micro-tuning competes with that at scale. Replacing an O(n²) inner search with an O(1) set
+      lookup turns a 10-minute job into a 50 ms one. Drag the slider to feel the difference:</p>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["n", "n log n", "n^2"], "maxN": 1000}'></div>
+    <div class="runnable" data-title="O(n²) vs O(n): the same answer">
+<textarea>
+import time
+
+def common_slow(a, b):
+    return [x for x in a if x in b]          # `in list` is O(len(b)) -> O(n*m)
+
+def common_fast(a, b):
+    bset = set(b)                             # O(m) once
+    return [x for x in a if x in bset]       # O(1) average per lookup -> O(n + m)
+
+for n in (1_000, 4_000, 8_000):
+    a, b = list(range(0, 2 * n, 2)), list(range(0, 3 * n, 3))
+    t0 = time.perf_counter(); slow = common_slow(a, b); t1 = time.perf_counter()
+    fast = common_fast(a, b); t2 = time.perf_counter()
+    assert slow == fast
+    print(f"n={n:>5}: slow {1000 * (t1 - t0):8.1f} ms   fast {1000 * (t2 - t1):6.2f} ms   ({(t1 - t0) / (t2 - t1):5.0f}x)")
+</textarea>
+    </div>
+    <p>Once the algorithm is right, a set of well-known micro-optimizations can still give 1.2–3× in a hot loop. They
+      work because they reduce the number of bytecode instructions, dictionary lookups, or Python-level calls. Use them
+      only in code the profiler flagged; elsewhere, readability wins.</p>
+    <table>
+      <thead><tr><th>Technique</th><th>Instead of</th><th>Why it's faster</th></tr></thead>
+      <tbody>
+        <tr><td>Set/dict membership</td><td><code>x in some_list</code></td><td>Hash lookup O(1) vs linear scan O(n)</td></tr>
+        <tr><td><code>"".join(parts)</code></td><td><code>s += piece</code> in a loop</td><td>One allocation vs repeated copying (CPython sometimes optimizes <code>+=</code>, but don't rely on it)</td></tr>
+        <tr><td>Comprehensions</td><td><code>for</code> loop with <code>.append</code></td><td>Specialized bytecode, no repeated <code>append</code> attribute lookup and call</td></tr>
+        <tr><td>Built-ins (<code>sum</code>, <code>min</code>, <code>max</code>, <code>sorted</code>, <code>any</code>, <code>map</code>)</td><td>Hand-written loops</td><td>The loop runs in C</td></tr>
+        <tr><td>Local variables</td><td>Globals or module attributes in a hot loop</td><td>Locals are array slots; globals and builtins are dict lookups (the gap is smaller with 3.11+ specialization)</td></tr>
+        <tr><td>Hoist attribute lookups</td><td><code>self.items.append(x)</code> repeated millions of times</td><td>Bind <code>append = self.items.append</code> once</td></tr>
+        <tr><td>Move invariant work out of loops</td><td><code>re.compile</code>, <code>len()</code>, conversions inside the loop</td><td>Do it once</td></tr>
+        <tr><td><code>collections.Counter</code>/<code>defaultdict</code></td><td>Manual <code>if k in d</code> counting</td><td>C-implemented counting</td></tr>
+        <tr><td>Generators / <code>itertools</code></td><td>Building big intermediate lists</td><td>Less memory, better cache use</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Measure the micro-optimizations yourself">
+<textarea>
+import timeit
+
+N = 20_000
+cases = {
+    "membership: list": ("999_999 in data", "data = list(range(N))"),
+    "membership: set":  ("999_999 in data", "data = set(range(N))"),
+    "concat: +=":       ("s = ''\nfor p in parts: s += p", "parts = ['ab'] * N"),
+    "concat: join":     ("s = ''.join(parts)", "parts = ['ab'] * N"),
+    "loop + append":    ("out = []\nfor i in range(N): out.append(i * 2)", ""),
+    "comprehension":    ("out = [i * 2 for i in range(N)]", ""),
+    "global in loop":   ("f()", "import math\ndef f():\n    t = 0\n    for i in range(N): t += math.sqrt(i)\n    return t"),
+    "hoisted local":    ("f()", "import math\ndef f():\n    sqrt = math.sqrt\n    t = 0\n    for i in range(N): t += sqrt(i)\n    return t"),
+}
+for name, (stmt, setup) in cases.items():
+    t = min(timeit.repeat(stmt, setup, repeat=3, number=20, globals={"N": N})) / 20
+    print(f"{name:<18} {t * 1e3:8.3f} ms")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: how does the work grow?" data-predict>
+<textarea>
+def count_pairs(n):
+    ops = 0
+    for i in range(n):
+        for j in range(i):        # compares every earlier item: the shape of `x in items[:i]`
+            ops += 1
+    return ops
+
+print(count_pairs(10), count_pairs(20), count_pairs(40))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="caching">
+    <h2>Caching</h2>
+    <p>The fastest computation is the one you don't repeat. <dfn>Memoization</dfn> stores results keyed by arguments.
+      The standard library provides it as decorators:</p>
+    <ul>
+      <li><code>functools.cache</code>: unbounded memoization (simple, but grows forever).</li>
+      <li><code>functools.lru_cache(maxsize=128)</code>: keeps the most recently used results, evicting the rest
+        (<a href="m27-advanced-structures.html">M27</a> builds one); <code>cache_info()</code> reports hits and
+        misses, <code>cache_clear()</code> empties it.</li>
+      <li><code>functools.cached_property</code>: compute an attribute once per instance (see <a href="m36-metaprogramming.html">M36</a>).</li>
+    </ul>
+    <div class="runnable" data-title="lru_cache turns exponential into linear">
+<textarea>
+import time
+from functools import lru_cache
+
+def fib_plain(n):
+    return n if n < 2 else fib_plain(n - 1) + fib_plain(n - 2)
+
+@lru_cache(maxsize=None)
+def fib_cached(n):
+    return n if n < 2 else fib_cached(n - 1) + fib_cached(n - 2)
+
+t0 = time.perf_counter(); a = fib_plain(27); t1 = time.perf_counter(); b = fib_cached(27); t2 = time.perf_counter()
+print(f"plain {1000 * (t1 - t0):.0f} ms, cached {1000 * (t2 - t1):.3f} ms, same={a == b}")
+print(fib_cached.cache_info())
+print(fib_cached(200))          # instant; plain would never finish
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: LRU hits and misses" data-predict>
+<textarea>
+from functools import lru_cache
+
+@lru_cache(maxsize=2)
+def square(x):
+    return x * x
+
+for x in [1, 2, 1, 3, 1, 2]:
+    square(x)
+info = square.cache_info()
+print(info.hits, info.misses)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Caching rules: arguments must be hashable (lists can't be keys); results must depend
+      only on the arguments (no hidden state, time, or I/O, unless you accept staleness); cached results are shared, so
+      returning a mutable object lets callers corrupt the cache; and an unbounded cache is a memory leak with good PR.
+      On methods, <code>lru_cache</code> holds a reference to <code>self</code>, keeping instances alive; prefer
+      <code>cached_property</code> or a per-instance dict.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="numpy">
+    <h2>Vectorization: a NumPy teaser</h2>
+    <p>For numeric work, the biggest lever is moving the loop out of Python entirely. NumPy stores numbers in compact
+      typed arrays and runs operations over whole arrays in optimized C (often SIMD) loops. The style is called
+      <dfn>vectorization</dfn>: express the computation on arrays, not elements. Part 7 (<a href="m48-numpy.html">M48</a>)
+      covers it in depth.</p>
+    <div class="runnable" data-title="Python loop vs NumPy">
+<textarea>
+import time
+import numpy as np
+
+n = 1_000_000
+xs = [i * 0.001 for i in range(n)]
+arr = np.array(xs)
+
+t0 = time.perf_counter()
+total_py = sum(x * x + 2 * x + 1 for x in xs)
+t1 = time.perf_counter()
+total_np = float(np.sum(arr * arr + 2 * arr + 1))
+t2 = time.perf_counter()
+
+print(f"python: {1000 * (t1 - t0):7.1f} ms  numpy: {1000 * (t2 - t1):6.1f} ms  speedup ~{(t1 - t0) / (t2 - t1):.0f}x")
+print("same result:", np.isclose(total_py, total_np))
+print("memory: list of floats ~", n * (24 + 8) // 1_000_000, "MB vs array", arr.nbytes // 1_000_000, "MB")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="interpreter">
+    <h2>The 3.14 interpreter: what CPython does for you</h2>
+    <p>Recent CPython releases made unchanged Python code substantially faster. Knowing how helps you write code the
+      interpreter can optimize, and helps you interpret benchmarks.</p>
+    <ul>
+      <li><strong>Specializing adaptive interpreter</strong> (3.11, <a href="https://peps.python.org/pep-0659/">PEP 659</a>):
+        after a few executions, generic bytecodes are replaced by specialized versions (for example,
+        <code>BINARY_OP</code> becomes an int-add fast path; <code>LOAD_ATTR</code> becomes "load from this exact slot")
+        that de-specialize if types change. Type-stable hot loops benefit most.</li>
+      <li><strong>Tail-call interpreter</strong> <span class="tag v314">3.14</span>: a new way of compiling the
+        interpreter's main loop, where each bytecode handler is a small C function that tail-calls the next. With
+        recent Clang (19+) it lets the C compiler generate better code than the giant <code>switch</code>/computed-goto
+        loop, for a few percent of speedup on typical benchmarks. It's a build-time option
+        (<code>--with-tail-call-interp</code>); your code doesn't change.</li>
+      <li><strong>Experimental JIT</strong> <span class="tag v314">3.14</span>: a "copy-and-patch" JIT compiler that
+        stitches pre-compiled machine-code templates for hot traces. 3.14's official Windows and macOS binaries from
+        python.org include it, <strong>disabled by default</strong>; enable it with the environment variable
+        <code>PYTHON_JIT=1</code>. Gains in 3.14 are modest and workload-dependent; sometimes it's slower. Other builds
+        (including many Linux distributions and conda-forge) may not include it at all.</li>
+      <li><strong>Incremental garbage collection</strong> <span class="tag v314">3.14</span>: the cycle collector does
+        its work for the old generation in small increments, reducing the maximum pause time for programs with large
+        heaps.</li>
+    </ul>
+    <div class="runnable" data-title="Which interpreter features does this build have?">
+<textarea>
+import gc
+import sys
+import sysconfig
+
+print("version:", sys.version.split()[0], "| implementation:", sys.implementation.name)
+print("tail-call interpreter build:", bool(sysconfig.get_config_var("Py_TAIL_CALL_INTERP")))
+jit = getattr(sys, "_jit", None)                     # 3.14+
+if jit is not None:
+    print("JIT available:", jit.is_available(), "| enabled:", jit.is_enabled(), "| active now:", jit.is_active())
+print("free-threaded build:", bool(sysconfig.get_config_var("Py_GIL_DISABLED")))
+print("GC thresholds:", gc.get_threshold(), "| GC enabled:", gc.isenabled())
+</textarea>
+    </div>
+    <pre data-label="Terminal"><code class="language-bash">PYTHON_JIT=1 pixi run python -c "import sys; print(sys._jit.is_enabled())"   # True only on a JIT-capable build
+pixi run python -c "import sysconfig; print(sysconfig.get_config_var('CONFIG_ARGS'))"   # how was it built?</code></pre>
+    <aside class="callout py315"><p>Python 3.15 ships a significantly upgraded JIT and enables frame pointers by default
+      (<a href="https://peps.python.org/pep-0831/">PEP 831</a>), which makes native profilers like <code>perf</code>
+      produce reliable stacks. It also <strong>reverts the incremental GC</strong> and restores the generational
+      collector, after the incremental design caused memory-usage regressions for some workloads. If you tuned GC
+      behavior for 3.14, re-measure on 3.15.</p></aside>
+    <aside class="callout tip"><p>Writing JIT- and specializer-friendly code is mostly writing ordinary, type-stable code:
+      keep a variable's type consistent in hot loops, avoid redefining functions or classes at runtime, and prefer
+      straightforward attribute access over dynamic <code>getattr</code> tricks in hot paths.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="native">
+    <h2>Native extensions and compilers: an overview</h2>
+    <p>When profiling shows a hot, CPU-bound core that can't be vectorized, you can move it to compiled code. Each option
+      trades build complexity for speed:</p>
+    <table>
+      <thead><tr><th>Tool</th><th>What you write</th><th>Typical gain on hot loops</th><th>Trade-offs</th><th>Pixi</th></tr></thead>
+      <tbody>
+        <tr><td>NumPy / vectorization</td><td>Array expressions</td><td>10–100×</td><td>Only for array-shaped problems</td><td><code>pixi add numpy</code></td></tr>
+        <tr><td>Numba</td><td>Python + <code>@njit</code> decorator</td><td>10–100× on numeric loops</td><td>Subset of Python; JIT warm-up; numeric focus</td><td><code>pixi add numba</code></td></tr>
+        <tr><td>mypyc</td><td>Your existing type-annotated Python</td><td>1.5–5×</td><td>Needs precise types; some dynamic features unsupported; compiles whole modules</td><td><code>pixi add mypy</code> (ships mypyc)</td></tr>
+        <tr><td>Cython</td><td>Python with C type declarations (<code>.pyx</code> or pure-Python mode)</td><td>10–100× with types</td><td>Build step; C knowledge helps; great for wrapping C libraries</td><td><code>pixi add cython</code></td></tr>
+        <tr><td>Rust + PyO3 (maturin)</td><td>Rust</td><td>C-like speed, safe parallelism</td><td>Learn Rust; build tooling; FFI boundary costs</td><td><code>pixi add maturin rust</code></td></tr>
+        <tr><td>C API / cffi / ctypes</td><td>C</td><td>C speed</td><td>Manual memory and refcounting (C API); most effort</td><td><code>pixi add cffi</code></td></tr>
+      </tbody>
+    </table>
+    <p>Two rules apply to all of them. First, <strong>minimize boundary crossings</strong>: calling a compiled function a
+      million times with one number each wastes the gain on call overhead; pass whole arrays or batches. Second, a
+      compiled extension is a <strong>distribution burden</strong>: wheels per platform, per Python version, and (for
+      free-threading) per ABI (<a href="m37-concurrency.html">M37</a>). That cost is why "pure Python plus NumPy" is the
+      default until proven insufficient.</p>
+  </section>
+
+  <section class="lesson-section" id="lazy-imports">
+    <h2>Startup time and 3.15 lazy imports</h2>
+    <p>For command-line tools, the dominant cost is often <em>startup</em>: importing modules you may never use on this
+      run. A CLI with ten subcommands that imports pandas at the top pays ~0.5 s even for <code>--help</code>. Measure
+      import cost with <code>-X importtime</code>, which prints a tree of import times in microseconds (self and
+      cumulative):</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -X importtime -c "import json" 2&gt;&amp;1 | tail -3
+# import time:       213 |       3549 |   json.decoder
+# import time:       177 |        177 |   json.encoder
+# import time:       173 |       3898 | json</code></pre>
+    <p>In 3.14 the remedies are manual: import inside the function that needs the module, or use
+      <code>importlib.util.LazyLoader</code>. Both work, but scatter imports or require boilerplate.</p>
+    <aside class="callout py315"><p>Python 3.15 adds <strong>explicit lazy imports</strong>
+      (<a href="https://peps.python.org/pep-0810/">PEP 810</a>): <code>lazy import json</code> and
+      <code>lazy from x import y</code> bind the name immediately but defer actually loading the module until first
+      use. They are allowed only at module scope. Import errors surface at first use rather than at startup, so keep
+      your tests exercising every code path. A global switch (<code>-X lazy_imports=all</code> /
+      <code>PYTHON_LAZY_IMPORTS</code>) and <code>sys.set_lazy_imports_filter</code> let applications opt in more broadly.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Lazy imports (3.15)">
+<textarea>
+import sys
+lazy import json
+lazy from decimal import Decimal
+
+print("loaded at startup?", "json" in sys.modules, "decimal" in sys.modules)   # False False
+print(json.dumps({"ok": True}), "| json loaded now?", "json" in sys.modules)   # True after first use
+print(Decimal("1.10") + Decimal("2.20"))
+</textarea>
+    </div>
+    <div class="runnable" data-title="The 3.14 way: defer the import into the function">
+<textarea>
+import sys
+import time
+
+def export_csv(rows):
+    import csv, io                     # paid only when this command runs
+    buf = io.StringIO()
+    csv.writer(buf).writerows(rows)
+    return buf.getvalue()
+
+t0 = time.perf_counter()
+import fractions                       # a module with some import cost
+print(f"import fractions took {1000 * (time.perf_counter() - t0):.2f} ms (first time only)")
+print(export_csv([(1, 2), (3, 4)]).strip())
+print("csv in sys.modules:", "csv" in sys.modules)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m39-e1" data-title="A tiny benchmark helper">
+      <div class="exercise-prompt">
+        <p>Write <code>best_of(func, repeat=5, number=10)</code> that calls <code>func()</code> <code>number</code>
+          times per measurement, takes <code>repeat</code> measurements with <code>time.perf_counter</code>, and returns
+          the <strong>best per-call time</strong> in seconds (minimum measurement divided by <code>number</code>). Raise
+          <code>ValueError</code> if <code>repeat</code> or <code>number</code> is less than 1.</p>
+      </div>
+<textarea class="starter">
+import time
+
+def best_of(func, repeat=5, number=10):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_call_count():
+    calls = []
+    best_of(lambda: calls.append(1), repeat=3, number=7)
+    assert len(calls) == 21, f"func should run repeat * number = 21 times, ran {len(calls)}"
+
+def test_returns_per_call_minimum():
+    t = best_of(lambda: time.sleep(0.002), repeat=3, number=2)
+    assert isinstance(t, float), "return a float number of seconds"
+    assert 0.0015 < t < 0.05, f"per-call time for a 2 ms sleep should be about 0.002 s, got {t}"
+
+def test_validation():
+    for kwargs in ({"repeat": 0}, {"number": 0}):
+        try:
+            best_of(lambda: None, **kwargs)
+        except ValueError:
+            continue
+        raise AssertionError(f"{kwargs} should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For each repeat: <code>start = time.perf_counter()</code>, a
+        loop of <code>number</code> calls, then append <code>time.perf_counter() - start</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import time
+
+def best_of(func, repeat=5, number=10):
+    if repeat &lt; 1 or number &lt; 1:
+        raise ValueError("repeat and number must be &gt;= 1")
+    timings = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        for _ in range(number):
+            func()
+        timings.append(time.perf_counter() - start)
+    return min(timings) / number</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m39-e2" data-title="From O(n²) to O(n)">
+      <div class="exercise-prompt">
+        <p>This function returns the items that appear more than once, in order of their <em>second</em> occurrence.
+          It's correct but quadratic. Rewrite it to run in linear time with the same output. The test runs it on
+          40,000 items with a time limit.</p>
+      </div>
+<textarea class="starter">
+def duplicates(items):
+    result = []
+    for i, x in enumerate(items):
+        if x in items[:i] and x not in result:
+            result.append(x)
+    return result
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_small_cases():
+    assert duplicates([3, 1, 3, 2, 1, 3]) == [3, 1], f"got {duplicates([3, 1, 3, 2, 1, 3])}"
+    assert duplicates([]) == [] and duplicates([1, 2, 3]) == [], "no duplicates gives []"
+    assert duplicates(["b", "a", "a", "b"]) == ["a", "b"], "order of second occurrence"
+
+def test_large_input_is_fast():
+    data = list(range(20_000)) + list(range(19_999, -1, -1))
+    start = time.perf_counter()
+    result = duplicates(data)
+    elapsed = time.perf_counter() - start
+    assert result == list(range(19_999, -1, -1)), "wrong result on the large input"
+    assert elapsed < 0.5, f"took {elapsed:.2f}s; an O(n) version takes a few milliseconds"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep two sets: <code>seen</code> (items met at least once) and
+        <code>reported</code> (items already added to the result).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def duplicates(items):
+    seen, reported, result = set(), set(), []
+    for x in items:
+        if x in seen and x not in reported:
+            reported.add(x)
+            result.append(x)
+        seen.add(x)
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m39-e3" data-title="A memoize decorator with statistics">
+      <div class="exercise-prompt">
+        <p>Write a decorator <code>memoize</code> that caches results by positional arguments and exposes
+          <code>wrapper.hits</code>, <code>wrapper.misses</code>, and <code>wrapper.clear()</code> (which empties the
+          cache and resets both counters). Use <code>functools.wraps</code>. Calls with unhashable arguments must still
+          work (just don't cache them, and don't count them as hits or misses).</p>
+      </div>
+<textarea class="starter">
+import functools
+
+def memoize(func):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_fib_counts():
+    @memoize
+    def fib(n):
+        return n if n < 2 else fib(n - 1) + fib(n - 2)
+    assert fib(30) == 832040, "fib(30) must be correct"
+    assert fib.misses == 31, f"each n from 0 to 30 computed once: misses should be 31, got {fib.misses}"
+    assert fib.hits == 28, f"expected 28 hits, got {fib.hits}"
+    assert fib.__name__ == "fib", "use functools.wraps"
+
+def test_clear():
+    @memoize
+    def sq(x):
+        return x * x
+    sq(3); sq(3)
+    sq.clear()
+    assert (sq.hits, sq.misses) == (0, 0), "clear resets counters"
+    sq(3)
+    assert sq.misses == 1, "after clear the value is recomputed"
+
+def test_unhashable_passthrough():
+    @memoize
+    def total(xs):
+        return sum(xs)
+    assert total([1, 2, 3]) == 6 and total([1, 2, 3]) == 6, "unhashable args still work"
+    assert (total.hits, total.misses) == (0, 0), "unhashable calls are not cached or counted"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Store the counters as attributes on the wrapper function. Detect
+        unhashable arguments with <code>try: hash(args) except TypeError:</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import functools
+
+def memoize(func):
+    cache = {}
+
+    @functools.wraps(func)
+    def wrapper(*args):
+        try:
+            hash(args)
+        except TypeError:
+            return func(*args)
+        if args in cache:
+            wrapper.hits += 1
+            return cache[args]
+        wrapper.misses += 1
+        result = cache[args] = func(*args)
+        return result
+
+    def clear():
+        cache.clear()
+        wrapper.hits = wrapper.misses = 0
+
+    wrapper.hits = wrapper.misses = 0
+    wrapper.clear = clear
+    return wrapper</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m39-e4" data-title="Deep size of a data structure">
+      <div class="exercise-prompt">
+        <p><code>sys.getsizeof</code> is shallow. Write <code>deep_sizeof(obj)</code> that adds up
+          <code>sys.getsizeof</code> for <code>obj</code> and everything reachable through lists, tuples, sets,
+          frozensets, and dicts (both keys and values), counting each object <strong>once</strong> (by
+          <code>id</code>) so shared references and cycles are handled.</p>
+      </div>
+<textarea class="starter">
+import sys
+
+def deep_sizeof(obj):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sys
+
+def test_flat_list():
+    data = ["aaaa", "bbbb"]
+    expected = sys.getsizeof(data) + sys.getsizeof("aaaa") + sys.getsizeof("bbbb")
+    assert deep_sizeof(data) == expected, f"expected {expected}, got {deep_sizeof(data)}"
+
+def test_shared_counted_once():
+    s = "x" * 1000
+    data = [s, s, s]
+    assert deep_sizeof(data) == sys.getsizeof(data) + sys.getsizeof(s), "a shared object is counted once"
+
+def test_dict_keys_and_values():
+    d = {"k": [1]}
+    expected = sys.getsizeof(d) + sys.getsizeof("k") + sys.getsizeof([1]) + sys.getsizeof(1)
+    assert deep_sizeof(d) == expected, "count keys, values, and nested containers"
+
+def test_cycle():
+    a = []
+    a.append(a)
+    assert deep_sizeof(a) == sys.getsizeof(a), "cycles must terminate and count each object once"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use an explicit stack and a <code>seen</code> set of ids. For a
+        dict, push both <code>d.keys()</code> and <code>d.values()</code> items.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sys
+
+def deep_sizeof(obj):
+    seen, stack, total = set(), [obj], 0
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        total += sys.getsizeof(current)
+        if isinstance(current, dict):
+            stack.extend(current.keys())
+            stack.extend(current.values())
+        elif isinstance(current, (list, tuple, set, frozenset)):
+            stack.extend(current)
+    return total</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m39-e5" data-title="Find the hotspot with cProfile">
+      <div class="exercise-prompt">
+        <p>Write <code>hottest(func)</code> that runs <code>func()</code> under <code>cProfile</code> and returns the
+          <strong>name</strong> (just the function name, like <code>"slow_part"</code>) of the Python function with the
+          largest <code>tottime</code>, ignoring built-ins (entries whose filename is <code>"~"</code>) and
+          <code>func</code> itself. Use <code>pstats.Stats(profiler).stats</code>, a dict mapping
+          <code>(filename, lineno, funcname)</code> to <code>(cc, nc, tottime, cumtime, callers)</code>.</p>
+      </div>
+<textarea class="starter">
+import cProfile
+import pstats
+
+def hottest(func):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def slow_part():
+    return sum(i * i for i in range(300_000))
+
+def fast_part():
+    return sum(range(10))
+
+def program():
+    fast_part()
+    slow_part()
+    fast_part()
+
+def test_finds_slow_part():
+    name = hottest(program)
+    assert name in ("slow_part", "<genexpr>"), f"expected slow_part (or its generator expression), got {name!r}"
+
+def test_single_function():
+    def only():
+        total = 0
+        for i in range(200_000):
+            total += i
+        return total
+    def outer():
+        return only()
+    assert hottest(outer) == "only", "the only real work is in only()"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Filter <code>stats.stats.items()</code> with
+        <code>filename != "~"</code> and <code>funcname != func.__name__</code>, then take <code>max</code> by
+        <code>value[2]</code> (tottime).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import cProfile
+import pstats
+
+def hottest(func):
+    profiler = cProfile.Profile()
+    profiler.enable()
+    try:
+        func()
+    finally:
+        profiler.disable()
+    stats = pstats.Stats(profiler).stats
+    candidates = [
+        (values[2], name)
+        for (filename, _, name), values in stats.items()
+        if filename != "~" and name != func.__name__
+    ]
+    return max(candidates)[1]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: make a slow script 10× faster</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">speedrun: profile-driven optimization</span></div>
+      <div class="widget-body">
+        <p>Below is a deliberately slow log-report script. Your job: make it at least <strong>10× faster</strong> on a
+          200,000-line input while producing byte-identical output, and document every step with measurements.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init speedrun
+cd speedrun
+pixi add python=3.14 pytest
+pixi run python gen_logs.py 200000 &gt; access.log      # write a generator with a fixed random seed
+pixi run python -m cProfile -s tottime slow_report.py access.log | head -20
+pixi run python -m pytest -q                            # golden-output test: new == old</code></pre>
+        <h4>The slow script</h4>
+<pre><code class="language-python">import re
+import sys
+
+def parse(line):
+    pattern = re.compile(r'(\S+) \S+ \S+ \[(.*?)\] "(\S+) (\S+)[^"]*" (\d{3}) (\d+)')   # compiled per line
+    m = pattern.match(line)
+    return {"ip": m[1], "time": m[2], "method": m[3], "path": m[4], "status": int(m[5]), "size": int(m[6])}
+
+def report(lines):
+    records = []
+    for line in lines:
+        records = records + [parse(line)]                 # copies the list every time: O(n^2)
+    ips = []
+    for r in records:
+        if r["ip"] not in ips:                            # list membership: O(n^2)
+            ips.append(r["ip"])
+    out = ""
+    for ip in sorted(ips):
+        count = len([r for r in records if r["ip"] == ip])            # rescans all records per IP
+        total = sum([r["size"] for r in records if r["ip"] == ip])
+        errors = len([r for r in records if r["ip"] == ip and r["status"] &gt;= 500])
+        out += f"{ip},{count},{total},{errors}\n"         # string concatenation in a loop
+    return out
+
+if __name__ == "__main__":
+    with open(sys.argv[1]) as f:
+        sys.stdout.write(report(f.readlines()))</code></pre>
+        <h4>Steps</h4>
+        <ol>
+          <li>Write a golden test that saves the slow script's output for a small fixed input.</li>
+          <li>Benchmark the baseline (median of 3 runs with <code>perf_counter</code> or <code>pyperf</code>).</li>
+          <li>Profile; fix the single biggest cost; re-run the test and benchmark; record the result in a table.</li>
+          <li>Repeat until 10× (expect the algorithmic fixes to give most of it), then try one micro-optimization and
+            measure whether it was worth it.</li>
+          <li>Check memory with <code>tracemalloc</code>: can you stream the file instead of <code>readlines()</code>?</li>
+        </ol>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m39-mini">
+          <li>Golden-output test passes for both versions</li>
+          <li>Measured speedup ≥ 10× on 200,000 lines (baseline and final timings recorded)</li>
+          <li>A <code>NOTES.md</code> table lists each change with its before/after time and the profiler evidence</li>
+          <li>Peak memory reported before and after (tracemalloc)</li>
+          <li>The fast version is still readable (no unmeasured micro-optimizations)</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Profile with 3.15's sampling profiler and compare its picture with cProfile's: <code>pixi exec --spec "python=3.15" python -m profiling.sampling run --flamegraph -o flame.html slow_report.py access.log</code>.</li>
+          <li>Process the file in parallel chunks (<a href="m37-concurrency.html">M37</a>) and explain why the gain is smaller than the core count.</li>
+          <li>Try the build on a JIT-enabled interpreter with <code>PYTHON_JIT=1</code> and report the difference.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m39-quiz">
+<script type="application/json">
+{"title": "Performance quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which clock should you use to measure how long a block of code takes?", "options": ["<code>time.time()</code>", "<code>time.perf_counter()</code>", "<code>datetime.now()</code>", "<code>time.process_time()</code> always"], "answer": 1, "explanation": "<p><code>perf_counter</code> is monotonic and high-resolution. <code>time.time()</code> can jump; <code>process_time</code> excludes waiting.</p>"},
+  {"type": "single", "prompt": "Why does <code>timeit</code> report the best (minimum) of several repeats?", "options": ["To flatter your code", "Noise only ever adds time, so the minimum best estimates the code's intrinsic cost", "Because the mean is undefined", "The first run is always fastest"], "answer": 1, "explanation": "<p>Interference (other processes, GC, caches) makes runs slower, never faster. The median is also a good robust statistic for whole-program benchmarks.</p>"},
+  {"type": "single", "prompt": "In cProfile output a function has high <code>cumtime</code> but tiny <code>tottime</code>. What does that tell you?", "options": ["It's the hotspot", "Its own code is cheap; the time is spent in functions it calls", "It is called recursively", "The profiler is broken"], "answer": 1, "explanation": "<p>tottime excludes callees; cumtime includes them. Follow the callees to find the real work.</p>"},
+  {"type": "text", "prompt": "In cProfile's ncalls column, what does <code>15/1</code> indicate? (one word)", "answer": ["recursion", "recursive"], "explanation": "<p>15 total calls but only 1 primitive (non-recursive) call: the function called itself.</p>"},
+  {"type": "multi", "prompt": "Which are advantages of a sampling profiler (like 3.15's Tachyon) over a tracing profiler?", "options": ["Exact call counts", "Low overhead that doesn't distort small functions", "Can attach to an already-running process", "Suitable for production loads"], "answer": [1, 2, 3], "explanation": "<p>Sampling trades exact counts for low, constant overhead and the ability to attach externally.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import sys\na = (\"x\" * 1000, \"y\" * 1000, \"z\" * 1000)\nb = (1, 2, 3)\nprint(sys.getsizeof(a) == sys.getsizeof(b))", "answer": "True", "explanation": "<p><code>getsizeof</code> is shallow: both are tuples of three pointers. The strings' sizes aren't counted.</p>"},
+  {"type": "single", "prompt": "A loop checks <code>if x in big_list</code> for each of n items, where big_list has n items. What's the most valuable fix?", "options": ["Cache <code>big_list</code> in a local variable", "Convert <code>big_list</code> to a set once", "Use a while loop", "Use the JIT"], "answer": 1, "explanation": "<p>That changes O(n²) to O(n). The local-variable trick saves a few percent at best.</p>"},
+  {"type": "multi", "prompt": "Which are valid reasons <code>''.join(parts)</code> beats <code>s += p</code> in a loop?", "options": ["join computes the final size and copies each piece once", "+= may copy the growing string on every iteration", "join is written in C", "Strings are mutable"], "answer": [0, 1, 2], "explanation": "<p>Strings are immutable, so repeated concatenation can be quadratic (CPython sometimes optimizes it in place, but don't rely on it).</p>"},
+  {"type": "single", "prompt": "Which is a correct concern with <code>@lru_cache</code> on an instance method?", "options": ["It doesn't work at all", "The cache holds references to <code>self</code>, keeping instances alive", "It makes the method async", "It disables the GIL"], "answer": 1, "explanation": "<p>Arguments (including <code>self</code>) are cache keys, so instances can't be garbage-collected while cached.</p>"},
+  {"type": "single", "prompt": "How do you turn on 3.14's experimental JIT in an official python.org build?", "options": ["It's always on", "Set the environment variable <code>PYTHON_JIT=1</code>", "<code>import jit</code>", "<code>pixi add jit</code>"], "answer": 1, "explanation": "<p>The JIT is included in official Windows/macOS 3.14 binaries but disabled by default. Check with <code>sys._jit.is_enabled()</code>.</p>"},
+  {"type": "single", "prompt": "What happens to 3.14's incremental garbage collector in 3.15?", "options": ["It becomes the only collector", "It is reverted and the generational GC is restored", "GC is removed", "It becomes multi-threaded"], "answer": 1, "explanation": "<p>3.15 restores the generational collector after memory regressions with the incremental design.</p>"},
+  {"type": "text", "prompt": "Which command-line option prints how long each import takes? (-X ...)", "answer": ["-X importtime", "importtime", "-Ximporttime"], "explanation": "<p><code>python -X importtime</code> writes a tree of per-module import times to stderr.</p>"},
+  {"type": "single", "prompt": "In 3.15, where may <code>lazy import json</code> appear?", "options": ["Anywhere, including inside functions", "Only at module scope", "Only inside classes", "Only in <code>__init__.py</code>"], "answer": 1, "explanation": "<p>PEP 810 lazy imports are module-scope only. Inside functions, a regular import is already deferred until the function runs.</p>"},
+  {"type": "single", "prompt": "Which native option compiles your existing type-annotated Python modules with no new syntax?", "options": ["Cython", "mypyc", "PyO3", "ctypes"], "answer": 1, "explanation": "<p>mypyc uses your type hints to compile modules to C extensions. Cython adds its own declarations; PyO3 is Rust.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Set a target, keep tests green, benchmark, profile, fix the biggest cost, re-measure, stop.</li>
+      <li>Time with <code>perf_counter</code> and <code>timeit</code> (min or median of repeats); use <code>pyperf</code> for serious comparisons.</li>
+      <li><code>cProfile</code>: tottime finds the work, cumtime finds expensive operations; 3.15 adds <code>profiling.tracing</code> and the Tachyon sampling profiler with flame graphs and live mode.</li>
+      <li><code>sys.getsizeof</code> is shallow; <code>tracemalloc</code> finds allocating lines.</li>
+      <li>Algorithms first (sets, dicts, avoiding rescans), then micro-optimizations in hot loops, then caching, vectorization, and native code.</li>
+      <li>3.14's interpreter adds the tail-call interpreter, an opt-in experimental JIT (<code>PYTHON_JIT=1</code>), and incremental GC (reverted in 3.15).</li>
+      <li>For startup time, measure with <code>-X importtime</code>; defer imports, or use 3.15's <code>lazy import</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="Performance">
+<script type="application/json">
+[
+  {"front": "The optimization workflow", "back": "Target → correct and tested → benchmark → profile → fix the biggest cost → re-measure → stop at the target."},
+  {"front": "<code>perf_counter</code> vs <code>time.time</code>", "back": "perf_counter: monotonic high-resolution timer for durations. time.time: wall-clock timestamp that can jump."},
+  {"front": "tottime vs cumtime", "back": "tottime: the function's own code. cumtime: including everything it calls."},
+  {"front": "Tracing vs sampling profiler", "back": "Tracing hooks every call (exact counts, high overhead). Sampling records stacks periodically (low overhead, can attach)."},
+  {"front": "3.15 <code>profiling</code> package", "back": "<code>profiling.tracing</code> (cProfile) and <code>profiling.sampling</code> (Tachyon: run/attach, --flamegraph, --live)."},
+  {"front": "<code>sys.getsizeof</code> caveat", "back": "Shallow: doesn't include referenced objects."},
+  {"front": "tracemalloc workflow", "back": "<code>start()</code>, snapshot, run code, snapshot, <code>compare_to(..., 'lineno')</code>."},
+  {"front": "Biggest lever", "back": "A better algorithm or data structure (e.g. set membership instead of list)."},
+  {"front": "<code>lru_cache</code> rules", "back": "Hashable args, pure functions, bounded size, beware returning mutable results and caching on methods."},
+  {"front": "3.14 JIT", "back": "Experimental copy-and-patch JIT; in official Windows/macOS builds, off by default; <code>PYTHON_JIT=1</code>; check <code>sys._jit</code>."},
+  {"front": "Tail-call interpreter", "back": "3.14 build option (Clang 19+): bytecode handlers as tail-calling C functions for faster dispatch."},
+  {"front": "<code>lazy import</code>", "back": "3.15 (PEP 810): module-scope imports loaded on first use; measure with <code>-X importtime</code>."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/profile.html">The Python profilers</a>, <a href="https://docs.python.org/3/library/timeit.html"><code>timeit</code></a>, <a href="https://docs.python.org/3/library/tracemalloc.html"><code>tracemalloc</code></a></li>
+      <li><a href="https://peps.python.org/pep-0799/">PEP 799: a dedicated profiling package</a> and <a href="https://peps.python.org/pep-0810/">PEP 810: explicit lazy imports</a></li>
+      <li><a href="https://docs.python.org/3/whatsnew/3.14.html">What's New in Python 3.14</a> (tail-call interpreter, JIT, incremental GC)</li>
+      <li><a href="https://pyperf.readthedocs.io/">pyperf</a> and the <a href="https://github.com/python/pyperformance">pyperformance</a> benchmark suite</li>
+      <li>Next: <a href="m40-stdlib.html">M40 Standard Library Power Tools</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

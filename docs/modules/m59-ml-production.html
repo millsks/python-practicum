@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M59 · ML in Production · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m59">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Module 59</p>
+    <h1>ML in Production</h1>
+    <p class="lede">A model in a notebook is a prototype. A model in production is software that other systems depend on:
+      it must be reproducible, versioned, tested, served reliably, watched for decay, and fair to the people it affects.
+      This module covers the engineering around the model, which is where most real ML work happens.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m56-scikit-learn.html">M56</a>, <a href="m42-tooling.html">M42</a>, <a href="m45-web-apis.html">M45</a></span></div>
+    <ul class="objectives">
+      <li>Draw the ML lifecycle and explain why it is a loop, not a line</li>
+      <li>Make training reproducible with seeds, <code>pixi.lock</code>, and data fingerprints, and track experiments</li>
+      <li>Evaluate beyond accuracy: calibration, subgroup slices, and basic fairness metrics</li>
+      <li>Persist and version models with the metadata needed to trust them later</li>
+      <li>Choose batch or online serving and sketch a FastAPI prediction endpoint with schema validation</li>
+      <li>Detect data drift with the Kolmogorov-Smirnov test and the population stability index (PSI), and distinguish data drift from concept drift</li>
+      <li>Test ML code with unit tests, golden datasets, and behavioral checks, and apply responsible-AI practices</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="lifecycle">
+    <h2>The ML lifecycle</h2>
+    <p>Industry surveys and experience agree on an uncomfortable fact: the model-fitting code is a small fraction of a
+      production ML system. Around it sit data collection, validation, feature pipelines, serving infrastructure,
+      monitoring, and the processes to retrain safely. The work is a <strong>loop</strong>: once deployed, the world
+      changes, monitoring notices, and you go around again.</p>
+    <pre class="mermaid">
+flowchart LR
+  A[Frame the problem<br/>metric + baseline] --> B[Collect &amp; validate data]
+  B --> C[Features &amp; training<br/>pipelines]
+  C --> D[Evaluate<br/>offline + slices]
+  D -->|good enough?| E[Package &amp; version]
+  D -->|no| C
+  E --> F[Deploy<br/>batch or online]
+  F --> G[Monitor<br/>data, predictions, outcomes]
+  G -->|drift or decay| B
+  G -->|business change| A
+    </pre>
+    <ul>
+      <li><strong>Frame the problem</strong>: what decision does the prediction drive, what metric reflects the business
+        goal, and what simple baseline (a rule, last week's average) must you beat?</li>
+      <li><strong>Data</strong>: where it comes from, how labels are produced, what is allowed (privacy, consent).</li>
+      <li><strong>Train and evaluate</strong>: M55–M58, plus the evaluation in this module.</li>
+      <li><strong>Package, deploy, monitor</strong>: the rest of this module.</li>
+    </ul>
+    <aside class="callout note"><p>Browser cells here use NumPy, SciPy, pandas, and scikit-learn (the first import takes
+      several seconds). Web frameworks, structlog, and MLflow are not in the browser, so those cells are marked to run
+      locally.</p></aside>
+    <p><strong>Remember:</strong> ML in production is a loop of data → model → deployment → monitoring → back to data.</p>
+  </section>
+
+  <section class="lesson-section" id="reproducibility">
+    <h2>Reproducibility</h2>
+    <p>"It worked on my laptop last month" is not good enough when a regulator, a colleague, or you in six months asks
+      why the model made a decision. A training run is <strong>reproducible</strong> when the same code, data, environment,
+      and configuration give the same model. Control all four:</p>
+    <ul>
+      <li><strong>Randomness</strong>: pass explicit seeds everywhere: <code>np.random.default_rng(seed)</code>,
+        <code>random_state=seed</code> in scikit-learn, <code>torch.manual_seed(seed)</code>. Avoid global random state.
+        (Some GPU operations are nondeterministic even with seeds; frameworks document flags for deterministic mode.)</li>
+      <li><strong>Environment</strong>: <code>pixi.lock</code> pins the exact version and build of every package, Python
+        included, for every platform. Commit it. <code>pixi install --locked</code> fails rather than silently changing
+        versions, which is what you want in CI and in production images.</li>
+      <li><strong>Code</strong>: the git commit hash of the training code.</li>
+      <li><strong>Data</strong>: data changes under you. Record a fingerprint (a hash of the file or of a canonical
+        serialization) and keep immutable, dated snapshots. Tools such as DVC or lakeFS version large datasets alongside
+        git; a content hash in your run metadata is the minimum.</li>
+    </ul>
+    <div class="runnable" data-title="Fingerprint the data and the config">
+<textarea>
+import hashlib
+import json
+import numpy as np
+import pandas as pd
+
+def fingerprint_frame(df: pd.DataFrame) -> str:
+    """Stable hash of a DataFrame's contents (column order and row order matter)."""
+    row_hashes = pd.util.hash_pandas_object(df, index=False).to_numpy()
+    return hashlib.sha256(row_hashes.tobytes() + ",".join(df.columns).encode()).hexdigest()[:16]
+
+rng = np.random.default_rng(42)
+df = pd.DataFrame({"age": rng.integers(18, 80, 1000), "income": rng.normal(50, 12, 1000).round(1)})
+config = {"model": "LogisticRegression", "C": 0.3, "seed": 42, "features": ["age", "income"]}
+
+run = {
+    "data_sha": fingerprint_frame(df),
+    "config_sha": hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()[:16],
+    "config": config,
+}
+print(json.dumps(run, indent=2))
+
+df.loc[0, "income"] += 0.1                 # one tiny edit...
+print("after editing one cell:", fingerprint_frame(df))
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>A reproducible training project typically has <code>[tasks] train = "python -m
+      churn.train --config configs/v3.toml"</code> in <code>pixi.toml</code>, a committed <code>pixi.lock</code>, and a CI
+      job that runs <code>pixi run --locked train</code> on a small sample. Anyone can then reproduce a run with one
+      command.</p></aside>
+    <h3>Experiment tracking</h3>
+    <p>You will train dozens of variants. An <strong>experiment tracker</strong> records each run's parameters, metrics,
+      artifacts (plots, the model file), code version, and data fingerprint, and lets you compare runs in a UI.
+      <strong>MLflow</strong> is a widely used open-source option (others include Weights &amp; Biases and Neptune). Add it
+      to a project with <code>pixi add mlflow</code>; the core API is a few calls:</p>
+    <div class="runnable" data-title="Tracking a run with MLflow" data-local="MLflow is not in the browser runtime; run locally after `pixi add mlflow`, then view runs with `pixi run mlflow ui`.">
+<textarea>
+import mlflow
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_breast_cancer(return_X_y=True)
+mlflow.set_experiment("breast-cancer")
+for C in (0.01, 0.1, 1.0):
+    with mlflow.start_run(run_name=f"logreg-C{C}"):
+        model = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=2000))
+        auc = cross_val_score(model, X, y, cv=5, scoring="roc_auc").mean()
+        mlflow.log_params({"C": C, "model": "logreg"})
+        mlflow.log_metric("cv_roc_auc", auc)
+</textarea>
+    </div>
+    <p>Even without a tracker, append one JSON line per run (parameters, metrics, data hash, git commit) to a file. That
+      habit alone answers most "which run produced this model?" questions:</p>
+    <div class="runnable" data-title="A minimal JSON-lines experiment log">
+<textarea>
+import json
+from pathlib import Path
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_breast_cancer(return_X_y=True)
+log = Path("runs.jsonl")
+log.unlink(missing_ok=True)
+for C in (0.01, 0.1, 1.0, 10.0):
+    model = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=2000))
+    auc = cross_val_score(model, X, y, cv=5, scoring="roc_auc").mean()
+    with log.open("a") as f:
+        f.write(json.dumps({"run": f"logreg-C{C}", "params": {"C": C}, "cv_roc_auc": round(float(auc), 4)}) + "\n")
+
+runs = [json.loads(line) for line in log.read_text().splitlines()]
+best = max(runs, key=lambda r: r["cv_roc_auc"])
+for r in runs:
+    print(r)
+print("best run:", best["run"])
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> seeds + <code>pixi.lock</code> + git commit + data fingerprint = a reproducible run;
+      track every run.</p>
+  </section>
+
+  <section class="lesson-section" id="evaluation">
+    <h2>Evaluation beyond accuracy</h2>
+    <h3>Calibration</h3>
+    <p>When a model says "70% chance of default", do 70% of such customers actually default? If so, the model is
+      <strong>calibrated</strong>. Calibration matters whenever probabilities feed a decision (pricing, triage, expected
+      revenue). A <strong>reliability diagram</strong> bins predictions by predicted probability and plots the observed
+      frequency in each bin: a calibrated model follows the diagonal. Two summary numbers: the <strong>Brier score</strong>
+      (mean squared error of probabilities; lower is better) and the <strong>expected calibration error</strong> (the
+      average gap between confidence and frequency, weighted by bin size). Logistic regression tends to be well
+      calibrated; tree ensembles and naive Bayes often are not. <code>CalibratedClassifierCV</code> fixes a model's
+      probabilities with sigmoid (Platt) or isotonic regression fitted on held-out folds.</p>
+    <div class="runnable" data-title="Reliability diagram and recalibration">
+<textarea>
+import matplotlib.pyplot as plt
+from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
+
+X, y = make_classification(n_samples=4000, n_features=20, n_informative=5, n_redundant=5, random_state=0)
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.5, random_state=0)
+models = {
+    "logistic": LogisticRegression(max_iter=1000),
+    "naive Bayes": GaussianNB(),
+    "random forest": RandomForestClassifier(n_estimators=100, random_state=0),
+    "naive Bayes + isotonic": CalibratedClassifierCV(GaussianNB(), method="isotonic", cv=5),
+}
+plt.plot([0, 1], [0, 1], "k:", label="perfectly calibrated")
+for name, model in models.items():
+    proba = model.fit(X_tr, y_tr).predict_proba(X_te)[:, 1]
+    frac_pos, mean_pred = calibration_curve(y_te, proba, n_bins=10)
+    plt.plot(mean_pred, frac_pos, "o-", label=f"{name} (Brier {brier_score_loss(y_te, proba):.3f})")
+plt.xlabel("mean predicted probability"); plt.ylabel("observed fraction of positives"); plt.legend(fontsize=8)
+plt.title("Reliability diagram")
+</textarea>
+    </div>
+    <h3>Slicing by subgroup</h3>
+    <p>An overall metric can hide a model that works well for most people and badly for some. <strong>Slice</strong>
+      your evaluation by meaningful groups (region, device, age band, new vs returning customers) and compare. Large gaps
+      are bugs to investigate: often a group is underrepresented in training data, or a feature means something different
+      for it.</p>
+    <div class="runnable" data-title="Metrics per slice with pandas">
+<textarea>
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(0)
+n = 3000
+df = pd.DataFrame({
+    "region": rng.choice(["north", "south", "east"], n, p=[0.6, 0.3, 0.1]),
+    "y_true": rng.integers(0, 2, n),
+})
+# Simulate a model that is worse on the small 'east' region
+error_rate = df.region.map({"north": 0.10, "south": 0.15, "east": 0.35})
+flip = rng.random(n) < error_rate
+df["y_pred"] = np.where(flip, 1 - df.y_true, df.y_true)
+
+def slice_metrics(g: pd.DataFrame) -> pd.Series:
+    tp = ((g.y_pred == 1) & (g.y_true == 1)).sum()
+    return pd.Series({
+        "n": len(g),
+        "accuracy": (g.y_pred == g.y_true).mean(),
+        "recall": tp / max((g.y_true == 1).sum(), 1),
+        "positive_rate": (g.y_pred == 1).mean(),
+    })
+
+print("overall accuracy:", round((df.y_pred == df.y_true).mean(), 3))
+print(df.groupby("region")[["y_true", "y_pred"]].apply(slice_metrics).astype({"n": int}).round(3))
+</textarea>
+    </div>
+    <h3>Fairness checks</h3>
+    <p>When predictions affect people (loans, hiring, healthcare), check whether outcomes differ across protected groups.
+      Two common, simple metrics compare groups A and B:</p>
+    <ul>
+      <li><strong>Demographic parity difference</strong>: difference in the rate of positive predictions
+        (<code>P(ŷ = 1 | A) − P(ŷ = 1 | B)</code>).</li>
+      <li><strong>Equal opportunity difference</strong>: difference in recall (true-positive rate) between groups:
+        qualified people should be approved at the same rate regardless of group.</li>
+    </ul>
+    <p>These criteria can conflict with each other and with accuracy, and no metric settles what is fair; that is a
+      decision for people, informed by law and context. Removing the protected attribute from the features does not
+      guarantee fairness, because other features (postcode, for example) can act as proxies. Libraries such as Fairlearn
+      provide these metrics and mitigation methods.</p>
+    <p><strong>Remember:</strong> check calibration when probabilities matter, slice metrics by subgroup, and measure
+      fairness gaps explicitly; decide trade-offs with stakeholders.</p>
+  </section>
+
+  <section class="lesson-section" id="persistence">
+    <h2>Model persistence and versioning</h2>
+    <p>M56 showed how to save a fitted pipeline with joblib or skops. In production you also need to know, for any
+      deployed model: what it is, how it was made, and whether it is safe to load. Save a <strong>bundle</strong>: the
+      model file plus a metadata file with the model version, training date, data fingerprint, code commit, library
+      versions, input schema, evaluation metrics, and decision threshold. Give models version numbers (for example
+      <code>churn-model 3.2.0</code>, where a major bump means the input schema changed).</p>
+    <p>A <strong>model registry</strong> (MLflow's, or a cloud provider's) stores these bundles and tracks their stage:
+      "staging", "production", "archived". Promotion to production should be a reviewed, reversible step, and rollback to
+      the previous version should be one command.</p>
+    <div class="runnable" data-title="Save a model bundle with metadata">
+<textarea>
+import hashlib
+import json
+import platform
+from datetime import datetime, timezone
+from pathlib import Path
+
+import joblib
+import sklearn
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+data = load_breast_cancer(as_frame=True)
+X_tr, X_te, y_tr, y_te = train_test_split(data.data, data.target, random_state=0, stratify=data.target)
+model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000)).fit(X_tr, y_tr)
+
+out = Path("bundle"); out.mkdir(exist_ok=True)
+joblib.dump(model, out / "model.joblib")
+metadata = {
+    "name": "tumor-classifier", "version": "1.0.0",
+    "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "python": platform.python_version(), "sklearn": sklearn.__version__,
+    "features": list(X_tr.columns), "threshold": 0.5,
+    "metrics": {"test_roc_auc": round(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1]), 4)},
+    "model_sha256": hashlib.sha256((out / "model.joblib").read_bytes()).hexdigest(),
+}
+(out / "metadata.json").write_text(json.dumps(metadata, indent=2))
+shown = {k: v for k, v in metadata.items() if k != "features"} | {"features": f"{len(metadata['features'])} columns"}
+print(json.dumps(shown, indent=2))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a model is a file plus metadata; version it, register it, and make rollback easy.</p>
+  </section>
+
+  <section class="lesson-section" id="serving">
+    <h2>Serving a model: batch vs online</h2>
+    <div class="two-col">
+      <div>
+        <h4>Batch prediction</h4>
+        <p>A scheduled job scores many rows at once (every night, score all customers for churn risk) and writes results
+          to a table that other systems read. Simple, cheap, easy to retry and audit. Predictions can be hours old.</p>
+      </div>
+      <div>
+        <h4>Online prediction</h4>
+        <p>A service answers one request at a time, in milliseconds (score this transaction for fraud <em>now</em>).
+          Needs low latency, high availability, input validation, and features that are available at request time.</p>
+      </div>
+    </div>
+    <p>Prefer batch unless the decision truly needs fresh, per-request predictions. For online serving, a small web API
+      is the usual shape. Using FastAPI from <a href="m45-web-apis.html">M45</a>, the model loads <em>once</em> at
+      startup, a Pydantic model validates every request against the input schema, and each prediction is logged as a
+      structured event with structlog (not <code>print</code>) so it can be monitored later.</p>
+    <div class="runnable" data-title="A prediction endpoint with FastAPI" data-local="FastAPI, uvicorn, and structlog are not in the browser; run locally after `pixi add fastapi uvicorn structlog`, then `pixi run uvicorn serve:app`.">
+<textarea>
+# serve.py
+from contextlib import asynccontextmanager
+from pathlib import Path
+import json
+
+import joblib
+import pandas as pd
+import structlog
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+log = structlog.get_logger()
+BUNDLE = Path("bundle")
+state: dict = {}
+
+class Customer(BaseModel):
+    tenure_months: int = Field(ge=0, le=600)
+    monthly_spend: float = Field(ge=0)
+    support_calls: int = Field(ge=0)
+    plan: str
+
+class Prediction(BaseModel):
+    churn_probability: float
+    churn: bool
+    model_version: str
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    state["model"] = joblib.load(BUNDLE / "model.joblib")        # a file we produced and trust
+    state["meta"] = json.loads((BUNDLE / "metadata.json").read_text())
+    log.info("model_loaded", version=state["meta"]["version"])
+    yield
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/predict", response_model=Prediction)
+def predict(customer: Customer) -> Prediction:
+    row = pd.DataFrame([customer.model_dump()])
+    proba = float(state["model"].predict_proba(row)[0, 1])
+    threshold = state["meta"]["threshold"]
+    log.info("prediction", proba=round(proba, 4), plan=customer.plan, version=state["meta"]["version"])
+    return Prediction(churn_probability=proba, churn=proba >= threshold, model_version=state["meta"]["version"])
+</textarea>
+    </div>
+    <p>Invalid input (a negative tenure, a missing field) is rejected by Pydantic with a 422 response before it reaches
+      the model. The same validation idea, written by hand, is a good exercise and appears in this module's practice.</p>
+    <aside class="callout warn"><p><strong>Training/serving skew</strong> is a classic production bug: the features at
+      serving time are computed differently from training (a different unit, a missing default, a newer category list).
+      Shipping the whole fitted Pipeline, preprocessing included, and validating inputs against the training schema
+      prevents most of it.</p></aside>
+    <p><strong>Remember:</strong> batch when you can, online when you must; load once, validate every input, log every
+      prediction as a structured event.</p>
+  </section>
+
+  <section class="lesson-section" id="drift">
+    <h2>Monitoring, data drift, and concept drift</h2>
+    <p>Deployed models decay because the world changes. Two kinds of change:</p>
+    <ul>
+      <li><strong>Data drift</strong> (covariate shift): the distribution of inputs changes. A marketing campaign brings
+        younger customers; a sensor is recalibrated. The model may now be extrapolating.</li>
+      <li><strong>Concept drift</strong>: the relationship between inputs and the target changes. Fraudsters adopt a new
+        trick; a pandemic changes what "normal" spending looks like. The same inputs now mean different outcomes.</li>
+    </ul>
+    <p>Concept drift shows up only when true outcomes (labels) arrive, which can take weeks. Data drift can be detected
+      immediately by comparing recent inputs with a <strong>reference</strong> window (usually the training data). So
+      production monitoring tracks: input distributions per feature, the prediction distribution, missing-value and
+      error rates, latency, and, once labels arrive, the real metric.</p>
+    <h3>Two drift tests</h3>
+    <ul>
+      <li>The <strong>two-sample Kolmogorov-Smirnov (KS) test</strong> (<code>scipy.stats.ks_2samp</code>) compares two
+        samples of a numeric feature. Its statistic is the largest vertical gap between the two empirical cumulative
+        distribution functions; a small p-value says "these probably come from different distributions". With very large
+        samples, even trivial differences become "significant", so also look at the statistic's size.</li>
+      <li>The <strong>population stability index (PSI)</strong> bins the reference into (say) 10 quantile bins and compares
+        the fraction of reference and current data in each: <code>PSI = Σ (cur − ref) · ln(cur / ref)</code>. A common
+        rule of thumb: below 0.1 stable, 0.1–0.25 moderate shift, above 0.25 significant shift. Popular in credit
+        scoring because it is simple to compute and explain.</li>
+    </ul>
+    <div class="runnable" data-title="Detecting drift with KS and PSI">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import ks_2samp
+
+def psi(reference, current, bins=10, eps=1e-6):
+    edges = np.quantile(reference, np.linspace(0, 1, bins + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    ref = np.histogram(reference, edges)[0] / len(reference)
+    cur = np.histogram(current, edges)[0] / len(current)
+    ref, cur = np.clip(ref, eps, None), np.clip(cur, eps, None)
+    return float(np.sum((cur - ref) * np.log(cur / ref)))
+
+rng = np.random.default_rng(0)
+reference = rng.normal(40, 10, 5000)                      # ages at training time
+scenarios = {
+    "same distribution": rng.normal(40, 10, 2000),
+    "mean shift +3": rng.normal(43, 10, 2000),
+    "younger campaign": np.concatenate([rng.normal(40, 10, 1400), rng.normal(24, 4, 600)]),
+}
+fig, axes = plt.subplots(1, 3, figsize=(12, 3.2), sharey=True)
+for ax, (name, current) in zip(axes, scenarios.items()):
+    stat, p = ks_2samp(reference, current)
+    value = psi(reference, current)
+    print(f"{name:18s} KS={stat:.3f} p={p:.2g}  PSI={value:.3f}")
+    ax.hist(reference, bins=40, density=True, alpha=0.5, label="reference")
+    ax.hist(current, bins=40, density=True, alpha=0.5, label="current")
+    ax.set_title(f"{name}\nPSI {value:.2f}", fontsize=10)
+axes[0].legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: is identical data drifted?" data-predict>
+<textarea>
+import numpy as np
+from scipy.stats import ks_2samp
+x = np.arange(100.0)
+stat, p = ks_2samp(x, x)
+print(stat, p)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Alert on drift, but do not retrain blindly. Investigate first: a drift alert may be a
+      broken upstream pipeline (a column suddenly all zeros) rather than a changing world. Automated retraining needs the
+      same evaluation gates as the first release, plus a comparison against the current production model.</p></aside>
+    <p><strong>Remember:</strong> data drift = inputs change (detect now with KS/PSI); concept drift = the input-target
+      relationship changes (detect when labels arrive); monitor inputs, outputs, and outcomes.</p>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Testing ML code</h2>
+    <p>ML systems need ordinary software tests (<a href="m17-testing.html">M17</a>) plus tests specific to data and
+      models. Run them with <code>pixi run pytest</code> in CI like any other project.</p>
+    <div class="tabs">
+      <div class="tab" data-label="Feature unit tests">
+<pre><code class="language-python"># tests/unit/test_features.py
+import pandas as pd
+from churn.features import add_tenure_band
+
+def test_tenure_band_edges():
+    df = pd.DataFrame({"tenure_months": [0, 11, 12, 35, 36]})
+    out = add_tenure_band(df)
+    assert out["tenure_band"].tolist() == ["new", "new", "established", "established", "loyal"]
+
+def test_does_not_mutate_input():
+    df = pd.DataFrame({"tenure_months": [5]})
+    add_tenure_band(df)
+    assert list(df.columns) == ["tenure_months"]</code></pre>
+      </div>
+      <div class="tab" data-label="Golden dataset">
+<pre><code class="language-python"># tests/integration/test_golden.py
+import json
+from pathlib import Path
+
+import pandas as pd
+import pytest
+from churn.model import load_bundle
+
+GOLDEN = Path(__file__).parent / "golden"
+
+@pytest.mark.integration
+def test_predictions_match_golden_file():
+    """A small fixed input set whose expected outputs were reviewed and committed."""
+    model = load_bundle("bundle/")
+    inputs = pd.read_csv(GOLDEN / "inputs.csv")
+    expected = json.loads((GOLDEN / "expected.json").read_text())
+    got = model.predict_proba(inputs)[:, 1]
+    assert got == pytest.approx(expected["proba"], abs=1e-6)</code></pre>
+      </div>
+      <div class="tab" data-label="Behavioral checks">
+<pre><code class="language-python"># tests/integration/test_behavior.py
+import pytest
+from churn.model import load_bundle
+
+@pytest.mark.integration
+def test_more_support_calls_never_lowers_risk(sample_customer):
+    model = load_bundle("bundle/")
+    low = model.predict_proba(sample_customer(support_calls=0))[0, 1]
+    high = model.predict_proba(sample_customer(support_calls=8))[0, 1]
+    assert high &gt;= low, "directional expectation agreed with the business"
+
+@pytest.mark.integration
+def test_minimum_quality(holdout):
+    model = load_bundle("bundle/")
+    assert holdout.roc_auc(model) &gt;= 0.80, "release gate: never ship below the agreed floor"</code></pre>
+      </div>
+    </div>
+    <ul>
+      <li><strong>Unit tests for features</strong>: pure functions with small hand-made DataFrames, including edge cases
+        (zero, missing, unseen categories).</li>
+      <li><strong>Data validation tests</strong>: schema, ranges, null rates, uniqueness of keys, run on every new batch
+        (libraries like pandera or Great Expectations help).</li>
+      <li><strong>Golden datasets</strong>: a small committed input file with reviewed expected outputs; catches accidental
+        changes to preprocessing or model loading.</li>
+      <li><strong>Behavioral tests</strong>: invariance (changing a name should not change a credit score), directional
+        expectations, and minimum-performance gates on a frozen holdout.</li>
+      <li><strong>Training smoke test</strong>: train on 200 rows in CI to prove the pipeline runs end to end.</li>
+    </ul>
+    <p><strong>Remember:</strong> test features like functions, data like inputs, and models like behavior; gate releases
+      on a frozen holdout.</p>
+  </section>
+
+  <section class="lesson-section" id="responsible-ai">
+    <h2>Responsible AI</h2>
+    <p>Models make or shape decisions about people. Responsible practice is part of the engineering, not an
+      afterthought:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Purpose and harm</h4><p>Write down who is affected, how a wrong prediction hurts them, and
+        whether ML is appropriate at all. Some decisions need a human.</p></div>
+      <div class="card"><h4>Data and privacy</h4><p>Collect only what you need, with consent and a legal basis; protect
+        personal data; know where training data came from and whether you may use it.</p></div>
+      <div class="card"><h4>Fairness</h4><p>Measure performance and outcome rates across groups (this module's slices),
+        investigate gaps, and document the trade-offs you chose.</p></div>
+      <div class="card"><h4>Transparency</h4><p>Publish a <strong>model card</strong>: intended use, training data,
+        metrics overall and by slice, limitations, and contacts. Explain individual decisions where people are
+        affected.</p></div>
+      <div class="card"><h4>Human oversight</h4><p>Provide a way to appeal or override, route low-confidence cases to
+        people, and keep an audit log of predictions.</p></div>
+      <div class="card"><h4>Security</h4><p>Validate inputs, never load untrusted model files (M56), and consider abuse:
+        adversarial inputs, data poisoning, model extraction.</p></div>
+    </div>
+    <aside class="callout think"><p>A hospital wants a model to prioritize patients for follow-up calls. Its training label
+      is "past healthcare spending" as a stand-in for "health need". Which group could this systematically disadvantage,
+      and why? (Groups who historically had less access to care spend less at the same level of need, so a model trained
+      on spending under-prioritizes them. The choice of label is itself a fairness decision.)</p></aside>
+    <p><strong>Remember:</strong> define harm, protect data, measure fairness, document with model cards, keep humans in
+      the loop.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>NumPy, SciPy, and pandas are available.</p>
+
+    <div class="exercise" data-id="m59-e1" data-title="Population stability index">
+      <div class="exercise-prompt">
+        <p>Write <code>psi(reference, current, bins=10)</code>. Use quantiles of <code>reference</code> as bin edges
+          (<code>np.quantile(reference, np.linspace(0, 1, bins + 1))</code>), replace the first and last edges with
+          <code>-inf</code> and <code>inf</code>, compute the fraction of each sample per bin, clip fractions to at least
+          <code>1e-6</code>, and return <code>Σ (cur − ref) · ln(cur / ref)</code> as a float.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def psi(reference, current, bins=10):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+rng = np.random.default_rng(0)
+ref = rng.normal(0, 1, 20000)
+
+def test_same_distribution_is_small():
+    value = psi(ref, rng.normal(0, 1, 20000))
+    assert isinstance(value, float), "return a float"
+    assert value < 0.01, f"samples from the same distribution should have PSI near 0, got {value:.4f}"
+
+def test_shift_is_large():
+    assert psi(ref, rng.normal(1, 1, 20000)) > 0.25, "a one-standard-deviation shift is a significant change"
+
+def test_non_negative_and_ordered():
+    small = psi(ref, rng.normal(0.2, 1, 20000))
+    big = psi(ref, rng.normal(0.6, 1, 20000))
+    assert 0 <= small < big, "a bigger shift must give a bigger PSI"
+
+def test_empty_bins_do_not_crash():
+    value = psi(ref, np.full(100, 10.0))
+    assert np.isfinite(value) and value > 1, "all current values in one bin -> huge but finite PSI"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>np.histogram(x, edges)[0] / len(x)</code> gives the fractions;
+        <code>np.clip(frac, 1e-6, None)</code> avoids <code>log(0)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def psi(reference, current, bins=10):
+    edges = np.quantile(reference, np.linspace(0, 1, bins + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    ref = np.clip(np.histogram(reference, edges)[0] / len(reference), 1e-6, None)
+    cur = np.clip(np.histogram(current, edges)[0] / len(current), 1e-6, None)
+    return float(np.sum((cur - ref) * np.log(cur / ref)))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m59-e2" data-title="Validate a prediction request">
+      <div class="exercise-prompt">
+        <p>Write <code>validate(record, schema)</code> that returns a list of error strings (empty when valid). The schema
+          maps each field name to a dict with <code>"type"</code> (<code>int</code>, <code>float</code>, or
+          <code>str</code>) and optionally <code>"min"</code>, <code>"max"</code> (numbers) or <code>"allowed"</code> (a
+          set of strings). Rules: every schema field is required (<code>"missing: name"</code>); unknown fields are errors
+          (<code>"unexpected: name"</code>); a wrong type gives <code>"type: name"</code> (an <code>int</code> is acceptable
+          for a <code>float</code> field, but <code>bool</code> is never a number); out-of-range gives
+          <code>"range: name"</code>; a string not in <code>allowed</code> gives <code>"value: name"</code>. Report fields in
+          schema order, then unexpected fields in sorted order.</p>
+      </div>
+<textarea class="starter">
+def validate(record, schema):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+SCHEMA = {
+    "tenure_months": {"type": int, "min": 0, "max": 600},
+    "monthly_spend": {"type": float, "min": 0},
+    "plan": {"type": str, "allowed": {"basic", "pro", "team"}},
+}
+
+def test_valid():
+    assert validate({"tenure_months": 12, "monthly_spend": 30, "plan": "pro"}, SCHEMA) == [], "an int is fine for a float field"
+
+def test_missing_and_unexpected():
+    errors = validate({"tenure_months": 3, "plan": "basic", "zzz": 1, "aaa": 2}, SCHEMA)
+    assert errors == ["missing: monthly_spend", "unexpected: aaa", "unexpected: zzz"], f"got {errors}"
+
+def test_type_range_value():
+    errors = validate({"tenure_months": -1, "monthly_spend": "lots", "plan": "gold"}, SCHEMA)
+    assert errors == ["range: tenure_months", "type: monthly_spend", "value: plan"], f"got {errors}"
+
+def test_bool_is_not_a_number():
+    errors = validate({"tenure_months": True, "monthly_spend": 1.0, "plan": "team"}, SCHEMA)
+    assert errors == ["type: tenure_months"], "True must not pass as an int"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check type first and <code>continue</code> on a type error so you do not
+        compare a string with a number. For floats accept <code>(int, float)</code>; reject <code>bool</code> explicitly
+        because <code>isinstance(True, int)</code> is <code>True</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def validate(record, schema):
+    errors = []
+    for name, rule in schema.items():
+        if name not in record:
+            errors.append(f"missing: {name}")
+            continue
+        value = record[name]
+        expected = rule["type"]
+        accepted = (int, float) if expected is float else (expected,)
+        if isinstance(value, bool) or not isinstance(value, accepted):
+            errors.append(f"type: {name}")
+            continue
+        if "min" in rule and value &lt; rule["min"] or "max" in rule and value &gt; rule["max"]:
+            errors.append(f"range: {name}")
+        if "allowed" in rule and value not in rule["allowed"]:
+            errors.append(f"value: {name}")
+    errors.extend(f"unexpected: {name}" for name in sorted(set(record) - set(schema)))
+    return errors</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m59-e3" data-title="Metrics by subgroup">
+      <div class="exercise-prompt">
+        <p>Write <code>metrics_by_group(y_true, y_pred, groups)</code> returning a dict mapping each group value to a dict
+          with <code>"n"</code> (int), <code>"accuracy"</code>, <code>"recall"</code> (true-positive rate; <code>0.0</code>
+          if the group has no positives), and <code>"positive_rate"</code> (fraction predicted 1), all floats. Then write
+          <code>max_gap(by_group, metric)</code> returning the largest minus the smallest value of that metric across
+          groups.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def metrics_by_group(y_true, y_pred, groups):
+    ...
+
+def max_gap(by_group, metric):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+y_true = [1, 0, 1, 1, 0, 1, 0, 0]
+y_pred = [1, 0, 0, 1, 1, 0, 0, 0]
+groups = ["a", "a", "a", "a", "b", "b", "b", "b"]
+
+def test_group_a():
+    m = metrics_by_group(y_true, y_pred, groups)["a"]
+    assert m["n"] == 4 and abs(m["accuracy"] - 0.75) < 1e-9, f"group a: 3 of 4 correct, got {m}"
+    assert abs(m["recall"] - 2 / 3) < 1e-9, "group a caught 2 of 3 positives"
+    assert abs(m["positive_rate"] - 0.5) < 1e-9, "group a: 2 of 4 predicted positive"
+
+def test_group_b():
+    m = metrics_by_group(y_true, y_pred, groups)["b"]
+    assert abs(m["accuracy"] - 0.5) < 1e-9 and m["recall"] == 0.0, f"group b: 2 of 4 correct, recall 0, got {m}"
+
+def test_gap():
+    by = metrics_by_group(y_true, y_pred, groups)
+    assert abs(max_gap(by, "recall") - 2 / 3) < 1e-9, "equal-opportunity gap = 2/3 - 0"
+    assert abs(max_gap(by, "positive_rate") - 0.25) < 1e-9, "demographic-parity gap = 0.5 - 0.25"
+
+def test_no_positives():
+    by = metrics_by_group([0, 0], [0, 1], ["x", "x"])
+    assert by["x"]["recall"] == 0.0, "no positives in the group -> recall 0.0"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Convert to arrays, loop over <code>np.unique(groups)</code>, and build a
+        boolean mask per group.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def metrics_by_group(y_true, y_pred, groups):
+    t, p, g = np.asarray(y_true), np.asarray(y_pred), np.asarray(groups)
+    result = {}
+    for value in np.unique(g):
+        m = g == value
+        positives = t[m] == 1
+        result[value.item()] = {
+            "n": int(m.sum()),
+            "accuracy": float(np.mean(t[m] == p[m])),
+            "recall": float(np.mean(p[m][positives] == 1)) if positives.any() else 0.0,
+            "positive_rate": float(np.mean(p[m] == 1)),
+        }
+    return result
+
+def max_gap(by_group, metric):
+    values = [stats[metric] for stats in by_group.values()]
+    return max(values) - min(values)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m59-e4" data-title="A KS drift report">
+      <div class="exercise-prompt">
+        <p>Write <code>drift_report(reference, current, alpha=0.01)</code> where both arguments are dicts mapping feature
+          names to 1-D arrays. For every feature in <code>reference</code>, run <code>scipy.stats.ks_2samp</code> and
+          return a dict mapping the name to <code>{"statistic": float, "p_value": float, "drifted": bool}</code> where
+          <code>drifted</code> is <code>p_value &lt; alpha</code>.</p>
+      </div>
+<textarea class="starter">
+from scipy.stats import ks_2samp
+
+def drift_report(reference, current, alpha=0.01):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+rng = np.random.default_rng(1)
+ref = {"age": rng.normal(40, 10, 3000), "income": rng.normal(50, 5, 3000)}
+cur = {"age": rng.normal(40, 10, 3000), "income": rng.normal(56, 5, 3000)}
+
+def test_flags_only_shifted_feature():
+    report = drift_report(ref, cur)
+    assert set(report) == {"age", "income"}, "one entry per reference feature"
+    assert report["income"]["drifted"] is True, "income's mean moved by more than one standard deviation"
+    assert report["age"]["drifted"] is False, "age comes from the same distribution"
+
+def test_types():
+    entry = drift_report(ref, cur)["age"]
+    assert isinstance(entry["statistic"], float) and isinstance(entry["p_value"], float), "plain floats"
+    assert isinstance(entry["drifted"], bool), "drifted must be a real bool, not numpy.bool_"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>result = ks_2samp(a, b)</code> has <code>.statistic</code> and
+        <code>.pvalue</code>; wrap them in <code>float()</code> and the comparison in <code>bool()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from scipy.stats import ks_2samp
+
+def drift_report(reference, current, alpha=0.01):
+    report = {}
+    for name, ref_values in reference.items():
+        result = ks_2samp(ref_values, current[name])
+        p_value = float(result.pvalue)
+        report[name] = {"statistic": float(result.statistic), "p_value": p_value, "drifted": bool(p_value &lt; alpha)}
+    return report</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m59-e5" data-title="Expected calibration error">
+      <div class="exercise-prompt">
+        <p>Write <code>ece(y_true, proba, n_bins=10)</code>. Split <code>[0, 1]</code> into <code>n_bins</code> equal-width
+          bins (a probability of exactly 1.0 goes in the last bin). For each non-empty bin, take
+          <code>|mean(proba in bin) − mean(y_true in bin)|</code> and weight it by the fraction of samples in the bin.
+          Return the sum as a float.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def ece(y_true, proba, n_bins=10):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_perfectly_calibrated():
+    y = np.array([1, 0, 1, 0])
+    p = np.array([0.5, 0.5, 0.5, 0.5])
+    assert abs(ece(y, p)) < 1e-12, "all at 0.5 with half positive: no gap"
+
+def test_overconfident():
+    y = np.array([1, 0, 1, 0])
+    p = np.array([0.95, 0.95, 0.95, 0.95])
+    assert abs(ece(y, p) - 0.45) < 1e-9, "confidence 0.95 vs frequency 0.5 -> 0.45"
+
+def test_two_bins_weighted():
+    y = np.array([0, 0, 0, 1])
+    p = np.array([0.1, 0.1, 0.1, 1.0])
+    assert abs(ece(y, p) - 0.075) < 1e-9, "bin 0.1: |0.1 - 0| * 3/4; bin 1.0 (last bin): |1 - 1| * 1/4"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>idx = np.minimum((proba * n_bins).astype(int), n_bins - 1)</code>
+        gives each sample's bin.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def ece(y_true, proba, n_bins=10):
+    y, p = np.asarray(y_true, dtype=float), np.asarray(proba, dtype=float)
+    idx = np.minimum((p * n_bins).astype(int), n_bins - 1)
+    total = 0.0
+    for b in range(n_bins):
+        m = idx == b
+        if m.any():
+            total += m.mean() * abs(p[m].mean() - y[m].mean())
+    return float(total)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Package a model for production</span></div>
+      <div class="widget-body">
+        <p>Turn the churn model from M56 (or any classifier you trained) into a small, tested, installable package that
+          another team could use safely. Create it with <code>pixi init churn-service</code>, a <code>src/churn/</code>
+          layout, and <code>pixi add scikit-learn pandas scipy structlog pytest</code>.</p>
+        <ol>
+          <li><code>churn/train.py</code>: trains the pipeline with fixed seeds and writes a bundle directory:
+            <code>model.joblib</code>, <code>metadata.json</code> (version, data fingerprint, library versions, metrics,
+            threshold, feature schema), and <code>reference.parquet</code> or <code>.csv</code> (a sample of training inputs
+            for drift checks). Expose it as <code>pixi run train</code>.</li>
+          <li><code>churn/schema.py</code>: the feature schema and a <code>validate(record)</code> function (like the
+            exercise) that raises a custom <code>SchemaError</code> listing every problem.</li>
+          <li><code>churn/predict.py</code>: <code>load(bundle_dir)</code> verifies the model file's SHA-256 against the
+            metadata before loading, and <code>predict(records: list[dict]) -&gt; list[dict]</code> validates every record and
+            returns probability, decision, and model version. Log each call with structlog (key=value or JSON output).</li>
+          <li><code>churn/drift.py</code>: <code>check_drift(current_df)</code> returns per-feature KS statistics and PSI
+            against the bundle's reference sample, flagging features above your thresholds.</li>
+          <li>Tests: unit tests for the schema and drift functions; a golden test with five fixed customers; a test that a
+            tampered model file is refused; and a behavioral test (more support calls never lowers churn risk).</li>
+        </ol>
+        <ul class="checklist" data-id="m59-mini">
+          <li><code>pixi run train</code> twice produces identical metrics and the same data fingerprint</li>
+          <li><code>predict()</code> rejects invalid records with a clear, complete error message</li>
+          <li>Loading refuses a model whose hash does not match the metadata</li>
+          <li><code>check_drift()</code> flags an artificially shifted feature and passes an unshifted sample</li>
+          <li>Logs are structured events, not <code>print</code> output</li>
+          <li><code>pixi run pytest</code> passes, including golden and behavioral tests</li>
+          <li>A short <code>MODEL_CARD.md</code> documents intended use, metrics by slice, and limitations</li>
+        </ul>
+        <p><strong>Stretch:</strong> wrap <code>predict()</code> in the FastAPI app from this module
+          (<code>pixi add fastapi uvicorn</code>); add a calibration check to the release gate; track training runs in
+          MLflow.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m59-quiz">
+<script type="application/json">
+{"title": "ML in production quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why is the ML lifecycle drawn as a loop?", "options": ["Because training uses loops", "Because deployed models decay as the world changes, so monitoring feeds back into data and retraining", "Because models are trained twice", "Because Pipelines are circular"], "answer": 1, "explanation": "<p>Deployment is not the end. Monitoring detects drift and decay, which sends you back to data collection, retraining, or even problem framing.</p>"},
+  {"type": "multi", "prompt": "Which together make a training run reproducible?", "options": ["Explicit random seeds", "A committed <code>pixi.lock</code>", "The git commit of the training code", "A fingerprint or snapshot of the training data"], "answer": [0, 1, 2, 3], "explanation": "<p>Randomness, environment, code, and data must all be pinned. Missing any one can change the resulting model.</p>"},
+  {"type": "single", "prompt": "Of the customers given a 0.8 churn probability, only 50% churned. The model is…", "options": ["well calibrated", "overconfident (poorly calibrated)", "underfitting", "drifting"], "answer": 1, "explanation": "<p>Calibration compares predicted probability with observed frequency. Predicting 0.8 when the frequency is 0.5 is overconfidence. CalibratedClassifierCV can fix it.</p>"},
+  {"type": "single", "prompt": "Overall accuracy is 91%, but 68% for the smallest region. What should you do first?", "options": ["Ship it; the overall number is good", "Investigate the gap: data volume, feature quality, and labels for that region", "Remove the region feature", "Increase the decision threshold"], "answer": 1, "explanation": "<p>Slice gaps are bugs until explained. Small groups are often underrepresented in training. Removing the feature does not fix underlying causes.</p>"},
+  {"type": "single", "prompt": "The demographic parity difference compares groups by…", "options": ["their accuracy", "their rate of positive predictions", "their recall", "their calibration"], "answer": 1, "explanation": "<p>Demographic parity looks at P(ŷ = 1) per group. Equal opportunity compares recall (true-positive rate) instead.</p>"},
+  {"type": "single", "prompt": "Nightly churn scores for all customers, read by the CRM in the morning, is an example of…", "options": ["online serving", "batch prediction", "streaming training", "A/B testing"], "answer": 1, "explanation": "<p>Scoring many rows on a schedule and storing the results is batch prediction: simpler and cheaper than an always-on service.</p>"},
+  {"type": "single", "prompt": "In the FastAPI endpoint, where should the model be loaded?", "options": ["Inside the predict function, for every request", "Once at startup (the lifespan handler)", "In the client", "From a URL each time"], "answer": 1, "explanation": "<p>Loading a model can take seconds. Load once at startup and reuse it for every request.</p>"},
+  {"type": "single", "prompt": "Fraudsters change tactics, so the same transaction features now mean different fraud risk. This is…", "options": ["data drift", "concept drift", "training/serving skew", "label leakage"], "answer": 1, "explanation": "<p>The relationship between inputs and target changed: concept drift. It shows up as falling accuracy once true labels arrive.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nref = np.array([0.5, 0.5])\ncur = np.array([0.5, 0.5])\nprint(float(np.sum((cur - ref) * np.log(cur / ref))))", "answer": "0.0", "explanation": "<p>Identical bin fractions give a PSI of exactly 0: no shift.</p>"},
+  {"type": "single", "prompt": "A PSI of 0.4 on the 'age' feature most likely indicates…", "options": ["no change", "a moderate change", "a significant shift worth investigating", "a bug in PSI"], "answer": 2, "explanation": "<p>Rule of thumb: below 0.1 stable, 0.1–0.25 moderate, above 0.25 significant. Investigate before retraining: it might be a broken upstream pipeline.</p>"},
+  {"type": "single", "prompt": "What is a golden dataset test?", "options": ["Training on the most valuable customers", "A small committed input set with reviewed expected outputs that the model must reproduce", "A dataset with no missing values", "The test split"], "answer": 1, "explanation": "<p>Golden tests catch accidental changes to preprocessing, loading, or model files by comparing against outputs someone reviewed.</p>"},
+  {"type": "text", "prompt": "Which SciPy function performs the two-sample Kolmogorov-Smirnov test? (name only)", "answer": ["ks_2samp", "scipy.stats.ks_2samp"], "explanation": "<p><code>scipy.stats.ks_2samp(reference, current)</code> returns the KS statistic and p-value.</p>"},
+  {"type": "multi", "prompt": "Which belong in a model card?", "options": ["Intended use and out-of-scope uses", "Metrics overall and by subgroup", "Known limitations", "The model's pickle bytes"], "answer": [0, 1, 2], "explanation": "<p>A model card is documentation for humans: purpose, data, evaluation (including slices), limitations, and contacts. The model file itself is stored separately.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Production ML is a loop: frame → data → train → evaluate → package → deploy → monitor → back again.</li>
+      <li>Reproducibility needs seeds, <code>pixi.lock</code>, the code commit, and a data fingerprint; track every run (MLflow or a JSON log).</li>
+      <li>Evaluate calibration (reliability diagram, Brier, ECE), slice metrics by subgroup, and measure fairness gaps.</li>
+      <li>Persist models as bundles with metadata and hashes; version and register them; make rollback easy.</li>
+      <li>Prefer batch prediction; for online serving load once, validate inputs, and log structured events.</li>
+      <li>Detect data drift with KS and PSI; concept drift appears when labels arrive.</li>
+      <li>Test features, data, and model behavior; gate releases on a frozen holdout and golden files.</li>
+      <li>Practice responsible AI: define harm, protect data, check fairness, document, keep humans in the loop.</li>
+    </ul>
+    <div class="flashcards" data-title="ML in production">
+<script type="application/json">
+[
+  {"front": "Four things to pin for reproducibility", "back": "Random seeds, environment (pixi.lock), code (git commit), and data (fingerprint or snapshot)."},
+  {"front": "Experiment tracking", "back": "Recording each run's parameters, metrics, artifacts, code version, and data hash (for example with MLflow)."},
+  {"front": "Calibration", "back": "Predicted probabilities match observed frequencies; check with a reliability diagram, Brier score, or ECE."},
+  {"front": "Slicing", "back": "Computing metrics per subgroup to find where the model underperforms."},
+  {"front": "Equal opportunity difference", "back": "The gap in recall (true-positive rate) between groups."},
+  {"front": "Model bundle", "back": "Model file plus metadata: version, data fingerprint, library versions, schema, metrics, threshold, hash."},
+  {"front": "Batch vs online serving", "back": "Batch: score many rows on a schedule. Online: answer each request in milliseconds."},
+  {"front": "Training/serving skew", "back": "Features computed differently in production than in training; ship the whole pipeline to avoid it."},
+  {"front": "Data drift vs concept drift", "back": "Data drift: input distribution changes. Concept drift: the input-to-target relationship changes."},
+  {"front": "PSI thresholds", "back": "< 0.1 stable, 0.1–0.25 moderate, > 0.25 significant shift (rule of thumb)."},
+  {"front": "Golden dataset", "back": "A committed small input set with reviewed expected outputs used as a regression test."},
+  {"front": "Model card", "back": "Documentation of intended use, data, metrics by slice, limitations, and contacts."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://scikit-learn.org/stable/modules/calibration.html">scikit-learn: probability calibration</a></li>
+      <li><a href="https://scikit-learn.org/stable/model_persistence.html">scikit-learn: model persistence</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.ks_2samp.html">scipy.stats.ks_2samp</a></li>
+      <li><a href="https://mlflow.org/docs/latest/index.html">MLflow documentation</a></li>
+      <li><a href="https://fastapi.tiangolo.com/">FastAPI documentation</a></li>
+      <li><a href="https://fairlearn.org/">Fairlearn</a> (fairness metrics and mitigation)</li>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a> (lock files and <code>--locked</code>)</li>
+      <li>Next: put it all together in <a href="../projects/p08-recommender.html">Project 8: Movie Recommender</a>, then
+        continue to <a href="m60-data-engineering.html">M60 · Data Engineering Foundations</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
