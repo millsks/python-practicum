@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 5 · Async Web Crawler · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p05">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Graded project</p>
+    <h1>Project 5: Async Web Crawler</h1>
+    <p class="lede">Build a polite, resilient, concurrent crawler that walks a documentation site and reports every
+      broken link along with the pages that point to it. It is the kind of tool teams run in CI every night, and it
+      exercises every hard part of asyncio: bounded concurrency, rate limiting, retries, structured shutdown, and
+      cancellation.</p>
+    <div class="lesson-meta"><span>⏱ ~8–10 hours</span><span>Prerequisites: <a href="../modules/m38-asyncio.html">M38</a>, <a href="../modules/m40-stdlib.html">M40</a> (also uses <a href="../modules/m37-concurrency.html">M37</a> and <a href="../modules/m16-typing.html">M16</a>)</span></div>
+    <ul class="objectives">
+      <li>Design around an injected async <code>Protocol</code> so network code is testable offline</li>
+      <li>Run a bounded worker pool fed by an <code>asyncio.Queue</code> inside a <code>TaskGroup</code></li>
+      <li>Implement per-host rate limiting and retries with exponential backoff and jitter</li>
+      <li>Shut down cleanly with sentinels and stay correct under cancellation</li>
+      <li>Parse HTML and URLs with the standard library (<code>html.parser</code>, <code>urllib.parse</code>, <code>urllib.robotparser</code>)</li>
+      <li>Produce a deterministic JSON report suitable for CI</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>Your team's documentation site has grown to hundreds of pages written by dozens of people. Pages get renamed,
+      sections move, and readers keep landing on 404s. You are asked for a tool that can run in CI and answer one
+      question: <em>which links are broken, and where are they?</em> A plain "this URL is a 404" is not enough. The
+      writer fixing it needs the <strong>referrers</strong>, the pages that contain the bad link.</p>
+    <p>Fetching pages one at a time is far too slow: a 300-page site at 200 ms per request takes a minute, and most of
+      that time the program sits idle waiting on the network. That is exactly the I/O-bound workload asyncio was built
+      for (<a href="../modules/m38-asyncio.html">M38</a>). But unbounded concurrency would hammer the server, so the
+      crawler must also be <strong>polite</strong>: obey <code>robots.txt</code>, cap concurrent requests, and space
+      out requests per host.</p>
+    <aside class="callout warn"><p>Only crawl sites you own or have permission to crawl, and keep the per-host interval
+      generous (one second or more) when you run the real fetcher. The graded tests never touch the network.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Dependency injection</h4><p>The crawler depends on a <code>Fetcher</code> Protocol, not on
+        <code>urllib</code>. Tests inject <code>FakeFetcher</code>; production injects <code>UrllibFetcher</code>.</p></div>
+      <div class="card"><h4>Structured concurrency</h4><p>Workers live inside a <code>TaskGroup</code>: none can leak,
+        and a crash in one cancels the rest and surfaces as an <code>ExceptionGroup</code>.</p></div>
+      <div class="card"><h4>Back-pressure and politeness</h4><p>A fixed worker pool bounds concurrency; a per-host
+        limiter bounds request rate; <code>Crawl-delay</code> from robots.txt can raise it.</p></div>
+      <div class="card"><h4>Resilience</h4><p>Transient failures (connection resets, 429, 503) are retried with capped
+        exponential backoff and full jitter, using an injected <code>sleep</code> and <code>Random</code>.</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>Behavior</th><th>Module</th></tr></thead>
+      <tbody>
+        <tr><td>Fetcher seam</td><td><code>async def fetch(url) -&gt; Response(status, headers, body)</code>; never follows redirects; raises <code>FetchError</code> for transient network failures</td><td><code>fetcher.py</code></td></tr>
+        <tr><td>Link extraction</td><td><code>&lt;a href&gt;</code> and <code>&lt;area href&gt;</code>, honors <code>&lt;base href&gt;</code>, skips <code>rel="nofollow"</code>, de-duplicates in first-seen order</td><td><code>links.py</code></td></tr>
+        <tr><td>URL normalization</td><td>resolve relative links, lowercase scheme and host, drop default ports and fragments, remove dot segments, reject non-HTTP schemes</td><td><code>urls.py</code></td></tr>
+        <tr><td>Same-site filter</td><td>exact host match (optionally subdomains); off-site links are recorded as <em>external</em> but not fetched</td><td><code>urls.py</code></td></tr>
+        <tr><td>robots.txt</td><td>fetched once per host (behind a lock), disallowed URLs reported as <em>blocked</em>, <code>Crawl-delay</code> raises the host interval</td><td><code>robots.py</code></td></tr>
+        <tr><td>Bounded concurrency</td><td><code>config.concurrency</code> workers consume an <code>asyncio.Queue</code></td><td><code>crawler.py</code></td></tr>
+        <tr><td>Per-host rate limit</td><td>at most one request per <code>per_host_interval</code> seconds per host; hosts are independent</td><td><code>ratelimit.py</code></td></tr>
+        <tr><td>Retries</td><td><code>FetchError</code>, 429, 500, 502, 503, 504 are retried <code>retries</code> times; delay is <code>uniform(0, min(cap, base·2<sup>n</sup>))</code></td><td><code>retry.py</code></td></tr>
+        <tr><td>Limits</td><td><code>max_depth</code> (start page is depth 0) and <code>max_pages</code> (sets <code>truncated</code>)</td><td><code>crawler.py</code></td></tr>
+        <tr><td>Redirects</td><td>3xx with <code>Location</code> is recorded and its target crawled at the same depth</td><td><code>crawler.py</code></td></tr>
+        <tr><td>Shutdown</td><td>after <code>queue.join()</code>, one <code>None</code> sentinel per worker; the <code>TaskGroup</code> then exits</td><td><code>crawler.py</code></td></tr>
+        <tr><td>Cancellation</td><td>cancelling <code>crawl()</code> leaves no tasks, no in-flight requests, and a usable partial <code>report()</code></td><td><code>crawler.py</code></td></tr>
+        <tr><td>Report</td><td>JSON: summary, broken links with sorted referrers, redirects, blocked, external, per-page results, depth counts</td><td><code>report.py</code></td></tr>
+        <tr><td>CLI</td><td><code>python -m crawler URL</code>; exit 0 clean, 1 broken links, 2 bad URL or timeout</td><td><code>cli.py</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>The crawl is a classic producer/consumer pipeline where the consumers are also producers: each worker pulls a
+      <code>Job(url, depth, referrer)</code>, fetches it, and pushes newly discovered links back onto the same queue.
+      The queue's unfinished-task counter is what tells us we are done: <code>queue.join()</code> returns only when every
+      job that was ever <code>put</code> has had a matching <code>task_done()</code>.</p>
+    <pre class="mermaid">
+flowchart LR
+  S[start URL] --> Q[(asyncio.Queue of Job)]
+  subgraph TG[TaskGroup]
+    W1[worker 1]
+    W2[worker 2]
+    W3[worker N]
+  end
+  Q --> W1 & W2 & W3
+  W1 & W2 & W3 --> R{robots policy<br/>cached per host}
+  R -->|allowed| L[HostRateLimiter]
+  L --> F[fetch_with_retries]
+  F --> FE[[Fetcher Protocol<br/>FakeFetcher / UrllibFetcher]]
+  F --> P[extract_links + normalize_url]
+  P -->|same site, new, depth ok| Q
+  P -->|off site| X[external set]
+  W1 & W2 & W3 --> REP[results, referrers, redirects]
+  REP --> J[CrawlReport.to_json]
+    </pre>
+    <aside class="callout think"><p>Why can't we simply wait until the queue is empty? Because a worker may be in the
+      middle of fetching a page that will add ten more links. "Empty" is a momentary state; "every put has a matching
+      task_done" is the real termination condition.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="commands">
+    <h2>Getting started with Pixi</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects            # list projects and which you've started
+pixi run start p05           # copy the starter into work/p05_async_crawler/
+pixi run grade p05           # run the 81 grading tests against your work/ copy
+pixi run practicum grade p05 -k urls -x   # one milestone at a time, stop at first failure</code></pre>
+    <p>After the tests pass, try it for real on a site you control:</p>
+    <pre data-label="Terminal"><code class="language-bash">cd work/p05_async_crawler
+pixi run python -m crawler https://docs.example.com/ --max-depth 2 --interval 1.0 &gt; report.json</code></pre>
+    <aside class="callout pixi"><p>No extra dependencies are needed: everything is standard library. If you attempt the
+      <code>httpx</code> stretch goal, add it with <code>pixi add httpx</code> (it is on conda-forge).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h3>Milestone 1: URLs and links</h3>
+      <p>Implement <code>remove_dot_segments</code>, <code>normalize_url</code>, <code>host_of</code>,
+        <code>same_site</code>, <code>robots_url</code>, and <code>extract_links</code>. Normalization is what makes
+        de-duplication work: <code>HTTP://Docs.Example.com:80/a/./b/../c#top</code> and <code>/a/c</code> on that site are
+        the same page.</p>
+      <ul class="checklist" data-id="p05-m1">
+        <li>Relative links resolve against the page (and <code>&lt;base href&gt;</code>)</li>
+        <li><code>mailto:</code>, <code>javascript:</code>, fragments-only, and bad ports return <code>None</code></li>
+        <li><code>same_site</code> resists the <code>example.com.evil.org</code> suffix trick</li>
+        <li><code>pixi run practicum grade p05 -k "urls or links"</code> passes</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 2: robots.txt</h3>
+      <p>Wrap <code>urllib.robotparser.RobotFileParser</code> in <code>RobotsPolicy</code>. A 404 robots.txt means "no
+        rules". Note that <code>RobotFileParser</code> only accepts whole-second <code>Crawl-delay</code> values.</p>
+      <ul class="checklist" data-id="p05-m2">
+        <li><code>allowed()</code> honors per-agent rules</li>
+        <li><code>crawl_delay()</code> returns 0.0 when unset</li>
+        <li><code>-k robots</code> passes</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 3: politeness and resilience</h3>
+      <p>Build <code>HostRateLimiter</code> and <code>fetch_with_retries</code>. Both take an injected
+        <code>sleep</code> (and the limiter a <code>clock</code>), so tests advance virtual time instantly instead of
+        waiting.</p>
+      <ul class="checklist" data-id="p05-m3">
+        <li>Concurrent callers for one host are serialized one interval apart</li>
+        <li>Different hosts never wait for each other</li>
+        <li>Backoff ceilings double and cap; delays are jittered in <code>[0, ceiling]</code></li>
+        <li>404 is final; 503 and <code>FetchError</code> are retried</li>
+        <li><code>-k "retry or ratelimit"</code> passes</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 4: the engine</h3>
+      <p>Implement <code>Crawler.crawl</code>, the worker loop, scheduling, robots caching, and page processing.</p>
+      <ul class="checklist" data-id="p05-m4">
+        <li>Each URL is fetched exactly once even when linked from many pages</li>
+        <li>Referrers are recorded for every link, including duplicates</li>
+        <li><code>max_depth</code>, <code>max_pages</code>, redirects, external links, and blocked URLs behave as specified</li>
+        <li>Peak in-flight requests equals <code>concurrency</code></li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 5: shutdown and cancellation</h3>
+      <p>Make the crawl end cleanly and fail loudly. Every <code>queue.get()</code> is paired with
+        <code>task_done()</code> in a <code>finally</code>; <code>in_progress</code> is cleaned in a
+        <code>finally</code>; the <code>TaskGroup</code> guarantees no worker outlives <code>crawl()</code>.</p>
+      <ul class="checklist" data-id="p05-m5">
+        <li><code>asyncio.timeout</code> around <code>crawl()</code> leaves zero leftover tasks</li>
+        <li>A partial <code>report()</code> is available after cancellation</li>
+        <li>A non-transient bug in the fetcher surfaces as an <code>ExceptionGroup</code></li>
+        <li>A <code>Crawler</code> can be reused for a second crawl</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h3>Milestone 6: report and CLI</h3>
+      <p>Implement <code>build_report</code>, <code>CrawlReport.to_dict</code>/<code>to_json</code>, and
+        <code>cli.main</code>. Sort everything so the JSON is deterministic: CI diffs should show real changes only.</p>
+      <ul class="checklist" data-id="p05-m6">
+        <li>Report summary matches the documented shape</li>
+        <li>CLI exits 0, 1, or 2 as specified</li>
+        <li><code>pixi run grade p05</code>: all 81 tests pass</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="key-code">
+    <h2>The heart of it: worker pool and shutdown</h2>
+    <p>This is the shape the tests expect. Study why each <code>try/finally</code> is there before you write yours.</p>
+    <pre><code class="language-python">async def crawl(self, start_url: str) -&gt; CrawlReport:
+    start = normalize_url(start_url)
+    if start is None:
+        raise ValueError(f"not a crawlable URL: {start_url!r}")
+    self._reset(start)
+    queue: asyncio.Queue[Job | None] = asyncio.Queue()
+    self._schedule(queue, Job(start, 0, None))
+    async with asyncio.TaskGroup() as group:
+        for i in range(self.config.concurrency):
+            group.create_task(self._worker(queue), name=f"crawler-worker-{i}")
+        await queue.join()                  # every put has a matching task_done
+        for _ in range(self.config.concurrency):
+            queue.put_nowait(None)          # one sentinel per worker
+    return self.report()
+
+async def _worker(self, queue):
+    while True:
+        job = await queue.get()
+        try:
+            if job is None:
+                return
+            ...                             # robots, rate limit, fetch, parse, schedule
+        finally:
+            queue.task_done()               # even on error or cancellation</code></pre>
+    <aside class="callout tip"><p>The alternative shutdown, cancelling workers after <code>join()</code>, also works
+      inside a <code>TaskGroup</code> (cancelled children do not count as errors). Sentinels are preferred here because
+      a worker is never interrupted mid-fetch during a <em>normal</em> shutdown.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Weight</th><th>Excellent</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness (grading tests)</td><td>50%</td><td>All 81 tests pass with <code>pixi run grade p05</code></td></tr>
+        <tr><td>Concurrency design</td><td>20%</td><td>No leaked tasks; every <code>get</code> paired with <code>task_done</code>; locks only where state is shared across awaits</td></tr>
+        <tr><td>Resilience and politeness</td><td>10%</td><td>Retries only transient failures; jittered backoff; per-host interval and Crawl-delay honored</td></tr>
+        <tr><td>Code quality</td><td>10%</td><td>Full type hints, Google docstrings, <code>pixi run ruff check</code> clean, no <code>print</code> outside <code>main()</code></td></tr>
+        <tr><td>Report usefulness</td><td>10%</td><td>Deterministic, sorted JSON with referrers; meaningful exit codes</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>My crawl hangs forever</summary>
+      <p>Almost always a missing <code>queue.task_done()</code>. If a worker returns early (blocked by robots, a
+        redirect, an exception) without calling it, <code>queue.join()</code> never returns. Put
+        <code>task_done()</code> in a <code>finally</code> right after <code>get()</code>.</p></details>
+    <details class="reveal"><summary>robots.txt is fetched several times</summary>
+      <p>Several workers reached the same host at once and all saw an empty cache. Guard the check-and-fetch with a
+        per-host <code>asyncio.Lock</code>: the second worker waits, then finds the cached policy. This is a race even
+        though asyncio is single-threaded, because there is an <code>await</code> between the check and the store.</p></details>
+    <details class="reveal"><summary>The rate-limit test sees requests at the same instant</summary>
+      <p>Record the "last request" time <em>after</em> sleeping and while still holding the host's lock. If you compute
+        the wait outside the lock, two callers compute the same wait and wake up together.</p></details>
+    <details class="reveal"><summary>The cancellation test finds leftover tasks</summary>
+      <p>Create workers with <code>group.create_task</code>, not <code>asyncio.create_task</code>. Only tasks owned by
+        the <code>TaskGroup</code> are cancelled and awaited when the body is cancelled.</p></details>
+    <details class="reveal"><summary>A redirect target is fetched twice</summary>
+      <p>Send the normalized <code>Location</code> through the same <code>_schedule</code> path as ordinary links, so
+        the <code>seen</code> set de-duplicates it.</p></details>
+    <details class="reveal"><summary>Why <code>asyncio.to_thread</code> for urllib?</summary>
+      <p><code>urllib</code> blocks. Calling it directly inside a coroutine would freeze the event loop, and with it
+        every other worker. <code>to_thread</code> runs it in the default thread pool; the loop keeps scheduling other
+        coroutines while the thread waits on the socket (and the GIL is released during socket I/O).</p></details>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li>Check (but do not crawl) external links, with their own per-host limits.</li>
+      <li>Honor <code>Retry-After</code> on 429/503 and <code>&lt;meta name="robots" content="nofollow"&gt;</code>.</li>
+      <li>Write an <code>httpx.AsyncClient</code> fetcher (<code>pixi add httpx</code>) and benchmark it against the thread-backed one.</li>
+      <li>Persist the frontier in <code>sqlite3</code> so an interrupted crawl can resume.</li>
+      <li>While it runs, inspect it with <code>python -m asyncio pstree PID</code> (3.14) to see the worker tree.</li>
+      <li>Emit progress with <code>structlog</code> (previewed in <a href="../modules/m42-tooling.html">M42</a>).</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p05-quiz">
+<script type="application/json">
+{"title": "Async crawler reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What makes <code>queue.join()</code> a correct termination condition for a crawl whose workers add new jobs?", "options": ["It returns as soon as the queue is empty", "It returns when every item ever put has had a matching <code>task_done()</code>", "It cancels the workers automatically", "It waits for the TaskGroup to exit"], "answer": 1, "explanation": "<p>The queue counts unfinished tasks. A worker still processing a page holds the count above zero, so jobs it adds are guaranteed to be seen before <code>join()</code> returns.</p>"},
+  {"type": "multi", "prompt": "Which failures should <code>fetch_with_retries</code> retry?", "options": ["<code>FetchError</code> (connection reset)", "HTTP 404", "HTTP 503", "HTTP 429", "HTTP 301"], "answer": [0, 2, 3], "explanation": "<p>Transient failures may succeed later: network errors, 503 Service Unavailable, 429 Too Many Requests. A 404 or a redirect is a definitive answer; retrying only adds load.</p>"},
+  {"type": "single", "prompt": "Why add jitter to exponential backoff?", "options": ["To make retries faster on average", "So many clients that failed together don't retry in synchronized waves", "Because <code>asyncio.sleep</code> is imprecise", "To satisfy robots.txt"], "answer": 1, "explanation": "<p>Without jitter, every client that saw the outage retries at exactly 0.1 s, 0.2 s, 0.4 s, recreating the spike that caused the failure. Full jitter spreads retries uniformly.</p>"},
+  {"type": "single", "prompt": "Two workers check <code>if host not in self._policies</code> and both fetch robots.txt. asyncio is single-threaded, so why did this race happen?", "options": ["The GIL was released", "There is an <code>await</code> between the check and the store, so another task ran in between", "Dictionaries are not thread-safe", "It cannot happen in asyncio"], "answer": 1, "explanation": "<p>Coroutines interleave only at <code>await</code> points, but a check-then-await-then-store sequence spans one. An <code>asyncio.Lock</code> held across the whole sequence fixes it.</p>"},
+  {"type": "text", "prompt": "Which stdlib function runs blocking <code>urllib</code> code in a worker thread from a coroutine? (module.function)", "answer": ["asyncio.to_thread", "to_thread"], "explanation": "<p><code>await asyncio.to_thread(fn, *args)</code> runs <code>fn</code> in the loop's default executor and keeps the event loop free.</p>"},
+  {"type": "single", "prompt": "Why does the crawler accept a <code>sleep</code> parameter?", "options": ["So tests can replace waiting with virtual time and run instantly and deterministically", "Because <code>asyncio.sleep</code> is deprecated", "To support threads", "To make the crawler faster in production"], "answer": 0, "explanation": "<p>Injecting time (sleep and clock) is the standard way to test rate limiting and backoff without slow, flaky tests.</p>"},
+  {"type": "output", "prompt": "With <code>base=0.5</code> and <code>cap=4.0</code>, what are the backoff ceilings for attempts 0 to 4? (as a Python list)", "code": "print([min(4.0, 0.5 * 2.0**n) for n in range(5)])", "answer": "[0.5, 1.0, 2.0, 4.0, 4.0]", "explanation": "<p>The ceiling doubles from the base and is clipped at the cap.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

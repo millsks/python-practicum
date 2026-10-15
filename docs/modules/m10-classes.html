@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M10 · Classes &amp; Objects · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m10">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 10</p>
+    <h1>Classes &amp; Objects</h1>
+    <p class="lede">Every value you have used so far, from <code>3</code> to <code>"hello"</code> to <code>[1, 2]</code>, is an object built from a class. In this module you learn to write your own classes, so that data and the operations that keep it valid travel together as one unit.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m05-functions.html">M05 Functions</a>, <a href="m06-collections.html">M06 Collections</a>, <a href="m07-exceptions.html">M07 Errors</a></span></div>
+    <ul class="objectives">
+      <li>Explain what a class, an instance, an attribute, and a method are, and how they relate</li>
+      <li>Write <code>__init__</code> methods and explain exactly what <code>self</code> is</li>
+      <li>Tell class attributes from instance attributes and avoid the shared-mutable-attribute trap</li>
+      <li>Protect invariants with <code>@property</code> getters, setters, and validation</li>
+      <li>Use <code>@classmethod</code> for alternative constructors and <code>@staticmethod</code> for helpers</li>
+      <li>Apply Python's encapsulation conventions (<code>_name</code>, <code>__name</code> mangling) and inspect <code>__dict__</code></li>
+      <li>Design a small class from written requirements and draw it as a UML class diagram</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-oop">
+    <h2>Why object-oriented programming?</h2>
+    <p>Imagine you are tracking bank accounts with the tools from Part 1. You might store each account as a dictionary and write functions that operate on it:</p>
+    <pre><code class="language-python">account = {"owner": "Ada", "balance": 100.0}
+
+def deposit(acct, amount):
+    if amount &lt;= 0:
+        raise ValueError("deposit must be positive")
+    acct["balance"] += amount
+
+deposit(account, 50)
+account["balance"] = -1_000_000   # nothing stops this!</code></pre>
+    <p>This works, but it has three problems that grow with the size of a program:</p>
+    <ol>
+      <li><strong>Nothing ties the data to its rules.</strong> The <code>deposit</code> function checks that amounts are positive, but any other line of code can write straight into <code>account["balance"]</code> and bypass the check.</li>
+      <li><strong>The shape is implicit.</strong> Is the key <code>"balance"</code> or <code>"bal"</code>? A typo creates a new key silently instead of failing.</li>
+      <li><strong>Related functions are scattered.</strong> Nothing groups <code>deposit</code>, <code>withdraw</code>, and <code>statement</code> together; a reader has to hunt for them.</li>
+    </ol>
+    <p><dfn>Object-oriented programming</dfn> (OOP) answers all three by bundling <em>state</em> (data) and <em>behavior</em> (functions) into one unit called an <dfn>object</dfn>. The blueprint for a kind of object is a <dfn>class</dfn>. The class decides what data each object holds and which operations are allowed, so the rules live right next to the data they protect. The set of rules that must always hold for an object (for example, "the balance is never negative") is called its <dfn>invariant</dfn>, and a well-designed class makes it impossible to break its invariant through its public interface.</p>
+    <p>OOP is not the only good style. Python happily mixes plain functions, modules, and classes, and you will learn functional techniques in <a href="m18-functional.html">M18</a>. Reach for a class when you have <em>state that must stay consistent</em> plus <em>operations on that state</em>. If you only have data, a dataclass or dict is often enough (<a href="m13-dataclasses.html">M13</a>); if you only have behavior, a function is enough.</p>
+    <aside class="callout think"><p>Look at a program you wrote in Part 1, such as the budget ledger. Which pieces of data were always passed around together with the same group of functions? Those are candidates for a class.</p></aside>
+    <p><strong>Remember:</strong> a class bundles data with the rules and operations for that data, so invariants are enforced in one place.</p>
+  </section>
+
+  <section class="lesson-section" id="class-instance">
+    <h2>Classes and instances</h2>
+    <p>A <code>class</code> statement creates a new type. Calling the class like a function creates an <dfn>instance</dfn> of that type: a new, separate object. You already know this pattern: <code>list()</code> creates a new list, and <code>int("5")</code> creates an int. Your own classes work the same way.</p>
+    <pre><code class="language-python">class Dog:
+    """A dog with a name."""      # a docstring, just like functions
+
+rex = Dog()        # call the class to make an instance
+fido = Dog()       # a second, independent instance
+
+print(type(rex))              # &lt;class '__main__.Dog'&gt;
+print(isinstance(rex, Dog))   # True
+print(rex is fido)            # False: two distinct objects</code></pre>
+    <p>Vocabulary you will use for the rest of the course:</p>
+    <ul>
+      <li><strong>Class</strong>: the blueprint, such as <code>Dog</code>. By convention class names use <code>CapWords</code> (PEP 8).</li>
+      <li><strong>Instance</strong> (or object): one concrete thing built from the class, such as <code>rex</code>.</li>
+      <li><strong>Attribute</strong>: a name attached to an object, read with a dot: <code>rex.name</code>.</li>
+      <li><strong>Method</strong>: a function defined inside a class and called through an instance: <code>rex.bark()</code>.</li>
+    </ul>
+    <p>Python is flexible: you can attach attributes to an instance at any time. That flexibility is useful for exploration but dangerous in real code, because each instance could end up with a different shape. Run this to see it:</p>
+    <div class="runnable" data-title="Attributes can be attached to any instance">
+<textarea>
+class Dog:
+    pass
+
+rex = Dog()
+fido = Dog()
+rex.name = "Rex"          # attach an attribute to one instance only
+print(rex.name)
+print(hasattr(fido, "name"))   # fido has no 'name' at all
+print(type(rex).__name__, isinstance(fido, Dog))
+</textarea>
+    </div>
+    <p>The fix is to give every instance the same set of attributes the moment it is created. That is the job of <code>__init__</code>.</p>
+    <p><strong>Remember:</strong> the class is the blueprint, calling it creates an instance, and attributes are names hanging off an object.</p>
+  </section>
+
+  <section class="lesson-section" id="init-self">
+    <h2><code>__init__</code> and <code>self</code></h2>
+    <p>When you call <code>Dog("Rex", 3)</code>, Python does two things. First it creates a brand-new, empty instance. Then it calls the class's <code>__init__</code> method, passing the new instance as the first argument, followed by your arguments. <code>__init__</code> is called an <dfn>initializer</dfn> (people often say "constructor", which is close enough). Its job is to put the new object into a valid starting state.</p>
+    <pre><code class="language-python">class Dog:
+    def __init__(self, name, age):
+        self.name = name     # store on THIS instance
+        self.age = age
+
+    def describe(self):
+        return f"{self.name} is {self.age}"
+
+rex = Dog("Rex", 3)
+print(rex.describe())     # Rex is 3</code></pre>
+    <p>The first parameter, <code>self</code>, is the instance being worked on. It is not a keyword; it is an ordinary parameter name that every Python programmer agrees to use. Inside a method, <code>self.name = name</code> means "attach an attribute called <code>name</code> to this particular object." Without <code>self.</code>, <code>name</code> would just be a local variable that vanishes when <code>__init__</code> returns.</p>
+    <p>Where do the attributes actually live? Each instance has its own dictionary, <code>__dict__</code>, that maps attribute names to values. Step through the tracer below and watch two instances being built. Notice that <code>self</code> and the variable that eventually receives the object carry the same "obj N" identity tag: they are the same object.</p>
+    <div class="tracer" data-title="Building two instances">
+<textarea>
+class Dog:
+    def __init__(self, name, age):
+        self.name = name
+        self.age = age
+
+    def birthday(self):
+        self.age = self.age + 1
+        return self.age
+
+rex = Dog("Rex", 3)
+fido = Dog("Fido", 7)
+new_age = rex.birthday()
+rex_attrs = dict(rex.__dict__)
+fido_attrs = dict(fido.__dict__)
+</textarea>
+    </div>
+    <p>Three things to take from the trace:</p>
+    <ol>
+      <li><code>__init__</code> runs once per instance, with <code>self</code> bound to the new object.</li>
+      <li><code>rex.birthday()</code> changed only Rex's <code>age</code>; Fido's dictionary is untouched. Each instance has independent state.</li>
+      <li><code>__init__</code> must return <code>None</code>. If you write <code>return something</code> in it, Python raises <code>TypeError</code>, because the call to the class already returns the new instance.</li>
+    </ol>
+    <aside class="callout danger"><p>The most common beginner bug in classes is forgetting <code>self</code>. Writing <code>def describe():</code> (no <code>self</code>) gives <code>TypeError: Dog.describe() takes 0 positional arguments but 1 was given</code>, because Python always passes the instance. Writing <code>name = name</code> instead of <code>self.name = name</code> silently creates a local variable and leaves the instance without the attribute.</p></aside>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+class Counter:
+    def __init__(self):
+        self.count = 0
+
+    def increment(self):
+        self.count += 1
+        return self
+
+a = Counter()
+b = Counter()
+a.increment().increment()
+b.increment()
+print(a.count, b.count)
+</textarea>
+    </div>
+    <p>Returning <code>self</code> from a method, as <code>increment</code> does, enables <dfn>method chaining</dfn>: <code>a.increment().increment()</code>. It is a stylistic choice; many methods that mutate an object return <code>None</code> instead (like <code>list.append</code>) to make it obvious that they mutate.</p>
+    <p><strong>Remember:</strong> <code>__init__</code> receives the brand-new instance as <code>self</code>; anything you want to keep must be stored as <code>self.something</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="methods">
+    <h2>Attributes and methods in depth</h2>
+    <p>A method is just a function stored on the class. When you look it up through an instance, Python produces a <dfn>bound method</dfn>: a small object that remembers both the function and the instance. Calling the bound method calls the function with the instance inserted as the first argument. These two lines do exactly the same thing:</p>
+    <pre><code class="language-python">rex.describe()          # the normal way
+Dog.describe(rex)       # what Python does for you</code></pre>
+    <p>This is why <code>self</code> must be the first parameter. There is no hidden magic: the dot lookup simply pre-fills that argument.</p>
+    <div class="runnable" data-title="Bound methods are objects too">
+<textarea>
+class Greeter:
+    def __init__(self, greeting):
+        self.greeting = greeting
+
+    def greet(self, name):
+        return f"{self.greeting}, {name}!"
+
+hi = Greeter("Hi")
+print(Greeter.greet)          # a plain function on the class
+print(hi.greet)               # a bound method: function + instance
+say = hi.greet                # store it like any value
+print(say("Ada"))             # still remembers 'hi'
+print(Greeter.greet(hi, "Grace"))   # explicit form, same result
+print(hi.greet.__self__ is hi)
+</textarea>
+    </div>
+    <h3>Attribute lookup order</h3>
+    <p>When you read <code>obj.attr</code>, Python first checks the instance's own <code>__dict__</code>. If the name is not there, it checks the class (and later, in <a href="m12-inheritance.html">M12</a>, the parent classes). Only if all of those fail do you get <code>AttributeError</code>. Writing <code>obj.attr = value</code> always writes into the instance's <code>__dict__</code>; it never modifies the class. That asymmetry (reads fall through to the class, writes stay on the instance) is the key to the next section.</p>
+    <h3>Methods that keep invariants</h3>
+    <p>Good methods do more than read and write fields. They express operations in the problem's own language, and they validate inputs so the object can never enter an invalid state. Compare <code>account.balance -= 50</code> with <code>account.withdraw(50)</code>: the method can refuse an overdraft, record a transaction, and raise a clear error.</p>
+    <pre><code class="language-python">class Thermostat:
+    def __init__(self, target):
+        self.target = target
+
+    def raise_by(self, degrees):
+        if degrees &lt;= 0:
+            raise ValueError("degrees must be positive")
+        self.target += degrees</code></pre>
+    <p><strong>Remember:</strong> <code>obj.method(x)</code> is <code>Class.method(obj, x)</code>. Reads search the instance, then the class; writes go to the instance.</p>
+  </section>
+
+  <section class="lesson-section" id="class-attributes">
+    <h2>Class attributes vs instance attributes</h2>
+    <p>A name assigned directly in the class body (not inside a method) is a <dfn>class attribute</dfn>. It lives once, in the class's own namespace, and every instance can read it through the lookup fallback you just learned. Class attributes are perfect for constants and shared configuration:</p>
+    <pre><code class="language-python">class Circle:
+    PI = 3.14159            # class attribute: shared, defined once
+
+    def __init__(self, radius):
+        self.radius = radius    # instance attribute: one per object
+
+    def area(self):
+        return self.PI * self.radius ** 2</code></pre>
+    <p>Because writes go to the instance, assigning <code>c.PI = 3</code> does <em>not</em> change the class. It creates a new instance attribute that <dfn>shadows</dfn> (hides) the class attribute for that one object. Other circles still see <code>Circle.PI</code>.</p>
+    <div class="runnable" data-title="Predict the output: shadowing" data-predict>
+<textarea>
+class Circle:
+    PI = 3.14
+
+a = Circle()
+b = Circle()
+a.PI = 3
+Circle.PI = 3.1416
+print(a.PI, b.PI, Circle.PI)
+</textarea>
+    </div>
+    <h3>The shared-mutable trap</h3>
+    <p>Shadowing protects you when you <em>assign</em>. It does not protect you when you <em>mutate</em>. If a class attribute holds a mutable object such as a list, then <code>self.items.append(x)</code> reads the class's list (via the fallback) and modifies it in place. Every instance shares that single list. This is the class-level cousin of the mutable default argument bug from <a href="m05-functions.html">M05</a>.</p>
+    <div class="tracer" data-title="The shared-mutable trap">
+<textarea>
+class Basket:
+    items = []              # BUG: one list shared by every Basket
+
+    def add(self, item):
+        self.items.append(item)
+
+class FixedBasket:
+    def __init__(self):
+        self.items = []     # a fresh list per instance
+
+    def add(self, item):
+        self.items.append(item)
+
+a = Basket()
+b = Basket()
+a.add("apple")
+b_sees = list(b.items)      # b sees a's apple!
+same_list = a.items is b.items
+
+c = FixedBasket()
+d = FixedBasket()
+c.add("apple")
+d_sees = list(d.items)
+</textarea>
+    </div>
+    <p>In the trace, <code>a.items</code> and <code>b.items</code> carry the same identity tag: one list. In <code>FixedBasket</code>, each instance builds its own list inside <code>__init__</code>, so the tags differ. The <code>references</code> visualizer shows the same idea with plain names: two names, one object.</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "alias"}'></div>
+    <aside class="callout warn"><p>Rule of thumb: class attributes should hold <em>immutable</em> values (numbers, strings, tuples, frozensets) or values you deliberately want shared, such as a registry or a counter of instances. Anything per-object and mutable belongs in <code>__init__</code>.</p></aside>
+    <p>A legitimate use of a shared mutable class attribute is counting or registering instances. Note that you must update it through the class name; <code>self.count += 1</code> would read the class value and then <em>write</em> a new instance attribute, leaving the class counter unchanged.</p>
+    <div class="runnable" data-title="Counting instances correctly">
+<textarea>
+class Ticket:
+    issued = 0                  # shared on purpose
+
+    def __init__(self, event):
+        Ticket.issued += 1      # write through the class, not self
+        self.number = Ticket.issued
+        self.event = event
+
+t1 = Ticket("PyCon")
+t2 = Ticket("PyCon")
+print(t1.number, t2.number, Ticket.issued)
+print("number" in t1.__dict__, "issued" in t1.__dict__)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> class attributes are shared; instance attributes are per-object. Never put a per-object mutable container in the class body.</p>
+  </section>
+
+  <section class="lesson-section" id="properties">
+    <h2>Properties: attribute syntax, method power</h2>
+    <p>Suppose your <code>Temperature</code> class started with a plain <code>self.celsius</code> attribute, and hundreds of lines elsewhere read and write <code>t.celsius</code>. Later you realize that values below absolute zero (−273.15 °C) must be rejected. In Java you would have needed <code>getCelsius()</code>/<code>setCelsius()</code> methods from day one. In Python you don't: you can swap the plain attribute for a <dfn>property</dfn> later without changing any calling code.</p>
+    <p>A property is a method that is <em>accessed like an attribute</em>. The <code>@property</code> decorator turns a method into a getter; <code>@name.setter</code> attaches a setter that runs on assignment. (A <dfn>decorator</dfn> is a function that wraps another function; you will build your own in <a href="m15-decorators.html">M15</a>. For now, treat <code>@property</code> as special syntax.)</p>
+    <pre><code class="language-python">class Temperature:
+    ABSOLUTE_ZERO = -273.15
+
+    def __init__(self, celsius):
+        self.celsius = celsius        # goes through the setter below!
+
+    @property
+    def celsius(self):
+        """Temperature in degrees Celsius."""
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value):
+        if value &lt; self.ABSOLUTE_ZERO:
+            raise ValueError(f"{value} is below absolute zero")
+        self._celsius = float(value)
+
+    @property
+    def fahrenheit(self):            # read-only, computed on demand
+        return self._celsius * 9 / 5 + 32</code></pre>
+    <p>The real value is stored in <code>self._celsius</code> (the underscore says "internal", see the next sections). The public name <code>celsius</code> is the property. Two details make this robust:</p>
+    <ul>
+      <li><code>__init__</code> assigns <code>self.celsius</code>, not <code>self._celsius</code>, so even the initial value is validated. There is exactly one place where the rule lives.</li>
+      <li><code>fahrenheit</code> has no setter, so it is <dfn>read-only</dfn>: assigning to it raises <code>AttributeError</code>. It is <dfn>computed</dfn>, so it can never fall out of sync with <code>celsius</code>.</li>
+    </ul>
+    <div class="runnable" data-title="Try the validation">
+<textarea>
+class Temperature:
+    ABSOLUTE_ZERO = -273.15
+
+    def __init__(self, celsius):
+        self.celsius = celsius
+
+    @property
+    def celsius(self):
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value):
+        if value < self.ABSOLUTE_ZERO:
+            raise ValueError(f"{value} is below absolute zero")
+        self._celsius = float(value)
+
+    @property
+    def fahrenheit(self):
+        return self._celsius * 9 / 5 + 32
+
+t = Temperature(25)
+print(t.celsius, t.fahrenheit)
+t.celsius = 100
+print(t.fahrenheit)
+for bad in (-300, "x"):
+    try:
+        t.celsius = bad
+    except (ValueError, TypeError) as exc:
+        print(type(exc).__name__, exc)
+try:
+    t.fahrenheit = 0
+except AttributeError as exc:
+    print("AttributeError:", exc)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Inside the getter, return <code>self._celsius</code>, never <code>self.celsius</code>. Reading <code>self.celsius</code> calls the getter again, which reads <code>self.celsius</code> again, until Python raises <code>RecursionError</code>.</p></aside>
+    <aside class="callout pro"><p>Start with plain attributes. Introduce a property only when you need validation, a computed value, or a read-only view. Properties should be cheap and free of surprising side effects: a reader expects <code>obj.x</code> to be instant. If something is slow (a network call, a big computation), make it a regular method so the parentheses signal "work happens here."</p></aside>
+    <p><strong>Remember:</strong> a property lets you add validation or computation behind attribute syntax, so you can start simple and tighten the rules later without breaking callers.</p>
+  </section>
+
+  <section class="lesson-section" id="classmethods">
+    <h2><code>@classmethod</code> and <code>@staticmethod</code></h2>
+    <p>Ordinary methods receive the instance. Sometimes you need a method that works with the <em>class</em> itself, before any instance exists. The most common case is an <dfn>alternative constructor</dfn>: a second way to build an object from a different kind of input. The built-ins are full of them: <code>dict.fromkeys(...)</code>, <code>int.from_bytes(...)</code>, <code>datetime.fromisoformat(...)</code>.</p>
+    <p>A <code>@classmethod</code> receives the class as its first argument, conventionally named <code>cls</code>. Calling <code>cls(...)</code> inside it builds an instance. Using <code>cls</code> rather than the hard-coded class name means subclasses automatically get instances of the subclass (you will see why that matters in <a href="m12-inheritance.html">M12</a>).</p>
+    <p>A <code>@staticmethod</code> receives neither the instance nor the class. It is a plain function that lives inside the class's namespace because it belongs there conceptually, such as a validation helper.</p>
+    <div class="runnable" data-title="Three kinds of method">
+<textarea>
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    @classmethod
+    def from_string(cls, text):
+        """Alternative constructor: Point.from_string("3,4")."""
+        x, y = (float(part) for part in text.split(","))
+        return cls(x, y)
+
+    @classmethod
+    def origin(cls):
+        return cls(0.0, 0.0)
+
+    @staticmethod
+    def is_valid_text(text):
+        parts = text.split(",")
+        return len(parts) == 2 and all(p.strip().lstrip("-").replace(".", "", 1).isdigit() for p in parts)
+
+    def distance_to(self, other):     # regular instance method
+        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2) ** 0.5
+
+p = Point.from_string("3,4")
+print(p.x, p.y)
+print(p.distance_to(Point.origin()))
+print(Point.is_valid_text("1.5,-2"), Point.is_valid_text("hello"))
+</textarea>
+    </div>
+    <table>
+      <thead><tr><th>Kind</th><th>First argument</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td>Instance method</td><td><code>self</code> (the instance)</td><td>Read or change one object's state</td></tr>
+        <tr><td><code>@classmethod</code></td><td><code>cls</code> (the class)</td><td>Alternative constructors, class-wide configuration</td></tr>
+        <tr><td><code>@staticmethod</code></td><td>none</td><td>Helpers related to the class that need no state</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p>If a "static method" doesn't use the class at all and is useful elsewhere, a module-level function is often clearer. Python does not force everything into a class, and modules are already namespaces.</p></aside>
+    <p><strong>Remember:</strong> use <code>@classmethod</code> (with <code>cls</code>) for alternative constructors; use <code>@staticmethod</code> sparingly for stateless helpers.</p>
+  </section>
+
+  <section class="lesson-section" id="encapsulation">
+    <h2>Encapsulation, name mangling, and <code>__dict__</code></h2>
+    <p><dfn>Encapsulation</dfn> means hiding an object's internal details behind a public interface so that callers depend only on what you promise. Many languages enforce it with <code>private</code> keywords. Python instead relies on conventions and trusts programmers: "we are all consenting adults here."</p>
+    <table>
+      <thead><tr><th>Spelling</th><th>Meaning</th><th>Enforced?</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Public: part of the interface; callers may use it</td><td>n/a</td></tr>
+        <tr><td><code>_name</code></td><td>Internal: "please don't touch, it may change without notice"</td><td>No (convention only; also hidden from <code>from module import *</code>)</td></tr>
+        <tr><td><code>__name</code></td><td>Class-private: renamed to <code>_ClassName__name</code> to avoid clashes in subclasses</td><td>Partly (name mangling)</td></tr>
+        <tr><td><code>__name__</code></td><td>Special ("dunder") names reserved for Python's protocols</td><td>Don't invent your own</td></tr>
+      </tbody>
+    </table>
+    <p><dfn>Name mangling</dfn> happens at compile time: inside a class body, any identifier written <code>__secret</code> (two leading underscores, at most one trailing) is rewritten to <code>_ClassName__secret</code>. Its purpose is not security; it prevents a subclass from accidentally overwriting a parent's internal attribute with the same name. Anyone can still reach the value via the mangled name.</p>
+    <div class="runnable" data-title="Inspecting __dict__ and mangled names">
+<textarea>
+class Vault:
+    def __init__(self, owner, code):
+        self.owner = owner      # public
+        self._log = []          # internal by convention
+        self.__code = code      # mangled to _Vault__code
+
+    def check(self, guess):
+        self._log.append(guess)
+        return guess == self.__code   # works inside the class
+
+v = Vault("Ada", 1234)
+print(v.__dict__)               # see the real attribute names
+print(vars(v) is v.__dict__)    # vars() returns the same dict
+print(v.check(1111), v.check(1234))
+try:
+    print(v.__code)
+except AttributeError as exc:
+    print("AttributeError:", exc)
+print(v._Vault__code)           # not truly private!
+print(sorted(k for k in vars(Vault) if not k.startswith("__")))
+</textarea>
+    </div>
+    <p><code>__dict__</code> (or the built-in <code>vars(obj)</code>) is an invaluable debugging tool: it shows exactly what an instance stores. The class has its own <code>__dict__</code> holding methods and class attributes, which is why <code>vars(Vault)</code> lists <code>check</code>.</p>
+    <aside class="callout pro"><p>Professional Python code uses a single underscore for internals and properties for controlled access. Double underscores are reserved for the specific case of avoiding name clashes in class hierarchies meant to be subclassed. When you see <code>obj._internal</code> used from outside a class in a code review, it is a smell: either the class's public interface is missing something, or the caller is coupling itself to details that may change.</p></aside>
+    <aside class="callout note" data-title="Looking ahead: __slots__"><p>Classes can declare <code>__slots__ = ("x", "y")</code> to replace the per-instance <code>__dict__</code> with fixed storage, saving memory and rejecting typos like <code>p.z = 1</code>. You will meet it via <code>@dataclass(slots=True)</code> in <a href="m13-dataclasses.html">M13</a>.</p></aside>
+    <p><strong>Remember:</strong> <code>_name</code> means internal by convention; <code>__name</code> is mangled to <code>_Class__name</code> to avoid subclass clashes, not to provide security. <code>vars(obj)</code> shows what an object really stores.</p>
+  </section>
+
+  <section class="lesson-section" id="design">
+    <h2>Designing a class from requirements</h2>
+    <p>Writing the syntax is the easy part. The hard part, and the skill that separates professionals, is deciding <em>what</em> the class should be. Here is a repeatable process, applied to a real requirement:</p>
+    <blockquote><p>"A library lends books to members. A member can borrow at most three books at a time. Each loan records the date it was borrowed. Members can return books, and staff need to see which books a member currently has."</p></blockquote>
+    <ol>
+      <li><strong>Find the nouns.</strong> library, book, member, loan, date. Nouns that have their own data and rules become classes: <code>Book</code>, <code>Member</code>, <code>Loan</code>. Simple values (a date, a title) stay as attributes.</li>
+      <li><strong>Find the verbs.</strong> borrow, return, list current books. Verbs become methods on the class that owns the data they change: <code>Member.borrow(book)</code>, <code>Member.return_book(book)</code>, <code>Member.current_books()</code>.</li>
+      <li><strong>State the invariants.</strong> "At most three active loans." "A book can't be returned if it wasn't borrowed." Each becomes a check in a method that raises a clear exception.</li>
+      <li><strong>Choose the public interface.</strong> What must callers be able to do? Everything else gets an underscore. Here the list of loans is internal (<code>_loans</code>); callers use <code>current_books()</code>.</li>
+      <li><strong>Draw it.</strong> A <dfn>UML class diagram</dfn> shows each class as a box with attributes and methods, and lines for relationships. <code>+</code> marks public, <code>-</code> marks internal.</li>
+    </ol>
+    <pre class="mermaid">
+classDiagram
+  class Member {
+    +str name
+    +int MAX_LOANS$
+    -list~Loan~ _loans
+    +borrow(book, on) Loan
+    +return_book(book) None
+    +current_books() list~Book~
+  }
+  class Loan {
+    +Book book
+    +date borrowed_on
+  }
+  class Book {
+    +str isbn
+    +str title
+  }
+  Member "1" --> "0..3" Loan : holds
+  Loan "*" --> "1" Book : of
+    </pre>
+    <p>The <code>$</code> after <code>MAX_LOANS</code> marks a class (static) attribute. The arrow labels give <dfn>multiplicity</dfn>: one member holds zero to three loans. Translating the diagram into code is now mechanical:</p>
+    <div class="runnable" data-title="From diagram to code">
+<textarea>
+from datetime import date
+
+class Book:
+    def __init__(self, isbn, title):
+        self.isbn = isbn
+        self.title = title
+
+class Loan:
+    def __init__(self, book, borrowed_on):
+        self.book = book
+        self.borrowed_on = borrowed_on
+
+class Member:
+    MAX_LOANS = 3
+
+    def __init__(self, name):
+        self.name = name
+        self._loans = []
+
+    def borrow(self, book, on=None):
+        if len(self._loans) >= self.MAX_LOANS:
+            raise ValueError(f"{self.name} already has {self.MAX_LOANS} books")
+        loan = Loan(book, on or date.today())
+        self._loans.append(loan)
+        return loan
+
+    def return_book(self, book):
+        for loan in self._loans:
+            if loan.book is book:
+                self._loans.remove(loan)
+                return
+        raise ValueError(f"{book.title!r} is not on loan to {self.name}")
+
+    def current_books(self):
+        return [loan.book for loan in self._loans]
+
+ada = Member("Ada")
+books = [Book(str(i), f"Book {i}") for i in range(4)]
+for b in books[:3]:
+    ada.borrow(b, date(2026, 10, 1))
+try:
+    ada.borrow(books[3])
+except ValueError as exc:
+    print(exc)
+ada.return_book(books[0])
+print([b.title for b in ada.current_books()])
+</textarea>
+    </div>
+    <aside class="callout think"><p>Should <code>borrow</code> live on <code>Member</code> or on a <code>Library</code> class? If the rule were "a book can only be lent to one member at a time", which object would need to know? Sketch a <code>Library</code> class that owns both members and an inventory. You will build a full version in <a href="../projects/p02-library-system.html">Project 2</a>.</p></aside>
+    <p><strong>Remember:</strong> nouns become classes, verbs become methods, invariants become checks, and the public interface is the smallest set of operations callers need.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise runs automated tests against your code. Work through them in order; they build from syntax to design.</p>
+
+    <div class="exercise" data-id="m10-e1" data-title="A Rectangle class">
+      <div class="exercise-prompt">
+        <p>Write a class <code>Rectangle</code> whose initializer takes <code>width</code> and <code>height</code> and stores them as attributes with those names. Add methods <code>area()</code> and <code>perimeter()</code>, and a method <code>is_square()</code> that returns <code>True</code> when width equals height.</p>
+      </div>
+<textarea class="starter">
+class Rectangle:
+    def __init__(self, width, height):
+        ...
+
+    def area(self):
+        ...
+
+    def perimeter(self):
+        ...
+
+    def is_square(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_attributes():
+    r = Rectangle(3, 4)
+    assert r.width == 3 and r.height == 4, "store width and height on self"
+
+def test_area_perimeter():
+    r = Rectangle(3, 4)
+    assert r.area() == 12, "area of 3x4 is 12"
+    assert r.perimeter() == 14, "perimeter of 3x4 is 14"
+
+def test_square():
+    assert Rectangle(5, 5).is_square() is True, "5x5 is a square"
+    assert Rectangle(5, 6).is_square() is False, "5x6 is not a square"
+
+def test_independent():
+    a, b = Rectangle(1, 2), Rectangle(10, 20)
+    assert a.area() == 2 and b.area() == 200, "instances must not share state"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Inside every method, reach the data through <code>self.width</code> and <code>self.height</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Rectangle:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+    def area(self):
+        return self.width * self.height
+
+    def perimeter(self):
+        return 2 * (self.width + self.height)
+
+    def is_square(self):
+        return self.width == self.height</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m10-e2" data-title="Fix the shared playlist">
+      <div class="exercise-prompt">
+        <p>The <code>Playlist</code> class below has the shared-mutable bug: every playlist shares one list of songs. Fix it so each playlist has its own songs. Also keep a <strong>class</strong> attribute <code>created</code> that counts how many playlists have ever been made (starting at 0), and give each playlist a <code>name</code>. <code>add(song)</code> appends a song; <code>songs</code> must be a list attribute.</p>
+      </div>
+<textarea class="starter">
+class Playlist:
+    songs = []
+    created = 0
+
+    def __init__(self, name):
+        self.name = name
+        self.created += 1
+
+    def add(self, song):
+        self.songs.append(song)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_independent_songs():
+    a, b = Playlist("a"), Playlist("b")
+    a.add("x")
+    assert a.songs == ["x"], "a should contain its song"
+    assert b.songs == [], "b must not see a's songs"
+    assert a.songs is not b.songs, "each playlist needs its own list"
+
+def test_counter():
+    before = Playlist.created
+    Playlist("c"); Playlist("d")
+    assert Playlist.created == before + 2, "Playlist.created must count instances (update it through the class)"
+
+def test_counter_not_on_instance():
+    p = Playlist("e")
+    assert "created" not in vars(p), "created should not become an instance attribute"
+    assert p.name == "e", "store the name"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Create the list in <code>__init__</code> with <code>self.songs = []</code>. For the counter, write <code>Playlist.created += 1</code>; <code>self.created += 1</code> creates a shadowing instance attribute.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Playlist:
+    created = 0
+
+    def __init__(self, name):
+        self.name = name
+        self.songs = []
+        Playlist.created += 1
+
+    def add(self, song):
+        self.songs.append(song)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m10-e3" data-title="Validated Temperature with properties">
+      <div class="exercise-prompt">
+        <p>Write <code>Temperature(celsius)</code> with a <code>celsius</code> property that raises <code>ValueError</code> for values below <code>-273.15</code> (including in the initializer), and a <code>fahrenheit</code> property with both a getter (<code>c * 9 / 5 + 32</code>) and a setter that converts back and stores Celsius (so setting an impossible Fahrenheit also raises <code>ValueError</code>).</p>
+      </div>
+<textarea class="starter">
+class Temperature:
+    def __init__(self, celsius):
+        ...
+
+    @property
+    def celsius(self):
+        ...
+
+    # add the celsius setter, then the fahrenheit property and setter
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_basic():
+    t = Temperature(100)
+    assert math.isclose(t.celsius, 100), "celsius should be 100"
+    assert math.isclose(t.fahrenheit, 212), "100 C is 212 F"
+
+def test_set_fahrenheit():
+    t = Temperature(0)
+    t.fahrenheit = 32
+    assert math.isclose(t.celsius, 0), "32 F is 0 C"
+    t.fahrenheit = 212
+    assert math.isclose(t.celsius, 100), "212 F is 100 C"
+
+def test_validation():
+    for make in (lambda: Temperature(-300), lambda: setattr(Temperature(0), "celsius", -274),
+                 lambda: setattr(Temperature(0), "fahrenheit", -500)):
+        try:
+            make()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("values below absolute zero must raise ValueError")
+
+def test_is_property():
+    assert isinstance(Temperature.__dict__.get("celsius"), property), "celsius must be a property"
+    assert isinstance(Temperature.__dict__.get("fahrenheit"), property), "fahrenheit must be a property"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Store the value in <code>self._celsius</code>. The Fahrenheit setter can simply do <code>self.celsius = (value - 32) * 5 / 9</code>, reusing the Celsius validation.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Temperature:
+    ABSOLUTE_ZERO = -273.15
+
+    def __init__(self, celsius):
+        self.celsius = celsius
+
+    @property
+    def celsius(self):
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value):
+        if value &lt; self.ABSOLUTE_ZERO:
+            raise ValueError(f"{value} C is below absolute zero")
+        self._celsius = float(value)
+
+    @property
+    def fahrenheit(self):
+        return self._celsius * 9 / 5 + 32
+
+    @fahrenheit.setter
+    def fahrenheit(self, value):
+        self.celsius = (value - 32) * 5 / 9</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m10-e4" data-title="An alternative constructor">
+      <div class="exercise-prompt">
+        <p>Write a class <code>Color</code> with attributes <code>r</code>, <code>g</code>, <code>b</code> (ints 0–255). Add:</p>
+        <ul>
+          <li>a <code>@staticmethod</code> <code>clamp(value)</code> that limits an int to the range 0–255;</li>
+          <li>an initializer that clamps each component;</li>
+          <li>a <code>@classmethod</code> <code>from_hex(text)</code> that accepts <code>"#ff8800"</code> or <code>"ff8800"</code> and returns a <code>Color</code> (use <code>int(part, 16)</code>);</li>
+          <li>a method <code>to_hex()</code> returning lowercase <code>"#rrggbb"</code>.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+class Color:
+    def __init__(self, r, g, b):
+        ...
+
+    @staticmethod
+    def clamp(value):
+        ...
+
+    @classmethod
+    def from_hex(cls, text):
+        ...
+
+    def to_hex(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_clamp():
+    assert Color.clamp(300) == 255 and Color.clamp(-5) == 0 and Color.clamp(7) == 7, "clamp to 0..255"
+
+def test_init_clamps():
+    c = Color(300, -1, 128)
+    assert (c.r, c.g, c.b) == (255, 0, 128), "initializer should clamp each component"
+
+def test_from_hex():
+    c = Color.from_hex("#ff8800")
+    assert (c.r, c.g, c.b) == (255, 136, 0), "#ff8800 is (255, 136, 0)"
+    assert isinstance(c, Color), "from_hex must return a Color"
+    d = Color.from_hex("0A0B0C")
+    assert (d.r, d.g, d.b) == (10, 11, 12), "the leading # is optional and case doesn't matter"
+
+def test_to_hex():
+    assert Color(255, 136, 0).to_hex() == "#ff8800", "to_hex should give lowercase #rrggbb"
+    assert Color(1, 2, 3).to_hex() == "#010203", "pad each component to two digits"
+
+def test_subclass_uses_cls():
+    class Shade(Color):
+        pass
+    assert type(Shade.from_hex("#000000")) is Shade, "from_hex should call cls(...) so subclasses work"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>text.lstrip("#")</code> removes the hash. Slice pairs with <code>text[0:2]</code>, <code>text[2:4]</code>, <code>text[4:6]</code>. Format with <code>f"{n:02x}"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Color:
+    def __init__(self, r, g, b):
+        self.r = self.clamp(r)
+        self.g = self.clamp(g)
+        self.b = self.clamp(b)
+
+    @staticmethod
+    def clamp(value):
+        return max(0, min(255, int(value)))
+
+    @classmethod
+    def from_hex(cls, text):
+        digits = text.lstrip("#")
+        if len(digits) != 6:
+            raise ValueError(f"expected 6 hex digits, got {text!r}")
+        r, g, b = (int(digits[i:i + 2], 16) for i in (0, 2, 4))
+        return cls(r, g, b)
+
+    def to_hex(self):
+        return f"#{self.r:02x}{self.g:02x}{self.b:02x}"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m10-e5" data-title="Design: a shopping cart with invariants">
+      <div class="exercise-prompt">
+        <p>Design a <code>Cart</code> class. Requirements:</p>
+        <ul>
+          <li><code>add(name, price, qty=1)</code> adds an item; adding the same name again increases its quantity. <code>price</code> must be &gt;= 0 and <code>qty</code> &gt;= 1, otherwise raise <code>ValueError</code>.</li>
+          <li><code>remove(name)</code> removes an item entirely; raise <code>KeyError</code> if it isn't there.</li>
+          <li><code>total</code> is a read-only property: the sum of price × quantity.</li>
+          <li><code>count</code> is a read-only property: total number of units.</li>
+          <li><code>items()</code> returns a <em>new</em> list of <code>(name, price, qty)</code> tuples in insertion order, so callers can't mutate the cart's internals.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+class Cart:
+    def __init__(self):
+        self._items = {}   # name -> [price, qty]
+
+    def add(self, name, price, qty=1):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_add_and_total():
+    c = Cart()
+    c.add("pen", 1.5, 2)
+    c.add("book", 10)
+    assert math.isclose(c.total, 13.0), "total should be 1.5*2 + 10"
+    assert c.count == 3, "count is total units"
+
+def test_add_same_name_merges():
+    c = Cart()
+    c.add("pen", 1.5)
+    c.add("pen", 1.5, 3)
+    assert c.items() == [("pen", 1.5, 4)], "adding again should increase quantity"
+
+def test_validation():
+    c = Cart()
+    for args in (("x", -1), ("x", 1, 0)):
+        try:
+            c.add(*args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"add{args} should raise ValueError")
+
+def test_remove():
+    c = Cart()
+    c.add("pen", 1)
+    c.remove("pen")
+    assert c.items() == [] and c.total == 0, "removed item should be gone"
+    try:
+        c.remove("pen")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("removing a missing item should raise KeyError")
+
+def test_read_only_and_copy():
+    c = Cart()
+    c.add("pen", 1)
+    try:
+        c.total = 0
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("total must be read-only")
+    c.items().clear()
+    assert c.count == 1, "items() must return a copy"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Store <code>{name: [price, qty]}</code> in <code>self._items</code>. Use <code>@property</code> without a setter for <code>total</code> and <code>count</code>. Dicts keep insertion order.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Cart:
+    def __init__(self):
+        self._items = {}
+
+    def add(self, name, price, qty=1):
+        if price &lt; 0:
+            raise ValueError("price must be non-negative")
+        if qty &lt; 1:
+            raise ValueError("qty must be at least 1")
+        if name in self._items:
+            self._items[name][1] += qty
+        else:
+            self._items[name] = [price, qty]
+
+    def remove(self, name):
+        if name not in self._items:
+            raise KeyError(name)
+        del self._items[name]
+
+    @property
+    def total(self):
+        return sum(price * qty for price, qty in self._items.values())
+
+    @property
+    def count(self):
+        return sum(qty for _, qty in self._items.values())
+
+    def items(self):
+        return [(name, price, qty) for name, (price, qty) in self._items.items()]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a BankAccount with history</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">BankAccount with a transaction history</span></div>
+      <div class="widget-body">
+        <p>Build a small, well-encapsulated banking model in a Pixi project. This is the kind of class you will write constantly as a professional: a small object that guards money and keeps an audit trail.</p>
+        <h4>Set up</h4>
+<pre data-label="Terminal"><code class="language-bash">pixi init bank
+cd bank
+mkdir -p src
+pixi run python src/bank.py</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>Transaction</code>: a small class with <code>kind</code> (<code>"deposit"</code>, <code>"withdrawal"</code>, <code>"transfer-in"</code>, <code>"transfer-out"</code>), <code>amount</code>, <code>balance_after</code>, and <code>timestamp</code> (<code>datetime.now()</code>).</li>
+          <li><code>BankAccount(owner, opening_balance=0)</code>: stores <code>owner</code> publicly, the balance internally as <code>_balance</code>, and the history in <code>_history</code> (a list of <code>Transaction</code>). Each account gets a unique <code>number</code> from a class-level counter.</li>
+          <li><code>balance</code> is a read-only property. <code>history()</code> returns a copy (a tuple) of the transactions.</li>
+          <li><code>deposit(amount)</code> and <code>withdraw(amount)</code> validate input (positive amounts; no overdraft) and raise <code>ValueError</code> with a clear message.</li>
+          <li><code>transfer_to(other, amount)</code> moves money atomically: either both accounts change or neither does.</li>
+          <li><code>BankAccount.from_csv_row("Ada,150.00")</code> is a classmethod alternative constructor.</li>
+          <li><code>statement()</code> returns a multi-line string with one line per transaction.</li>
+        </ul>
+<pre><code class="language-python">acct = BankAccount("Ada", 100)
+acct.deposit(50)
+acct.withdraw(30)
+print(acct.balance)        # 120.0
+print(acct.statement())
+acct.balance = 1_000_000   # AttributeError: read-only</code></pre>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m10-mini">
+          <li>Every way to change the balance goes through a method that validates input</li>
+          <li><code>balance</code> cannot be assigned from outside the class</li>
+          <li>Mutating the result of <code>history()</code> cannot change the account</li>
+          <li>Account numbers are unique and increase (class attribute, updated through the class)</li>
+          <li>A failed <code>transfer_to</code> (insufficient funds) leaves both balances and histories unchanged</li>
+          <li><code>from_csv_row</code> uses <code>cls(...)</code></li>
+          <li>A short script at the bottom (under <code>if __name__ == "__main__":</code>) demonstrates every feature and runs with <code>pixi run python src/bank.py</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a <code>SavingsAccount</code> idea to your notes: what would change? (You will implement it with inheritance in M12.)</li>
+          <li>Store money as integer cents, or use <code>decimal.Decimal</code>, to avoid floating-point rounding (see <a href="m02-values-types.html">M02</a>).</li>
+          <li>Draw your design as a Mermaid <code>classDiagram</code> in a <code>README.md</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m10-quiz">
+<script type="application/json">
+{"title": "Classes & Objects quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is <code>self</code> in a method?", "options": ["A keyword that refers to the class", "The instance the method was called on, passed automatically as the first argument", "A global variable holding the current object", "The return value of <code>__init__</code>"], "answer": 1, "explanation": "<p><code>obj.method()</code> becomes <code>Class.method(obj)</code>; <code>self</code> is just the conventional name for that first parameter.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class A:\n    def __init__(self):\n        self.n = 1\n\nx = A()\ny = x\ny.n = 5\nprint(x.n)", "answer": "5", "explanation": "<p><code>y = x</code> does not copy; both names refer to the same instance, so changing <code>y.n</code> changes what <code>x.n</code> sees.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class Bag:\n    items = []\n    def add(self, x):\n        self.items.append(x)\n\na, b = Bag(), Bag()\na.add(1)\nb.add(2)\nprint(len(a.items))", "answer": "2", "explanation": "<p><code>items</code> is a class attribute: one list shared by every Bag. Both appends mutate it. Create the list in <code>__init__</code> instead.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class C:\n    x = 1\n\nc = C()\nc.x = 2\nprint(C.x, c.x)", "answer": "1 2", "explanation": "<p>Assignment through an instance creates an instance attribute that shadows the class attribute; the class value is unchanged.</p>"},
+  {"type": "single", "prompt": "What happens if <code>__init__</code> returns a non-None value?", "options": ["The value becomes the new instance", "It is silently ignored", "<code>TypeError</code> is raised", "The instance is discarded"], "answer": 2, "explanation": "<p>The call to the class already returns the instance. Python raises <code>TypeError: __init__() should return None</code>.</p>"},
+  {"type": "single", "prompt": "Why use a property instead of <code>get_x()</code>/<code>set_x()</code> methods?", "options": ["Properties are faster than attributes", "You can start with a plain attribute and add validation later without changing callers", "Properties make attributes truly private", "Methods cannot validate input"], "answer": 1, "explanation": "<p>Properties keep attribute syntax, so the public interface stays stable while the implementation adds checks or computation.</p>"},
+  {"type": "multi", "prompt": "Which statements about <code>@classmethod</code> are true?", "options": ["Its first parameter receives the class", "It is commonly used for alternative constructors", "It cannot be called on an instance", "Calling <code>cls(...)</code> inside it lets subclasses get instances of themselves"], "answer": [0, 1, 3], "explanation": "<p>Class methods can be called on the class or an instance; either way they receive the class. Using <code>cls</code> rather than the literal class name makes them subclass-friendly.</p>"},
+  {"type": "text", "prompt": "Inside <code>class Account:</code>, the attribute <code>self.__pin</code> is stored in <code>__dict__</code> under what name?", "answer": ["_Account__pin"], "explanation": "<p>Name mangling rewrites <code>__pin</code> to <code>_Account__pin</code>, preventing accidental clashes with subclass attributes. It is not security.</p>"},
+  {"type": "single", "prompt": "A getter written as <code>return self.value</code> for a property named <code>value</code> will…", "options": ["Return the stored value", "Return <code>None</code>", "Recurse until <code>RecursionError</code>", "Raise <code>AttributeError</code> immediately"], "answer": 2, "explanation": "<p>Reading <code>self.value</code> calls the property getter again. Store the data under a different name such as <code>self._value</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class T:\n    count = 0\n    def __init__(self):\n        self.count += 1\n\nT(); T()\nprint(T.count)", "answer": "0", "explanation": "<p><code>self.count += 1</code> reads the class value 0, then writes 1 to a new <em>instance</em> attribute. The class counter never changes. Use <code>T.count += 1</code>.</p>"},
+  {"type": "single", "prompt": "Which is the best use of <code>@staticmethod</code>?", "options": ["Building an instance from a string", "Changing one object's state", "A helper that logically belongs to the class but needs neither the instance nor the class", "Making an attribute read-only"], "answer": 2, "explanation": "<p>Static methods receive no automatic first argument. Alternative constructors should be class methods; read-only attributes are properties.</p>"},
+  {"type": "multi", "prompt": "Which conventions does Python use for encapsulation?", "options": ["<code>_name</code> signals internal use", "A <code>private</code> keyword", "<code>__name</code> triggers name mangling", "Properties to control access"], "answer": [0, 2, 3], "explanation": "<p>Python has no <code>private</code> keyword; it relies on underscores, name mangling, and properties.</p>"},
+  {"type": "text", "prompt": "Which built-in function returns an object's attribute dictionary (the same object as <code>obj.__dict__</code>)?", "answer": ["vars", "vars()"], "explanation": "<p><code>vars(obj)</code> returns <code>obj.__dict__</code>, a handy debugging aid.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A class bundles state and behavior; its methods protect the object's invariants.</li>
+      <li>Calling a class creates an instance and runs <code>__init__(self, ...)</code> to set its initial state.</li>
+      <li><code>obj.method(x)</code> is <code>Class.method(obj, x)</code>; <code>self</code> is the instance.</li>
+      <li>Attribute reads check the instance, then the class; writes always go to the instance.</li>
+      <li>Class attributes are shared. Never store a per-instance mutable container in the class body.</li>
+      <li><code>@property</code> adds validation or computation behind attribute syntax; omit the setter for read-only values.</li>
+      <li><code>@classmethod</code> receives <code>cls</code> and is the idiom for alternative constructors; <code>@staticmethod</code> receives nothing.</li>
+      <li><code>_name</code> means internal; <code>__name</code> is mangled to <code>_Class__name</code>; <code>vars(obj)</code> reveals what is stored.</li>
+      <li>Design from requirements: nouns to classes, verbs to methods, invariants to checks, minimal public interface.</li>
+    </ul>
+    <div class="flashcards" data-title="Classes & Objects">
+<script type="application/json">
+[
+  {"front": "Class vs instance", "back": "A class is the blueprint (a type); an instance is one object built by calling the class."},
+  {"front": "What does <code>__init__</code> do?", "back": "Initializes a freshly created instance (passed as <code>self</code>) into a valid starting state. Must return None."},
+  {"front": "<code>obj.m(x)</code> is equivalent to…", "back": "<code>type(obj).m(obj, x)</code>: the dot lookup produces a bound method that pre-fills <code>self</code>."},
+  {"front": "Attribute lookup order (so far)", "back": "Instance <code>__dict__</code>, then the class (then base classes). Writes go to the instance."},
+  {"front": "The shared-mutable trap", "back": "A list/dict defined in the class body is shared by all instances; mutation through <code>self</code> affects everyone. Create it in <code>__init__</code>."},
+  {"front": "<code>@property</code>", "back": "Turns a method into an attribute-style getter; add <code>@name.setter</code> for validated assignment. No setter = read-only."},
+  {"front": "<code>@classmethod</code>", "back": "Receives the class as <code>cls</code>; used for alternative constructors like <code>from_string</code>. Call <code>cls(...)</code> to stay subclass-friendly."},
+  {"front": "<code>@staticmethod</code>", "back": "A function in the class namespace that receives neither instance nor class."},
+  {"front": "<code>_name</code> vs <code>__name</code>", "back": "<code>_name</code>: internal by convention. <code>__name</code>: name-mangled to <code>_Class__name</code> to avoid subclass clashes."},
+  {"front": "<code>vars(obj)</code>", "back": "Returns <code>obj.__dict__</code>, the instance's attribute dictionary."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/tutorial/classes.html">Python Tutorial: Classes</a></li>
+      <li><a href="https://docs.python.org/3/library/functions.html#property">Built-in <code>property</code></a>, <a href="https://docs.python.org/3/library/functions.html#classmethod"><code>classmethod</code></a>, <a href="https://docs.python.org/3/library/functions.html#staticmethod"><code>staticmethod</code></a></li>
+      <li><a href="https://docs.python.org/3/reference/expressions.html#atom-identifiers">Language reference: private name mangling</a></li>
+      <li><a href="https://peps.python.org/pep-0008/#designing-for-inheritance">PEP 8: Designing for inheritance (public vs non-public names)</a></li>
+      <li><a href="https://docs.python.org/3/howto/descriptor.html">Descriptor HowTo Guide</a> (how properties and methods really work)</li>
+      <li>Next: <a href="m11-data-model.html">M11 The Python Data Model</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

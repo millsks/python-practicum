@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 9 · ETL Pipeline &amp; Warehouse · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p09">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 9 · Data Engineering · Graded project</p>
+    <h1>Project 9: ETL Pipeline &amp; Warehouse</h1>
+    <p class="lede">Build the nightly data pipeline for a city bike-share: read messy daily trip files, validate every row
+      with reasons, normalize time zones across a daylight-saving switch, and load a sqlite3 star schema with SCD type 2
+      station history, idempotent upserts, an incremental watermark, and a retrying DAG runner. Sixty-three tests tell you
+      when each piece is right.</p>
+    <div class="lesson-meta"><span>⏱ ~10–12 hours</span><span>Prerequisites: <a href="../modules/m60-data-engineering.html">M60</a>, <a href="../modules/m61-sql-duckdb.html">M61</a>, <a href="../modules/m62-pipelines.html">M62</a>, <a href="../modules/m63-big-data-streaming.html">M63</a></span></div>
+    <ul class="objectives">
+      <li>Extract incrementally with a processed-files manifest saved atomically</li>
+      <li>Validate with a rule engine that reports every reason a row is rejected</li>
+      <li>Normalize naive local and offset timestamps to UTC with <code>zoneinfo</code>, and compute correct durations across DST</li>
+      <li>Model a star schema (<code>dim_station</code> SCD2, <code>dim_date</code>, <code>fact_trip</code>) and load it idempotently</li>
+      <li>Track a watermark, count late-arriving data, and prove that incremental runs equal one full load</li>
+      <li>Orchestrate with a <code>graphlib</code> DAG with retries, and answer questions with window-function SQL</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p><strong>Spokes</strong> runs 9 docking stations and a few hundred bikes. Every night each station uploads the day's
+      trips. You are the company's first data engineer, and the operations lead has two questions: "How many trips do we
+      do per day, smoothed over a week?" and "Which routes are busiest, so we can rebalance bikes?" Before you can answer,
+      you have to survive the data:</p>
+    <ul>
+      <li>Files alternate between <strong>CSV</strong> with naive local timestamps (<code>2026-03-05 08:15:00</code>, meaning
+        America/New_York) and <strong>JSON Lines</strong> with UTC offsets (<code>2026-03-06T08:15:00-05:00</code>).</li>
+      <li>Every file has an exact <strong>duplicate</strong> row, an <strong>unparseable timestamp</strong>, a trip to an
+        <strong>unknown station</strong> (<code>S99</code>), and a trip whose <strong>end is before its start</strong>.</li>
+      <li>From day two, each file carries two <strong>late-arriving</strong> trips from the previous day; from day three, it
+        also <strong>re-delivers</strong> a trip already sent.</li>
+      <li>On 2026-03-08 a new station snapshot arrives: <em>Harbor Point</em> is renamed <em>Harbor Point Plaza</em>,
+        <em>University Ave</em> gets more docks, and <em>Ferry Terminal</em> opens. The same night, clocks spring forward.</li>
+    </ul>
+    <p>The deterministic generator (<code>etl/generator.py</code>, complete in the starter) writes seven days of this:
+      255 raw trip rows and two station snapshots. A correct pipeline loads exactly <strong>222 trips</strong>, rejects
+      <strong>21 rows</strong> with reasons, removes <strong>12 duplicates</strong>, and keeps <strong>11 station
+      versions</strong>, whether it runs once or seven times.</p>
+    <aside class="callout think"><p>Before you start: if the pipeline runs every night and someone re-runs Tuesday's job on
+      Friday, what must stay true? Write down two properties. (Hint: one is "no duplicate facts"; the other is about which
+      station name Tuesday's trips show.)</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Incremental extraction</h4><p>A manifest of processed files, saved only after the load commits,
+        so re-runs skip finished work and crashes retry unfinished work (M62).</p></div>
+      <div class="card"><h4>Validation with reasons</h4><p>Rules return reason codes; every rejected row goes to a JSON Lines
+        report so the source team can fix it (M62).</p></div>
+      <div class="card"><h4>Time done right</h4><p>UTC instants for storage, local calendar dates for the business day, and
+        durations computed in UTC so the DST jump doesn't add a phantom hour.</p></div>
+      <div class="card"><h4>Dimensional modeling</h4><p>A star schema at the grain "one row per trip", with an SCD type 2
+        station dimension and point-in-time key lookups (M60).</p></div>
+      <div class="card"><h4>Idempotency</h4><p><code>INSERT … ON CONFLICT DO UPDATE</code> and no-op SCD2 re-applies make the
+        whole pipeline safe to re-run (M61, M62).</p></div>
+      <div class="card"><h4>Analytics SQL</h4><p>CTEs, <code>AVG() OVER</code> moving averages, and <code>RANK()</code> over
+        the warehouse you built (M61).</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <table>
+      <thead><tr><th>Module</th><th>Public API</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><code>models.py</code> (given)</td><td><code>Station</code>, <code>Trip</code>, <code>Rejection</code>, <code>RunSummary</code>, <code>LOCAL_TZ</code>, <code>TRIP_FIELDS</code></td><td>Frozen dataclasses shared by every stage</td></tr>
+        <tr><td><code>generator.py</code> (given)</td><td><code>generate(raw_dir, *, start, days, trips_per_day, seed)</code></td><td>Writes <code>trips_YYYY-MM-DD.csv|jsonl</code> and <code>stations_YYYY-MM-DD.csv</code></td></tr>
+        <tr><td><code>extract.py</code></td><td><code>Manifest</code>, <code>discover_new_files</code>, <code>read_trip_file</code>, <code>read_station_file</code>, <code>snapshot_date</code></td><td>String-valued rows with <code>_source</code>; malformed JSON lines become <code>_error</code> rows; atomic manifest save</td></tr>
+        <tr><td><code>validate.py</code></td><td><code>parse_timestamp</code>, <code>Rule</code>, <code>default_rules</code>, <code>validate</code>, <code>reason_counts</code>, <code>write_rejection_report</code></td><td>All reasons per row: <code>missing:&lt;f&gt;</code>, <code>bad_timestamp:&lt;f&gt;</code>, <code>end_before_start</code>, <code>duration_too_long</code>, <code>bad_member_type</code>, <code>unknown_station:&lt;f&gt;</code>, <code>bad_json:line&lt;N&gt;</code></td></tr>
+        <tr><td><code>transform.py</code></td><td><code>normalize</code>, <code>dedupe</code>, <code>enrich</code>, <code>transform</code></td><td>UTC times, <code>duration_s</code>, local <code>local_date</code>; first occurrence of a <code>trip_id</code> wins</td></tr>
+        <tr><td><code>warehouse.py</code></td><td><code>connect</code>, <code>date_key</code>, <code>ensure_dates</code>, <code>apply_station_snapshot</code>, <code>current_stations</code>, <code>station_key_at</code>, <code>load_trips</code>, <code>get_watermark</code>, <code>set_watermark</code>, <code>table_count</code></td><td>Schema given as <code>SCHEMA</code>; SCD2; point-in-time lookup; upserts in one transaction; watermark never moves back</td></tr>
+        <tr><td><code>dag.py</code></td><td><code>retry</code>, <code>Task</code>, <code>DAG.add/order/run</code>, <code>TaskFailedError</code></td><td><code>graphlib</code> order, per-task retries, downstream tasks skipped after a failure</td></tr>
+        <tr><td><code>analytics.py</code></td><td><code>daily_trips(conn, window=7)</code>, <code>top_routes(conn, limit=5)</code></td><td>Window-function SQL; routes grouped by station id, labelled with current names</td></tr>
+        <tr><td><code>pipeline.py</code></td><td><code>build_dag</code>, <code>run_pipeline(raw_dir, db_path, state_dir)</code>, <code>main</code></td><td>Returns a <code>RunSummary</code>; writes <code>state/manifest.json</code> and <code>state/rejected.jsonl</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <pre class="mermaid">
+flowchart LR
+  subgraph raw[raw/ files]
+    T[trips_*.csv / *.jsonl]
+    S[stations_*.csv]
+  end
+  subgraph dag[DAG runner: graphlib + retries]
+    direction LR
+    st[stations] --> ex[extract] --> va[validate] --> tr[transform] --> lo[load] --> su[summary]
+  end
+  S --> st
+  T --> ex
+  va -- rejected rows --> R[(state/rejected.jsonl)]
+  lo -- after commit --> M[(state/manifest.json)]
+  st --> W
+  lo --> W[(warehouse.db)]
+  su --> RS[RunSummary]
+    </pre>
+    <pre class="mermaid">
+erDiagram
+  DIM_DATE ||--o{ FACT_TRIP : date_key
+  DIM_STATION ||--o{ FACT_TRIP : start_station_key
+  DIM_STATION ||--o{ FACT_TRIP : end_station_key
+  FACT_TRIP {
+    text trip_id PK
+    int date_key FK
+    int start_station_key FK
+    int end_station_key FK
+    text start_utc
+    text end_utc
+    int duration_s
+    text bike_id
+    text member_type
+  }
+  DIM_STATION {
+    int station_key PK
+    text station_id
+    text name
+    int capacity
+    text valid_from
+    text valid_to
+    int is_current
+  }
+  DIM_DATE {
+    int date_key PK
+    text date
+    int year
+    int month
+    int day
+    text weekday
+    int is_weekend
+  }
+  ETL_STATE {
+    text key PK
+    text value
+  }
+    </pre>
+    <p>The grain of <code>fact_trip</code> is <strong>one row per trip</strong>, keyed by the natural key
+      <code>trip_id</code>. Facts reference the station <em>version</em> in effect on the trip's local date, so a trip on
+      2026-03-07 shows "Harbor Point" forever, while one on 2026-03-08 shows "Harbor Point Plaza".</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Extract", "Validate", "Transform", "Load"], "mode": "batch", "write": "upsert"}'></div>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects                    # list projects
+pixi run start p09                   # copy the starter to work/p09_etl_pipeline/
+pixi run grade p09                   # run all 63 tests against your work/ copy
+pixi run practicum grade p09 -k extract    # one milestone (extra arguments go to pytest)
+cd work/p09_etl_pipeline
+pixi run python -m etl.pipeline raw warehouse.db state --generate   # once everything passes</code></pre>
+    <aside class="callout pixi"><p>The project uses only the standard library plus <code>structlog</code>, both already in
+      the course environment, so the tests run in well under a second. For the DuckDB stretch goal, add it to your own
+      project with <code>pixi add duckdb</code>; never <code>pip install</code> into a Pixi environment.</p></aside>
+    <p>The starter's <code>generator.py</code> and <code>models.py</code> are complete; everything else has its real
+      signature and docstring, a body of <code>raise NotImplementedError</code>, and a <code># TODO</code> describing the
+      approach. Some imports were trimmed, so add what you need as you go. Explore the data first:</p>
+    <pre><code class="language-bash">pixi run python -c "from pathlib import Path; from etl.generator import generate; generate(Path('raw'))"
+head -5 raw/trips_2026-03-05.csv raw/trips_2026-03-06.jsonl raw/stations_2026-03-08.csv</code></pre>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h4>Milestone 1 · Extract (<code>test_etl_extract.py</code>, 9 tests)</h4>
+      <p>Implement <code>Manifest</code> (load, <code>is_processed</code>, <code>mark</code>, <code>processed</code>, atomic
+        <code>save</code>), <code>discover_new_files</code>, both readers, and <code>snapshot_date</code>.</p>
+      <ul class="checklist" data-id="p09-m1">
+        <li><code>Manifest.load</code> of a missing file returns an empty manifest; <code>mark</code> doesn't write; <code>save</code> writes a sorted list via a temp file and <code>replace</code></li>
+        <li><code>discover_new_files</code> skips processed names and sorts by name (names embed ISO dates)</li>
+        <li><code>read_trip_file</code> returns string values (<code>None</code> → <code>""</code>) plus <code>_source</code>, skips blank JSONL lines, and turns malformed lines into <code>{"_error": "bad_json:line&lt;N&gt;"}</code></li>
+        <li>Unknown extensions raise <code>ValueError</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: one shape for two formats</summary><p>Normalize at the edge: after
+        <code>csv.DictReader</code> or <code>json.loads</code>, build <code>{k: "" if v is None else str(v) for k, v in
+        record.items()} | {"_source": path.name}</code>. Then nothing downstream needs to know which format a row came from.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 2 · Validate (<code>test_etl_validate.py</code>, 16 tests)</h4>
+      <p>Implement <code>parse_timestamp</code> and the rule engine. Every rule runs on every row, and a rejected row carries
+        <em>all</em> its reasons.</p>
+      <ul class="checklist" data-id="p09-m2">
+        <li>Naive timestamps are interpreted in <code>America/New_York</code>; offset timestamps keep their offset; both become UTC</li>
+        <li>Each reason code from the spec is produced by the right rule</li>
+        <li>Custom <code>Rule</code> objects can be added; valid rows keep input order</li>
+        <li><code>reason_counts</code> and the appending JSON Lines <code>write_rejection_report</code> work</li>
+      </ul>
+      <details class="reveal"><summary>Hint: parse once, fail gracefully</summary><p><code>datetime.fromisoformat</code> parses
+        both <code>2026-03-05 08:00:00</code> and <code>2026-03-05T08:00:00-05:00</code> in Python 3.11+. Check
+        <code>moment.tzinfo is None</code> to decide whether to attach <code>LOCAL_TZ</code>, then
+        <code>astimezone(UTC)</code>. In the timestamp rule, catch only <code>ValueError</code>.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 3 · Transform (<code>test_etl_transform.py</code>, 8 tests)</h4>
+      <p>Implement <code>normalize</code>, <code>dedupe</code>, <code>enrich</code>, and <code>transform</code>.</p>
+      <ul class="checklist" data-id="p09-m3">
+        <li>A trip from 01:30 to 03:30 local on 2026-03-08 lasts 3600 seconds, not 7200</li>
+        <li>A trip at 21:30 local on 2026-03-05 has <code>local_date</code> 2026-03-05 even though its UTC date is 2026-03-06</li>
+        <li>The CSV and JSONL forms of the same trip normalize to equal <code>Trip</code> objects</li>
+        <li><code>dedupe</code> keeps the first occurrence and counts the rest; <code>enrich</code> uses <code>dataclasses.replace</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: why the DST test passes for free</summary><p>Subtracting two aware datetimes that
+        share the <em>same</em> <code>ZoneInfo</code> object uses wall-clock arithmetic and would report two hours. Because
+        <code>parse_timestamp</code> already converted both ends to UTC, the subtraction measures real elapsed time.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 4 · Load the warehouse (<code>test_etl_warehouse.py</code>, 12 tests)</h4>
+      <p>Implement the warehouse functions on top of the given <code>SCHEMA</code>.</p>
+      <ul class="checklist" data-id="p09-m4">
+        <li><code>apply_station_snapshot</code> inserts new stations, closes and re-opens changed ones, ignores identical or older snapshots</li>
+        <li><code>station_key_at</code> finds the version where <code>valid_from &lt;= day &lt; valid_to</code> (or open-ended), falling back to the earliest</li>
+        <li><code>load_trips</code> fills <code>dim_date</code>, resolves station keys, and upserts in one transaction; an unknown station raises <code>KeyError</code> and leaves no partial rows</li>
+        <li>The watermark only moves forward; <code>table_count</code> whitelists table names</li>
+      </ul>
+      <details class="reveal"><summary>Hint: SCD2 in three queries</summary><p>Select the current row
+        (<code>WHERE station_id = ? AND is_current = 1</code>). If absent, insert. If attributes differ and the snapshot date is
+        after the row's <code>valid_from</code>, <code>UPDATE … SET valid_to = ?, is_current = 0</code> and insert the new
+        version. Wrap the loop in <code>with conn:</code> so a failure rolls everything back.</p></details>
+      <details class="reveal"><summary>Hint: ON CONFLICT</summary><pre><code class="language-sql">INSERT INTO fact_trip (trip_id, date_key, ...) VALUES (?, ?, ...)
+ON CONFLICT (trip_id) DO UPDATE SET
+    date_key = excluded.date_key,
+    duration_s = excluded.duration_s, ...</code></pre></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 5 · Orchestrate (<code>test_etl_dag.py</code>, 8 tests)</h4>
+      <p>Implement the <code>retry</code> decorator and the <code>DAG</code> class.</p>
+      <ul class="checklist" data-id="p09-m5">
+        <li><code>order()</code> uses <code>graphlib.TopologicalSorter</code>, raises <code>ValueError</code> for unknown dependencies, and lets <code>CycleError</code> propagate</li>
+        <li><code>run()</code> passes the results dict to each task, retries up to <code>retries</code> extra times, and raises <code>TaskFailedError(task, attempts)</code> chained <code>from</code> the last error</li>
+        <li><code>retry</code> retries only the listed exceptions and preserves the function name with <code>functools.wraps</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: the retry loop</summary><p><code>for attempt in range(1, task.retries + 2)</code>:
+        try the task and <code>break</code> on success; in <code>except Exception as exc</code>, log, and if
+        <code>attempt &gt; task.retries</code>, <code>raise TaskFailedError(name, attempt) from exc</code>.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 6 · End to end and analytics (<code>test_etl_pipeline.py</code>, 10 tests)</h4>
+      <p>Wire everything into <code>build_dag</code> and <code>run_pipeline</code>, then write the two analytics queries.</p>
+      <ul class="checklist" data-id="p09-m6">
+        <li>A full run reports 255 read, 21 rejected, 12 duplicates removed, 222 loaded, 11 station versions</li>
+        <li>A second run processes nothing; deleting the manifest and re-running leaves the same row counts</li>
+        <li>Seven daily incremental runs end with the same warehouse as one full run</li>
+        <li>Late trips are counted (<code>late_records == 2</code> on day two) and land on their real business day</li>
+        <li>Trips before the rename reference "Harbor Point"; trips after reference "Harbor Point Plaza"</li>
+        <li><code>daily_trips</code> returns a 7-day moving average with <code>AVG() OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)</code>; <code>top_routes</code> uses <code>RANK()</code></li>
+      </ul>
+      <details class="reveal"><summary>Hint: what "late" means here</summary><p>Read the watermark <em>before</em> loading. A
+        trip is late if its <code>start_utc.isoformat()</code> is at or before that previous watermark. After loading, set the
+        watermark to the batch's maximum <code>start_utc</code>; <code>set_watermark</code> refuses to move it backwards.</p></details>
+      <details class="reveal"><summary>Hint: order of DAG tasks</summary><p>Stations must load before validation (the
+        unknown-station rule needs the known ids) and before trips (facts need station keys). Save the manifest in the
+        <code>load</code> task, after <code>load_trips</code> commits, never earlier.</p></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Excellent</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>All 63 tests pass; the CLI prints a sensible summary on fresh and repeated runs</td><td>40%</td></tr>
+        <tr><td>Idempotency and incrementality</td><td>Re-runs, reprocessing, and daily batches all give identical warehouses; state is saved atomically and only after commits</td><td>20%</td></tr>
+        <tr><td>Data quality</td><td>Every rejected row carries all its reasons; nothing is silently dropped; the report is readable</td><td>15%</td></tr>
+        <tr><td>Modeling and SQL</td><td>Clear grain, SCD2 with point-in-time lookups, parameterized queries, readable CTE-based analytics</td><td>15%</td></tr>
+        <tr><td>Code quality</td><td>Typed, documented, ruff-clean (<code>pixi run ruff check work/p09_etl_pipeline</code>); structured logs instead of prints in library code</td><td>10%</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>Quarantine table</strong>: also load rejected rows into <code>rejected_trip(source, reasons_json, row_json)</code> so analysts can query them.</li>
+      <li><strong>Allowed lateness</strong>: reject trips older than the watermark minus two days with a <code>too_late</code> reason, and test the boundary.</li>
+      <li><strong>Data contract</strong>: write the raw trip contract as a JSON schema, version it, and fail the run on an incompatible change.</li>
+      <li><strong>DuckDB export</strong>: <code>pixi add duckdb</code>, then attach the SQLite warehouse (<code>INSTALL sqlite; ATTACH 'warehouse.db' (TYPE sqlite)</code>) and write <code>fact_trip</code> to Parquet partitioned by <code>year=/month=</code>; re-run the analytics in DuckDB.</li>
+      <li><strong>Lineage</strong>: emit an OpenLineage-shaped JSON event per DAG task with inputs, outputs, and row counts.</li>
+      <li><strong>Orchestrator</strong>: wrap <code>run_pipeline</code> in a Prefect flow or Dagster assets with a daily schedule and a backfill command.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p09-quiz">
+<script type="application/json">
+{"title": "Project 9 reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why is the manifest saved in the <code>load</code> task rather than in <code>extract</code>?", "options": ["It is faster", "So a crash between extract and the committed load leaves files unprocessed and the next run retries them", "graphlib requires it", "To avoid JSON errors"], "answer": 1, "explanation": "<p>State must only advance after the data it describes is durable; otherwise a crash skips data forever.</p>"},
+  {"type": "single", "prompt": "A trip runs from 01:30 to 03:30 local time on 2026-03-08 in New York. How long did it last?", "options": ["2 hours", "1 hour", "3 hours", "It cannot be computed"], "answer": 1, "explanation": "<p>Clocks jumped from 02:00 to 03:00, so only one real hour passed. Converting both ends to UTC before subtracting gives the right answer.</p>"},
+  {"type": "single", "prompt": "Why does <code>fact_trip</code> store <code>station_key</code> rather than <code>station_id</code>?", "options": ["Integers are smaller", "So each trip points at the station version (SCD2 row) in effect when it happened", "SQLite requires integer keys", "To hide station names"], "answer": 1, "explanation": "<p>Surrogate keys let history survive renames: old trips keep the old version, new trips get the new one.</p>"},
+  {"type": "multi", "prompt": "Which make the pipeline idempotent?", "options": ["ON CONFLICT (trip_id) DO UPDATE in load_trips", "apply_station_snapshot ignoring identical or older snapshots", "INSERT OR IGNORE into dim_date", "Appending to rejected.jsonl"], "answer": [0, 1, 2], "explanation": "<p>Those leave the warehouse unchanged on re-run. The rejection report is an append-only log, which is fine for an audit trail but is not part of the warehouse state.</p>"},
+  {"type": "output", "prompt": "With trips per day [32, 32, 30], what does a 3-row trailing moving average give on the third day (rounded to 2 places)?", "code": "print(round((32 + 32 + 30) / 3, 2))", "answer": "31.33", "explanation": "<p>The frame ROWS BETWEEN 2 PRECEDING AND CURRENT ROW covers the three rows.</p>"},
+  {"type": "single", "prompt": "Why does validation run every rule instead of stopping at the first failure?", "options": ["It is required by SQL", "So the rejected-rows report lists every problem and the source can fix them all at once", "To make the run slower", "Rules depend on each other"], "answer": 1, "explanation": "<p>A complete report shortens the feedback loop with the data provider.</p>"},
+  {"type": "text", "prompt": "Which stdlib module provides the topological sort used by the DAG runner?", "answer": ["graphlib"], "explanation": "<p><code>graphlib.TopologicalSorter</code> orders tasks so each runs after its dependencies and raises <code>CycleError</code> on cycles.</p>"},
+  {"type": "single", "prompt": "The day-two file contains two trips from day one. After the run, those trips are counted in…", "options": ["Day two, because that is when they arrived", "Day one, because date_key comes from the trip's local start date", "Neither: they are rejected", "Both days"], "answer": 1, "explanation": "<p>Facts are keyed by event time (the business date of the trip), not arrival time; the summary separately counts them as late records.</p>"}
+]}
+</script>
+    </div>
+    <p>When you're done, carry these skills into the <a href="capstone.html">Capstone</a>, where the pipeline feeds a real
+      application.</p>
+  </section>
+</main>
+</body>
+</html>

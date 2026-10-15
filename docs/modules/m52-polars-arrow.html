@@ -1,0 +1,1067 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M52 · Polars, Arrow &amp; Columnar Data · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m52">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 52</p>
+    <h1>Polars, Arrow &amp; Columnar Data</h1>
+    <p class="lede">Modern analytics engines are fast for the same few reasons: they store data by column, they share a
+      standard in-memory format (Apache Arrow) instead of copying, they read only the bytes a query needs (Parquet),
+      and they plan a whole query before running it (Polars' lazy API). Understanding those ideas makes you faster in
+      every tool, not just one.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m51-pandas.html">M51 pandas</a>,
+      <a href="m48-numpy.html">M48 NumPy</a></span></div>
+    <ul class="objectives">
+      <li>Explain row-oriented vs column-oriented storage and which workloads each favors</li>
+      <li>Describe the Apache Arrow memory format (buffers, validity bitmaps, offsets) and what zero-copy means</li>
+      <li>Explain how Parquet's row groups, column chunks, encodings, and statistics enable projection and predicate pushdown</li>
+      <li>Write Polars code with expressions: <code>select</code>, <code>with_columns</code>, <code>filter</code>, <code>group_by().agg</code>, <code>over</code></li>
+      <li>Use the lazy API (<code>scan_*</code>, <code>collect</code>, <code>explain</code>) and read an optimized plan</li>
+      <li>Move data between Polars, pandas, and PyArrow, and choose between pandas, Polars, and DuckDB</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="row-vs-column">
+    <h2>Row storage vs column storage</h2>
+    <p>A table is two-dimensional, but memory and disk are one long line of bytes. Something has to decide the order.
+      There are two classic choices:</p>
+    <ul>
+      <li><strong>Row-oriented</strong> (row store): all fields of record 1, then all fields of record 2, and so on.
+        Databases built for transactions (PostgreSQL, SQLite, MySQL) store rows this way, because their typical work is
+        "fetch or update this one order", and all of an order's fields are next to each other.</li>
+      <li><strong>Column-oriented</strong> (column store): every value of column 1, then every value of column 2.
+        Analytical systems (Arrow, Parquet, Polars, DuckDB, BigQuery, Snowflake) do this, because their typical work is
+        "average the <code>amount</code> column over 50 million rows", which touches one column and every row.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 210" role="img" aria-label="The same three-row table laid out row by row and column by column in memory">
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <text x="70" y="16" fill="var(--fg-muted)">table</text>
+          <rect x="10" y="22" width="40" height="20" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="30" y="36">id</text>
+          <rect x="50" y="22" width="50" height="20" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="75" y="36">city</text>
+          <rect x="100" y="22" width="40" height="20" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="120" y="36">amt</text>
+          <rect x="10" y="42" width="40" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="30" y="56">1</text>
+          <rect x="50" y="42" width="50" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="75" y="56">Oslo</text>
+          <rect x="100" y="42" width="40" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="120" y="56">5</text>
+          <rect x="10" y="62" width="40" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="30" y="76">2</text>
+          <rect x="50" y="62" width="50" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="75" y="76">Lima</text>
+          <rect x="100" y="62" width="40" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="120" y="76">9</text>
+          <rect x="10" y="82" width="40" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="30" y="96">3</text>
+          <rect x="50" y="82" width="50" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="75" y="96">Pune</text>
+          <rect x="100" y="82" width="40" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="120" y="96">4</text>
+        </g>
+        <text x="170" y="36" fill="var(--fg)" font-size="12">row store</text>
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <rect x="240" y="22" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="255" y="36">1</text>
+          <rect x="270" y="22" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="288" y="36">Oslo</text>
+          <rect x="306" y="22" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="321" y="36">5</text>
+          <rect x="336" y="22" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="351" y="36">2</text>
+          <rect x="366" y="22" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="384" y="36">Lima</text>
+          <rect x="402" y="22" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="417" y="36">9</text>
+          <rect x="432" y="22" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="447" y="36">3</text>
+          <rect x="462" y="22" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="480" y="36">Pune</text>
+          <rect x="498" y="22" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="513" y="36">4</text>
+        </g>
+        <g stroke="var(--viz-4)" stroke-width="2" fill="none"><rect x="306" y="20" width="30" height="24"/><rect x="402" y="20" width="30" height="24"/><rect x="498" y="20" width="30" height="24"/></g>
+        <text x="240" y="62" fill="var(--viz-4)" font-size="11">sum(amt) must hop over id and city: strided, cache-unfriendly</text>
+        <text x="170" y="116" fill="var(--fg)" font-size="12">column store</text>
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <rect x="240" y="102" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="255" y="116">1</text>
+          <rect x="270" y="102" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="285" y="116">2</text>
+          <rect x="300" y="102" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="315" y="116">3</text>
+          <rect x="330" y="102" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="348" y="116">Oslo</text>
+          <rect x="366" y="102" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="384" y="116">Lima</text>
+          <rect x="402" y="102" width="36" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="420" y="116">Pune</text>
+          <rect x="438" y="102" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="453" y="116">5</text>
+          <rect x="468" y="102" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="483" y="116">9</text>
+          <rect x="498" y="102" width="30" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="513" y="116">4</text>
+        </g>
+        <rect x="438" y="100" width="90" height="24" fill="none" stroke="var(--viz-3)" stroke-width="2"/>
+        <text x="240" y="142" fill="var(--viz-3)" font-size="11">sum(amt) reads one contiguous run: SIMD-friendly, compresses well</text>
+        <text x="10" y="180" fill="var(--fg-muted)" font-size="11">Row stores win at "get/update one whole record"; column stores win at "scan a few columns of many rows".</text>
+        <text x="10" y="198" fill="var(--fg-muted)" font-size="11">Same-typed neighbors also compress far better (similar values sit together).</text>
+      </svg>
+      <figcaption>The same table, two byte orders. Analytics usually reads few columns and many rows, so it favors columns.</figcaption>
+    </figure>
+    <p>Column storage has three big payoffs for analytics. <strong>Less I/O</strong>: a query that uses 3 of 40 columns
+      reads about 3/40 of the data. <strong>Faster CPU loops</strong>: one column is a dense array of one type, which is
+      exactly what CPU caches and SIMD (single instruction, multiple data) instructions like. <strong>Better
+      compression</strong>: values of one column resemble each other (many repeated city names, slowly increasing
+      timestamps), so encodings like dictionary and run-length shrink them dramatically.</p>
+    <p>You already know a column store: a pandas DataFrame keeps each column as its own array, and NumPy arrays are
+      contiguous. Let's measure the effect in pure Python with the <code>array</code> module, which stores raw machine
+      numbers contiguously.</p>
+    <div class="runnable" data-title="Row layout vs column layout in pure Python">
+<textarea>
+import random
+import time
+from array import array
+
+random.seed(1)
+n = 300_000
+cities = ["Oslo", "Lima", "Pune", "Kyiv"]
+
+# Row store: a list of records (tuples), like rows in a CSV.
+rows = [(i, random.choice(cities), random.random() * 100) for i in range(n)]
+
+# Column store: one container per column; numbers packed in typed arrays.
+columns = {
+    "id": array("q", range(n)),
+    "city": [r[1] for r in rows],
+    "amt": array("d", (r[2] for r in rows)),
+}
+
+t0 = time.perf_counter()
+total_rows = sum(r[2] for r in rows)
+t1 = time.perf_counter()
+total_cols = sum(columns["amt"])
+t2 = time.perf_counter()
+
+print(f"row store   : {t1 - t0:.4f}s")
+print(f"column store: {t2 - t1:.4f}s")
+print("same answer:", abs(total_rows - total_cols) < 1e-6)
+print("bytes for amt column:", columns["amt"].itemsize * len(columns["amt"]))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: which layout is this?" data-predict>
+<textarea>
+table = {"id": [1, 2, 3], "city": ["Oslo", "Lima", "Pune"], "amt": [5, 9, 4]}
+row = {name: values[1] for name, values in table.items()}
+print(row["city"], sum(table["amt"]))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> row stores are for transactions on whole records; column stores are for analytics over
+      a few columns of many rows. Columns give less I/O, faster loops, and better compression.</p>
+  </section>
+
+  <section class="lesson-section" id="arrow">
+    <h2>Apache Arrow: a shared in-memory format</h2>
+    <p>Before Arrow, every tool had its own in-memory layout. Moving a table from a database driver to pandas to a
+      machine-learning library meant <strong>serializing</strong> (converting to bytes) and
+      <strong>deserializing</strong> at each step, which often cost more time than the analysis itself. <strong>Apache
+      Arrow</strong> is a language-independent specification for how columnar data sits in memory. If two libraries
+      both use Arrow, one can hand the other a pointer to the same buffers: <strong>zero-copy</strong> sharing. Polars,
+      DuckDB, PyArrow, pandas' Arrow-backed dtypes (including the pandas 3.0 <code>str</code> dtype), Spark, and many
+      database drivers speak Arrow.</p>
+    <h3>How an Arrow array is laid out</h3>
+    <p>An Arrow array is a few flat <strong>buffers</strong> plus metadata (type, length, null count):</p>
+    <ul>
+      <li>A <strong>validity bitmap</strong>: one bit per value, 1 = present, 0 = null. Nulls cost one bit, and the
+        data buffer keeps a placeholder at that slot so positions stay aligned.</li>
+      <li>For fixed-width types (int64, float64, timestamps): a <strong>data buffer</strong> of values packed end to
+        end, exactly like a NumPy array.</li>
+      <li>For variable-width types (strings, binary): an <strong>offsets buffer</strong> of n+1 integers and one
+        <strong>data buffer</strong> holding all the bytes concatenated. String <em>i</em> is
+        <code>data[offsets[i]:offsets[i+1]]</code>.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 170" role="img" aria-label="Arrow string array: validity bitmap, offsets buffer, and one data buffer of concatenated UTF-8 bytes">
+        <text x="10" y="18" fill="var(--fg)" font-size="12">["Oslo", null, "Lima", "Pune"] as an Arrow string array</text>
+        <text x="10" y="48" fill="var(--fg-muted)" font-size="11">validity</text>
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <rect x="80" y="34" width="26" height="20" fill="var(--viz-3)" fill-opacity="0.3" stroke="var(--border-strong)"/><text x="93" y="48">1</text>
+          <rect x="106" y="34" width="26" height="20" fill="var(--viz-4)" fill-opacity="0.3" stroke="var(--border-strong)"/><text x="119" y="48">0</text>
+          <rect x="132" y="34" width="26" height="20" fill="var(--viz-3)" fill-opacity="0.3" stroke="var(--border-strong)"/><text x="145" y="48">1</text>
+          <rect x="158" y="34" width="26" height="20" fill="var(--viz-3)" fill-opacity="0.3" stroke="var(--border-strong)"/><text x="171" y="48">1</text>
+        </g>
+        <text x="10" y="88" fill="var(--fg-muted)" font-size="11">offsets</text>
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <rect x="80" y="74" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="95" y="88">0</text>
+          <rect x="110" y="74" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="125" y="88">4</text>
+          <rect x="140" y="74" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="155" y="88">4</text>
+          <rect x="170" y="74" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="185" y="88">8</text>
+          <rect x="200" y="74" width="30" height="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="215" y="88">12</text>
+        </g>
+        <text x="10" y="128" fill="var(--fg-muted)" font-size="11">data</text>
+        <g font-size="11" fill="var(--fg)" text-anchor="middle">
+          <rect x="80" y="114" width="96" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="128" y="128">O s l o</text>
+          <rect x="176" y="114" width="96" height="20" fill="var(--viz-5)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="224" y="128">L i m a</text>
+          <rect x="272" y="114" width="96" height="20" fill="var(--viz-6)" fill-opacity="0.2" stroke="var(--border-strong)"/><text x="320" y="128">P u n e</text>
+        </g>
+        <text x="250" y="88" fill="var(--fg-muted)" font-size="11">value i = data[offsets[i] : offsets[i+1]]</text>
+        <text x="250" y="48" fill="var(--fg-muted)" font-size="11">null at index 1: offsets 4..4 is empty</text>
+        <text x="10" y="160" fill="var(--fg-muted)" font-size="11">Three flat buffers and no per-string Python objects. Any Arrow-aware library can read them in place.</text>
+      </svg>
+      <figcaption>Variable-length strings become offsets plus one byte buffer; nulls live in a separate bitmap.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Build an Arrow-style string column by hand">
+<textarea>
+values = ["Oslo", None, "Lima", "Pune", "Kyiv"]
+
+validity = 0          # one bit per value, packed into an int (Arrow uses bytes, least-significant bit first)
+offsets = [0]
+data = bytearray()
+for i, v in enumerate(values):
+    if v is not None:
+        validity |= 1 << i
+        data += v.encode("utf-8")
+    offsets.append(len(data))
+
+print("validity bits:", format(validity, "05b")[::-1], "(index 0 first)")
+print("offsets:", offsets)
+print("data:", bytes(data))
+
+def get(i):
+    if not (validity >> i) & 1:
+        return None
+    return data[offsets[i]:offsets[i + 1]].decode("utf-8")
+
+print([get(i) for i in range(len(values))])
+print("null count:", len(values) - bin(validity).count("1"))
+</textarea>
+    </div>
+    <p>Arrow groups columns of equal length into a <strong>RecordBatch</strong>, and a sequence of batches with one
+      schema forms a <strong>Table</strong>. Batches let engines process large data in chunks and in parallel. The
+      same layout is also used on the wire (Arrow IPC, Arrow Flight) and on disk (the Feather format), so data can move
+      between processes without conversion.</p>
+    <div class="runnable" data-local="pyarrow is not available in the browser runtime; run with pixi run python arrow_demo.py" data-title="Real Arrow buffers with PyArrow (local)">
+<textarea>
+import numpy as np
+import pyarrow as pa
+
+arr = pa.array(["Oslo", None, "Lima", "Pune"])
+print(arr.type, "nulls:", arr.null_count)
+validity, offsets, data = arr.buffers()
+print("offsets:", np.frombuffer(offsets, dtype=np.int32)[: len(arr) + 1])
+print("data   :", data.to_pybytes()[:12])
+
+nums = pa.array([1.5, 2.5, 3.5])
+view = nums.to_numpy(zero_copy_only=True)      # no copy: NumPy views the Arrow buffer
+print(view, view.flags["OWNDATA"])               # False: the memory belongs to Arrow
+
+table = pa.table({"city": ["Oslo", "Lima"], "amt": [5, 9]})
+print(table.schema)
+print(table.to_batches()[0].num_rows)
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Arrow for Python is <code>pyarrow</code> on conda-forge: <code>pixi add pyarrow</code>.
+      It is also what pandas uses for Parquet files and for its Arrow-backed dtypes.</p></aside>
+    <p><strong>Remember:</strong> Arrow is a standard columnar memory layout (validity bitmap, offsets, data buffers).
+      Shared layout means tools can pass tables without copying or converting.</p>
+  </section>
+
+  <section class="lesson-section" id="parquet">
+    <h2>Parquet: columnar files that skip work</h2>
+    <p>Arrow is the in-memory format; <strong>Parquet</strong> is its on-disk partner. A Parquet file is organized for
+      reading as little as possible:</p>
+    <ul>
+      <li>Rows are split into <strong>row groups</strong> (often ~100k-1M rows each).</li>
+      <li>Inside a row group, each column is stored separately as a <strong>column chunk</strong>, divided into
+        <strong>pages</strong>.</li>
+      <li>Pages are <strong>encoded</strong> (dictionary encoding for repeated values, run-length encoding for runs,
+        delta encoding for sorted numbers) and then <strong>compressed</strong> (Snappy, Zstandard, gzip, LZ4).</li>
+      <li>A <strong>footer</strong> at the end holds the schema and <strong>statistics</strong> for every column chunk:
+        min, max, and null count.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 200" role="img" aria-label="Parquet file: row groups contain column chunks; the footer stores min/max statistics used to skip row groups">
+        <rect x="10" y="10" width="360" height="180" fill="none" stroke="var(--border-strong)"/>
+        <text x="16" y="26" fill="var(--fg-muted)" font-size="11">sales.parquet</text>
+        <g font-size="11" fill="var(--fg)">
+          <rect x="20" y="34" width="340" height="44" fill="var(--bg-sunk)" stroke="var(--border-strong)"/>
+          <text x="26" y="48">row group 0</text>
+          <rect x="100" y="40" width="80" height="32" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="108" y="60">date chunk</text>
+          <rect x="185" y="40" width="80" height="32" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="193" y="60">city chunk</text>
+          <rect x="270" y="40" width="80" height="32" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="278" y="60">amt chunk</text>
+          <rect x="20" y="84" width="340" height="44" fill="var(--bg-sunk)" stroke="var(--border-strong)"/>
+          <text x="26" y="98">row group 1</text>
+          <rect x="100" y="90" width="80" height="32" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="108" y="110">date chunk</text>
+          <rect x="185" y="90" width="80" height="32" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="193" y="110">city chunk</text>
+          <rect x="270" y="90" width="80" height="32" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="278" y="110">amt chunk</text>
+          <rect x="20" y="136" width="340" height="46" fill="var(--viz-5)" fill-opacity="0.15" stroke="var(--viz-5)"/>
+          <text x="26" y="152">footer: schema + per-chunk stats</text>
+          <text x="26" y="168" fill="var(--fg-muted)">RG0 amt min=1 max=80   RG1 amt min=95 max=400</text>
+        </g>
+        <g font-size="11" fill="var(--fg)">
+          <text x="384" y="40">Query: SELECT city</text>
+          <text x="384" y="56">WHERE amt &gt; 100</text>
+          <text x="384" y="84" fill="var(--viz-3)">projection pushdown:</text>
+          <text x="384" y="99" fill="var(--viz-3)">read only city, amt</text>
+          <text x="384" y="126" fill="var(--viz-4)">predicate pushdown:</text>
+          <text x="384" y="141" fill="var(--viz-4)">RG0 max=80 &lt;= 100,</text>
+          <text x="384" y="156" fill="var(--viz-4)">skip RG0 entirely</text>
+        </g>
+        <line x1="20" y1="34" x2="360" y2="78" stroke="var(--viz-4)" stroke-width="1.5"/>
+        <line x1="20" y1="78" x2="360" y2="34" stroke="var(--viz-4)" stroke-width="1.5"/>
+      </svg>
+      <figcaption>Readers check the footer first, then fetch only the needed column chunks of row groups that might match.</figcaption>
+    </figure>
+    <p>Two optimizations follow directly from this layout:</p>
+    <ul>
+      <li><strong>Projection pushdown</strong>: only the column chunks for the columns a query uses are read. A
+        projection is the list of columns you select.</li>
+      <li><strong>Predicate pushdown</strong>: a predicate is a filter condition. If a row group's statistics prove no
+        row can match (<code>max(amt) &lt;= 100</code> for <code>amt &gt; 100</code>), the reader skips the whole row
+        group without decompressing it. This works best when data is sorted or clustered by the filtered column.</li>
+    </ul>
+    <div class="runnable" data-title="Simulate predicate pushdown with row-group statistics">
+<textarea>
+import random
+
+random.seed(3)
+# Sorted-ish data (like a file written in date order): later row groups hold larger values.
+values = sorted(random.randint(1, 1000) for _ in range(10_000))
+row_groups = [values[i:i + 1000] for i in range(0, len(values), 1000)]
+stats = [(min(rg), max(rg)) for rg in row_groups]      # what the footer stores
+
+def scan(lo, hi):
+    read = 0
+    out = []
+    for (mn, mx), rg in zip(stats, row_groups):
+        if mx < lo or mn > hi:        # statistics prove nothing in here can match
+            continue
+        read += 1
+        out.extend(v for v in rg if lo <= v <= hi)
+    return out, read
+
+matches, groups_read = scan(420, 450)
+print(f"matched {len(matches)} rows, read {groups_read} of {len(row_groups)} row groups")
+
+random.shuffle(values)    # the same data, unsorted
+row_groups = [values[i:i + 1000] for i in range(0, len(values), 1000)]
+stats = [(min(rg), max(rg)) for rg in row_groups]
+matches, groups_read = scan(420, 450)
+print(f"unsorted: matched {len(matches)} rows, read {groups_read} of {len(row_groups)} row groups")
+</textarea>
+    </div>
+    <h3>Encodings you can see</h3>
+    <p><strong>Dictionary encoding</strong> replaces repeated values with small integer codes plus a lookup table
+      (exactly what the pandas <code>category</code> dtype does). <strong>Run-length encoding</strong> (RLE) stores
+      <code>(value, count)</code> pairs, which is tiny for sorted or repetitive columns. Parquet typically
+      dictionary-encodes a column and then run-length encodes the codes.</p>
+    <div class="runnable" data-title="Dictionary encoding with pandas categoricals">
+<textarea>
+import pandas as pd
+
+cities = pd.Series(["Oslo", "Lima", "Oslo", "Oslo", "Pune", "Lima"] * 50_000)
+cat = cities.astype("category")
+print("dictionary:", list(cat.cat.categories))
+print("codes     :", cat.cat.codes[:6].tolist(), cat.cat.codes.dtype)
+print(f"text column : {cities.memory_usage(deep=True) / 1e6:.1f} MB")
+print(f"dict-encoded: {cat.memory_usage(deep=True) / 1e6:.1f} MB")
+</textarea>
+    </div>
+    <div class="runnable" data-local="pyarrow is not available in the browser runtime; run with pixi run python parquet_meta.py" data-title="Inspect real Parquet metadata (local)">
+<textarea>
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+rng = np.random.default_rng(0)
+df = pd.DataFrame({
+    "amt": np.sort(rng.integers(1, 1000, 1_000_000)),
+    "city": rng.choice(["Oslo", "Lima", "Pune"], 1_000_000),
+})
+df.to_parquet("sales.parquet", row_group_size=100_000, compression="zstd", index=False)
+
+meta = pq.ParquetFile("sales.parquet").metadata
+print("row groups:", meta.num_row_groups)
+for i in range(3):
+    col = meta.row_group(i).column(0)
+    print(i, col.statistics.min, col.statistics.max, col.compression, col.encodings)
+
+table = pq.read_table("sales.parquet", columns=["city"], filters=[("amt", ">", 900)])
+print(table.num_rows)    # only row groups whose max(amt) > 900 were read
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> Parquet = row groups of column chunks, encoded and compressed, with min/max stats in
+      the footer. Readers skip columns (projection pushdown) and row groups (predicate pushdown). Sorting by common
+      filter columns makes skipping effective.</p>
+  </section>
+
+  <section class="lesson-section" id="polars-basics">
+    <h2>Polars: DataFrames built from expressions</h2>
+    <p><strong>Polars</strong> is a DataFrame library written in Rust, built on the Arrow memory model, multi-threaded
+      by default, and designed around a <strong>query optimizer</strong>. Its API looks different from pandas in a few
+      deliberate ways:</p>
+    <ul>
+      <li><strong>No row index.</strong> Rows are identified by position or by columns you choose. There is no
+        alignment, no <code>loc</code>/<code>iloc</code> distinction, no <code>reset_index</code>.</li>
+      <li><strong>Expressions.</strong> An expression such as <code>pl.col("amt") * 1.25</code> is a <em>description</em>
+        of a computation, not its result. You pass expressions to contexts: <code>select</code>,
+        <code>with_columns</code>, <code>filter</code>, <code>group_by(...).agg</code>. Because Polars sees the whole
+        description, it can run independent expressions in parallel and optimize them.</li>
+      <li><strong>Strict types.</strong> Each column has one Arrow-based dtype (<code>Int64</code>,
+        <code>Float64</code>, <code>String</code>, <code>Categorical</code>, <code>Datetime</code>,
+        <code>List</code>, <code>Struct</code>); nulls are tracked with validity bitmaps, so integers stay integers
+        when values are missing.</li>
+      <li><strong>Immutable style.</strong> Methods return new DataFrames; there is no in-place assignment.</li>
+    </ul>
+    <table>
+      <thead><tr><th>Task</th><th>pandas</th><th>Polars</th></tr></thead>
+      <tbody>
+        <tr><td>new column</td><td><code>df.assign(t=df.a * 2)</code></td><td><code>df.with_columns((pl.col("a") * 2).alias("t"))</code></td></tr>
+        <tr><td>filter rows</td><td><code>df[df.a &gt; 1]</code></td><td><code>df.filter(pl.col("a") &gt; 1)</code></td></tr>
+        <tr><td>pick columns</td><td><code>df[["a", "b"]]</code></td><td><code>df.select("a", "b")</code></td></tr>
+        <tr><td>group summary</td><td><code>df.groupby("k").agg(total=("a", "sum"))</code></td><td><code>df.group_by("k").agg(pl.col("a").sum().alias("total"))</code></td></tr>
+        <tr><td>group value per row</td><td><code>df.groupby("k")["a"].transform("sum")</code></td><td><code>pl.col("a").sum().over("k")</code></td></tr>
+        <tr><td>if/else</td><td><code>np.where(cond, x, y)</code></td><td><code>pl.when(cond).then(x).otherwise(y)</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-local="Polars is not available in the browser runtime; run with pixi run python polars_basics.py" data-title="Polars expressions (local)">
+<textarea>
+import polars as pl
+
+df = pl.DataFrame({
+    "region": ["North", "South", "North", "East", "South", "North"],
+    "product": ["mug", "lamp", "mug", "notebook", "lamp", "pen"],
+    "qty": [2, 1, 5, 4, 2, 10],
+    "unit_price": [8.5, 24.0, 8.5, 3.25, 24.0, 1.2],
+})
+print(df.schema)
+
+result = (
+    df.with_columns(
+        (pl.col("qty") * pl.col("unit_price")).alias("revenue"),
+        pl.when(pl.col("qty") >= 5).then(pl.lit("bulk")).otherwise(pl.lit("single")).alias("kind"),
+    )
+    .with_columns((pl.col("revenue") / pl.col("revenue").sum().over("region")).round(3).alias("share"))
+    .filter(pl.col("revenue") > 5)
+)
+print(result)
+
+summary = (
+    result.group_by("region")
+    .agg(
+        pl.len().alias("orders"),
+        pl.col("revenue").sum().alias("revenue"),
+        pl.col("product").n_unique().alias("products"),
+    )
+    .sort("revenue", descending=True)
+)
+print(summary)
+</textarea>
+    </div>
+    <p>To build intuition in the browser, here is the same query in pandas. Notice how each Polars expression maps to a
+      pandas operation, and how Polars needs no <code>lambda</code> to refer to columns created earlier in a chain:</p>
+    <div class="runnable" data-title="The same query in pandas">
+<textarea>
+import numpy as np
+import pandas as pd
+
+df = pd.DataFrame({
+    "region": ["North", "South", "North", "East", "South", "North"],
+    "product": ["mug", "lamp", "mug", "notebook", "lamp", "pen"],
+    "qty": [2, 1, 5, 4, 2, 10],
+    "unit_price": [8.5, 24.0, 8.5, 3.25, 24.0, 1.2],
+})
+result = (
+    df.assign(
+        revenue=lambda d: d["qty"] * d["unit_price"],
+        kind=lambda d: np.where(d["qty"] >= 5, "bulk", "single"),
+    )
+    .assign(share=lambda d: (d["revenue"] / d.groupby("region")["revenue"].transform("sum")).round(3))
+    .query("revenue > 5")
+)
+print(result)
+print(
+    result.groupby("region")
+    .agg(orders=("revenue", "size"), revenue=("revenue", "sum"), products=("product", "nunique"))
+    .sort_values("revenue", ascending=False)
+)
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Add Polars to a project with <code>pixi add polars</code> (conda-forge). It has no
+      required dependencies; add <code>pyarrow</code> too if you convert to and from pandas or PyArrow.</p></aside>
+    <p><strong>Remember:</strong> Polars has no index; you write expressions (<code>pl.col</code>, <code>pl.when</code>,
+      <code>.over</code>) and give them to contexts (<code>select</code>, <code>with_columns</code>,
+      <code>filter</code>, <code>group_by().agg</code>).</p>
+  </section>
+
+  <section class="lesson-section" id="lazy">
+    <h2>The lazy API and the query optimizer</h2>
+    <p>Everything above ran <strong>eagerly</strong>: each method executed immediately. Polars' <strong>lazy</strong>
+      API instead builds a <em>query plan</em> (a tree of operations) and runs nothing until you call
+      <code>.collect()</code>. Seeing the whole plan first lets the optimizer rewrite it:</p>
+    <ul>
+      <li><strong>Predicate pushdown</strong>: move filters as early as possible, ideally into the file scan so
+        Parquet row groups are skipped.</li>
+      <li><strong>Projection pushdown</strong>: read only columns that some later step uses.</li>
+      <li><strong>Slice pushdown</strong>: <code>head(10)</code> stops reading early when it can.</li>
+      <li><strong>Common subexpression elimination</strong>: compute a repeated expression once.</li>
+      <li>Expression simplification and choosing join strategies.</li>
+    </ul>
+    <p>Start a lazy query with <code>pl.scan_csv</code>, <code>pl.scan_parquet</code>, or <code>df.lazy()</code>, chain
+      the same methods as before, and finish with <code>.collect()</code> (or <code>.sink_parquet(path)</code> to stream
+      results to a file without holding them all in memory). <code>.explain()</code> prints the optimized plan;
+      <code>.explain(optimized=False)</code> prints the plan as you wrote it. Read plans bottom-up: the scan is at the
+      bottom.</p>
+    <div class="runnable" data-local="Polars is not available in the browser runtime; run with pixi run python lazy_demo.py" data-title="Lazy query, before and after optimization (local)">
+<textarea>
+import polars as pl
+
+pl.DataFrame({
+    "city": ["Oslo", "Lima", "Oslo", "Pune"],
+    "temp": [3.5, 19.0, 4.0, 31.0],
+    "humidity": [80, 70, 75, 40],
+}).write_parquet("weather.parquet")
+
+query = (
+    pl.scan_parquet("weather.parquet")
+    .with_columns((pl.col("temp") * 9 / 5 + 32).alias("temp_f"))
+    .filter(pl.col("city") == "Oslo")
+    .select("city", "temp_f")
+)
+print(query.explain(optimized=False))
+print("-" * 40)
+print(query.explain())
+print(query.collect())
+</textarea>
+    </div>
+    <p>Running that locally prints two plans. The unoptimized plan filters <em>after</em> computing
+      <code>temp_f</code> for every row and reads all three columns. In the optimized plan, the scan line shows
+      <code>SELECTION: col("city") == "Oslo"</code> (the filter moved into the reader) and a projection of 2 of 3
+      columns (<code>humidity</code> is never read).</p>
+    <p>To make the idea concrete without Polars, here is a toy lazy frame: it records operations, then a tiny
+      "optimizer" moves filters ahead of computed columns when the filter does not depend on them.</p>
+    <div class="runnable" data-title="A toy lazy query planner">
+<textarea>
+class Lazy:
+    def __init__(self, rows, plan=()):
+        self.rows, self.plan = rows, list(plan)
+
+    def with_column(self, name, fn, uses):
+        return Lazy(self.rows, self.plan + [("with_column", name, fn, set(uses))])
+
+    def filter(self, fn, uses):
+        return Lazy(self.rows, self.plan + [("filter", None, fn, set(uses))])
+
+    def optimized(self):
+        plan = list(self.plan)
+        changed = True
+        while changed:                      # bubble filters toward the scan
+            changed = False
+            for i in range(1, len(plan)):
+                prev, cur = plan[i - 1], plan[i]
+                if cur[0] == "filter" and prev[0] == "with_column" and prev[1] not in cur[3]:
+                    plan[i - 1], plan[i] = cur, prev
+                    changed = True
+        return plan
+
+    def collect(self, optimize=True):
+        work = 0
+        rows = [dict(r) for r in self.rows]
+        for kind, name, fn, _ in (self.optimized() if optimize else self.plan):
+            work += len(rows)
+            if kind == "with_column":
+                for r in rows:
+                    r[name] = fn(r)
+            else:
+                rows = [r for r in rows if fn(r)]
+        return rows, work
+
+data = [{"city": c, "temp": t} for c, t in [("Oslo", 3.5), ("Lima", 19.0), ("Oslo", 4.0), ("Pune", 31.0)] * 1000]
+q = (
+    Lazy(data)
+    .with_column("temp_f", lambda r: r["temp"] * 9 / 5 + 32, uses=["temp"])
+    .filter(lambda r: r["city"] == "Oslo", uses=["city"])
+)
+print("plan as written :", [step[0] for step in q.plan])
+print("optimized plan  :", [step[0] for step in q.optimized()])
+for opt in (False, True):
+    rows, work = q.collect(optimize=opt)
+    print(f"optimize={opt}: {len(rows)} rows, {work} row-operations")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Prefer <code>scan_parquet</code>/<code>scan_csv</code> plus <code>collect()</code>
+      over <code>read_*</code> for anything non-trivial. For data larger than memory,
+      <code>collect(engine="streaming")</code> or <code>sink_parquet</code> processes it in batches.</p></aside>
+    <p><strong>Remember:</strong> lazy = build a plan, optimize, then execute. <code>explain()</code> shows what will
+      actually run; look for filters and column lists pushed into the scan.</p>
+  </section>
+
+  <section class="lesson-section" id="performance">
+    <h2>Why Polars is fast, and measuring it honestly</h2>
+    <p>Polars is often several times faster than pandas on group-bys, joins, and scans of large files, and uses less
+      memory. The reasons are architectural, not magic:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Parallel by default</h4><p>Expressions and partitions run on all CPU cores. pandas
+        operations mostly use one core.</p></div>
+      <div class="card"><h4>Query optimization</h4><p>Lazy plans skip unneeded columns, rows, and row groups before any
+        work is done.</p></div>
+      <div class="card"><h4>Arrow memory</h4><p>Compact strings, bitmaps for nulls, and zero-copy interop with other
+        Arrow tools.</p></div>
+      <div class="card"><h4>No Python in the loop</h4><p>Expressions compile to Rust kernels. A Python lambda via
+        <code>map_elements</code> brings back Python speed, so avoid it.</p></div>
+    </div>
+    <p>Benchmarks are easy to get wrong. Measure on realistic data sizes (tiny data is dominated by overhead), run
+      several repetitions and take the median or best, include I/O if your real job includes I/O, make sure both tools
+      compute the <em>same</em> answer, and remember pandas 3.0 with Arrow-backed strings narrowed some gaps.</p>
+    <div class="runnable" data-local="Polars is not available in the browser runtime; run with pixi run python bench.py" data-title="A fair little benchmark (local)">
+<textarea>
+import time
+
+import numpy as np
+import pandas as pd
+import polars as pl
+
+rng = np.random.default_rng(0)
+n = 5_000_000
+data = {
+    "store": rng.integers(0, 1000, n),
+    "category": rng.choice(["food", "toys", "books", "garden"], n),
+    "amount": rng.gamma(2.0, 20.0, n),
+}
+pdf = pd.DataFrame(data)
+pldf = pl.DataFrame(data)
+
+def best_of(fn, repeat=5):
+    times = []
+    for _ in range(repeat):
+        t0 = time.perf_counter()
+        out = fn()
+        times.append(time.perf_counter() - t0)
+    return min(times), out
+
+t_pd, a = best_of(lambda: pdf[pdf["amount"] > 10].groupby(["store", "category"])["amount"].mean())
+t_pl, b = best_of(lambda: pldf.filter(pl.col("amount") > 10).group_by("store", "category").agg(pl.col("amount").mean()))
+
+check = b.sort("store", "category")["amount"].to_numpy()
+print("same answer:", np.allclose(a.sort_index().to_numpy(), check))
+print(f"pandas {t_pd:.3f}s  polars {t_pl:.3f}s  speedup {t_pd / t_pl:.1f}x")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> Polars is fast because of parallelism, optimization, Arrow memory, and keeping
+      Python out of inner loops. Benchmark with realistic sizes, repetitions, and equal answers.</p>
+  </section>
+
+  <section class="lesson-section" id="interop">
+    <h2>Interoperability: pandas, Polars, PyArrow, DuckDB</h2>
+    <p>Because they share Arrow, these tools convert cheaply, often without copying numeric data:</p>
+    <table>
+      <thead><tr><th>From</th><th>To</th><th>Call</th></tr></thead>
+      <tbody>
+        <tr><td>Polars</td><td>pandas</td><td><code>pl_df.to_pandas()</code> (add <code>use_pyarrow_extension_array=True</code> to keep Arrow-backed columns)</td></tr>
+        <tr><td>pandas</td><td>Polars</td><td><code>pl.from_pandas(pd_df)</code></td></tr>
+        <tr><td>Polars</td><td>PyArrow</td><td><code>pl_df.to_arrow()</code> (zero-copy for most types)</td></tr>
+        <tr><td>PyArrow</td><td>Polars</td><td><code>pl.from_arrow(table)</code></td></tr>
+        <tr><td>pandas</td><td>PyArrow</td><td><code>pa.Table.from_pandas(pd_df)</code>; back with <code>table.to_pandas()</code></td></tr>
+        <tr><td>any of them</td><td>DuckDB SQL</td><td><code>duckdb.sql("SELECT ... FROM pl_df")</code> reads DataFrames in scope by name</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-local="Polars, pyarrow, and duckdb are not available in the browser runtime; run with pixi run python interop.py" data-title="Round trips between tools (local)">
+<textarea>
+import duckdb
+import pandas as pd
+import polars as pl
+import pyarrow as pa
+
+pd_df = pd.DataFrame({"city": ["Oslo", "Lima", "Pune"], "temp": [3.5, 19.0, 31.0]})
+pl_df = pl.from_pandas(pd_df)
+table = pl_df.to_arrow()
+print(type(table).__name__, table.schema)
+
+back = pl.from_arrow(table).with_columns(pl.col("temp").round(0).cast(pl.Int64).alias("rounded"))
+print(back.to_pandas().dtypes)
+
+print(duckdb.sql("SELECT city, temp FROM pl_df WHERE temp > 10 ORDER BY temp").pl())
+print(pa.Table.from_pandas(pd_df).num_rows)
+</textarea>
+    </div>
+    <aside class="callout note"><p>Conversions to pandas copy strings unless pandas keeps them Arrow-backed. In pandas
+      3.0 the default <code>str</code> dtype is Arrow-backed when PyArrow is installed, which makes Polars-to-pandas
+      handoffs cheaper than they used to be.</p></aside>
+    <p><strong>Remember:</strong> Arrow is the common language; <code>to_pandas</code>, <code>from_pandas</code>,
+      <code>to_arrow</code>, <code>from_arrow</code> are cheap bridges, and DuckDB can query any of them with SQL.</p>
+  </section>
+
+  <section class="lesson-section" id="choosing">
+    <h2>Choosing pandas, Polars, or DuckDB</h2>
+    <p>All three are excellent; the right one depends on data size, team skills, and the surrounding ecosystem.</p>
+    <table>
+      <thead><tr><th></th><th>pandas</th><th>Polars</th><th>DuckDB</th></tr></thead>
+      <tbody>
+        <tr><td>Interface</td><td>Python methods, row index</td><td>Python expressions, no index</td><td>SQL (plus a Python relational API)</td></tr>
+        <tr><td>Execution</td><td>eager, mostly single-threaded</td><td>eager or lazy, multi-threaded, optimized</td><td>lazy, multi-threaded, optimized, out-of-core</td></tr>
+        <tr><td>Sweet spot</td><td>small to medium data, exploration, the widest library ecosystem (statsmodels, scikit-learn, plotting)</td><td>medium to large data in Python pipelines; complex transformations</td><td>large data, joins and aggregations, querying Parquet/CSV files directly, SQL-fluent teams</td></tr>
+        <tr><td>Larger than memory</td><td>no (chunk manually)</td><td>yes, with the streaming engine</td><td>yes, spills to disk</td></tr>
+        <tr><td>Time series and index tricks</td><td>strongest</td><td>good (<code>group_by_dynamic</code>, <code>rolling</code>)</td><td>good via SQL window functions</td></tr>
+      </tbody>
+    </table>
+    <p>A practical rule: start in pandas for small exploratory work and anything that hands a DataFrame to another
+      library that expects pandas; reach for Polars when pandas becomes slow or memory-hungry inside Python code; reach
+      for DuckDB when the natural expression is SQL or the data lives in many Parquet files. They interoperate, so you
+      can mix them in one project. <a href="m61-sql-duckdb.html">M61 Analytical SQL &amp; DuckDB</a> covers DuckDB in
+      depth.</p>
+    <aside class="callout think"><p>Your team has 30 GB of Parquet event logs and wants daily active users per country.
+      The analysts know SQL; the data engineers write Python. Which tool would you try first, and what would you check
+      in <code>explain()</code> output to confirm the query reads only what it needs?</p></aside>
+    <p><strong>Remember:</strong> choose by data size, interface, and ecosystem; they share Arrow, so mixing is cheap.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises build the core columnar ideas in plain Python, so they run and grade in the browser.</p>
+
+    <div class="exercise" data-id="m52-e1" data-title="Rows to columns">
+      <div class="exercise-prompt">
+        <p>Write <code>to_columns(rows)</code> that converts a list of dict records into a column store: a dict mapping
+          each column name to a list of values. Columns appear in the order they are first seen. A record missing a key
+          contributes <code>None</code> for that column, so every list has length <code>len(rows)</code>.</p>
+      </div>
+<textarea class="starter">
+def to_columns(rows):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    rows = [{"id": 1, "city": "Oslo"}, {"id": 2, "city": "Lima"}]
+    assert to_columns(rows) == {"id": [1, 2], "city": ["Oslo", "Lima"]}, "simple conversion"
+
+def test_missing_and_order():
+    rows = [{"a": 1}, {"b": 2, "a": 3}, {"c": 4}]
+    out = to_columns(rows)
+    assert list(out) == ["a", "b", "c"], f"columns in first-seen order, got {list(out)}"
+    assert out == {"a": [1, 3, None], "b": [None, 2, None], "c": [None, None, 4]}, f"got {out}"
+
+def test_empty():
+    assert to_columns([]) == {}, "no rows, no columns"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>First collect column names in order (a dict used as an ordered
+        set works well), then build each list with <code>row.get(name)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def to_columns(rows):
+    names = {}
+    for row in rows:
+        for key in row:
+            names.setdefault(key, None)
+    return {name: [row.get(name) for row in rows] for name in names}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m52-e2" data-title="Dictionary encoding">
+      <div class="exercise-prompt">
+        <p>Write <code>dict_encode(values)</code> returning <code>(dictionary, codes)</code>: <code>dictionary</code>
+          is the list of distinct non-<code>None</code> values in first-seen order, and <code>codes</code> gives each
+          value's position in the dictionary, with <code>-1</code> for <code>None</code> (as pandas categoricals do).
+          Also write <code>dict_decode(dictionary, codes)</code> that reverses it.</p>
+      </div>
+<textarea class="starter">
+def dict_encode(values):
+    ...
+
+def dict_decode(dictionary, codes):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_encode():
+    d, c = dict_encode(["Oslo", "Lima", "Oslo", None, "Pune", "Lima"])
+    assert d == ["Oslo", "Lima", "Pune"], f"dictionary was {d}"
+    assert c == [0, 1, 0, -1, 2, 1], f"codes were {c}"
+
+def test_round_trip():
+    values = ["b", "a", "b", "b", None, "c"]
+    assert dict_decode(*dict_encode(values)) == values, "decode(encode(x)) must give x back"
+
+def test_empty():
+    assert dict_encode([]) == ([], []), "empty input"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a dict from value to code while you scan; append to the
+        dictionary the first time you see a value.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def dict_encode(values):
+    index = {}
+    dictionary, codes = [], []
+    for v in values:
+        if v is None:
+            codes.append(-1)
+            continue
+        if v not in index:
+            index[v] = len(dictionary)
+            dictionary.append(v)
+        codes.append(index[v])
+    return dictionary, codes
+
+def dict_decode(dictionary, codes):
+    return [None if c == -1 else dictionary[c] for c in codes]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m52-e3" data-title="Run-length encoding">
+      <div class="exercise-prompt">
+        <p>Write <code>rle_encode(values)</code> that returns a list of <code>(value, run_length)</code> tuples for
+          consecutive equal values, and <code>rle_decode(runs)</code> that expands them back into a list.</p>
+      </div>
+<textarea class="starter">
+def rle_encode(values):
+    ...
+
+def rle_decode(runs):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_encode():
+    assert rle_encode(["a", "a", "b", "a", "a", "a"]) == [("a", 2), ("b", 1), ("a", 3)], "runs of equal neighbors"
+
+def test_numbers_and_empty():
+    assert rle_encode([7, 7, 7, 7]) == [(7, 4)], "one long run"
+    assert rle_encode([]) == [], "empty input"
+
+def test_round_trip():
+    data = [1, 1, 2, 3, 3, 3, 1]
+    assert rle_decode(rle_encode(data)) == data, "decode(encode(x)) must give x back"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>itertools.groupby</code> groups consecutive equal items, or
+        loop and compare with the last run.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from itertools import groupby
+
+def rle_encode(values):
+    return [(key, sum(1 for _ in group)) for key, group in groupby(values)]
+
+def rle_decode(runs):
+    return [value for value, count in runs for _ in range(count)]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m52-e4" data-title="Row-group skipping">
+      <div class="exercise-prompt">
+        <p>A file is a list of row groups; each is a list of numbers. Write <code>build_stats(row_groups)</code>
+          returning a list of <code>(min, max)</code> per group, and <code>scan(row_groups, stats, lo, hi)</code>
+          returning <code>(matches, groups_read)</code>: all values with <code>lo &lt;= v &lt;= hi</code> in file
+          order, and how many row groups had to be read. Skip a group without reading it when its stats prove it
+          cannot contain a match.</p>
+      </div>
+<textarea class="starter">
+def build_stats(row_groups):
+    ...
+
+def scan(row_groups, stats, lo, hi):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_rgs = [[1, 5, 3], [10, 12, 11], [20, 25, 22], [30, 31, 39]]
+
+def test_stats():
+    assert build_stats(_rgs) == [(1, 5), (10, 12), (20, 25), (30, 39)], "min and max per row group"
+
+def test_scan_skips():
+    matches, read = scan(_rgs, build_stats(_rgs), 11, 21)
+    assert matches == [12, 11, 20], f"matches were {matches}"
+    assert read == 2, f"only row groups 1 and 2 can match; read {read}"
+
+def test_scan_none():
+    assert scan(_rgs, build_stats(_rgs), 6, 9) == ([], 0), "a gap between groups reads nothing"
+
+def test_boundaries_inclusive():
+    matches, read = scan(_rgs, build_stats(_rgs), 5, 10)
+    assert matches == [5, 10] and read == 2, f"lo and hi are inclusive; got {matches}, read {read}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A group can be skipped when <code>max &lt; lo</code> or
+        <code>min &gt; hi</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def build_stats(row_groups):
+    return [(min(rg), max(rg)) for rg in row_groups]
+
+def scan(row_groups, stats, lo, hi):
+    matches, read = [], 0
+    for rg, (mn, mx) in zip(row_groups, stats):
+        if mx &lt; lo or mn &gt; hi:
+            continue
+        read += 1
+        matches.extend(v for v in rg if lo &lt;= v &lt;= hi)
+    return matches, read</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m52-e5" data-title="A tiny expression engine">
+      <div class="exercise-prompt">
+        <p>Build a miniature version of Polars expressions over a column store (a dict of equal-length lists).
+          Implement a class <code>Expr</code> and a function <code>col(name)</code> so that:</p>
+        <ul>
+          <li><code>col("a").eval(table)</code> returns the list <code>table["a"]</code>.</li>
+          <li><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> between two expressions, or an expression
+            and a number (on either side), produce a new <code>Expr</code> that computes element-wise.</li>
+          <li><code>&gt;</code>, <code>&lt;</code>, <code>==</code> produce boolean expressions, and <code>&amp;</code>
+            combines two boolean expressions element-wise.</li>
+          <li><code>filter_table(table, predicate)</code> returns a new column store keeping rows where the predicate
+            is <code>True</code>.</li>
+        </ul>
+        <p>Nothing is computed until <code>eval</code> is called: an expression is a description.</p>
+      </div>
+<textarea class="starter">
+import operator
+
+class Expr:
+    def __init__(self, fn):
+        self.fn = fn            # fn(table) -> list
+
+    def eval(self, table):
+        return self.fn(table)
+
+    # TODO: __add__, __radd__, __sub__, __mul__, __rmul__, __truediv__, __gt__, __lt__, __eq__, __and__
+
+def col(name):
+    ...
+
+def filter_table(table, predicate):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_t = {"qty": [2, 1, 5, 10], "price": [8.5, 24.0, 8.5, 1.2], "city": ["Oslo", "Lima", "Oslo", "Pune"]}
+
+def test_col():
+    assert col("qty").eval(_t) == [2, 1, 5, 10], "col returns the column"
+
+def test_arithmetic():
+    revenue = col("qty") * col("price")
+    assert isinstance(revenue, Expr), "operators return Expr objects (lazy)"
+    assert [round(x, 2) for x in revenue.eval(_t)] == [17.0, 24.0, 42.5, 12.0], "element-wise multiply"
+    assert (col("qty") + 1).eval(_t) == [3, 2, 6, 11], "Expr + number"
+    assert (2 * col("qty")).eval(_t) == [4, 2, 10, 20], "number * Expr"
+    assert (col("qty") - col("qty") / 2).eval(_t) == [1.0, 0.5, 2.5, 5.0], "subtract and divide"
+
+def test_comparisons_and_filter():
+    pred = (col("city") == "Oslo") & (col("qty") > 3)
+    assert pred.eval(_t) == [False, False, True, False], "== and > combined with &"
+    out = filter_table(_t, col("price") < 10)
+    assert out == {"qty": [2, 5, 10], "price": [8.5, 8.5, 1.2], "city": ["Oslo", "Oslo", "Pune"]}, f"got {out}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write one helper <code>_binary(self, other, op)</code> that wraps a
+        number in a constant expression, then returns
+        <code>Expr(lambda t: [op(a, b) for a, b in zip(self.eval(t), other.eval(t))])</code>. Each dunder method
+        calls it with an <code>operator</code> function. Defining <code>__eq__</code> means you should also set
+        <code>__hash__ = None</code> or leave it; tests do not hash expressions.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import operator
+
+class Expr:
+    def __init__(self, fn):
+        self.fn = fn
+
+    def eval(self, table):
+        return self.fn(table)
+
+    def _binary(self, other, op, reverse=False):
+        if not isinstance(other, Expr):
+            value = other
+            other = Expr(lambda t: [value] * len(next(iter(t.values()))))
+        left, right = (other, self) if reverse else (self, other)
+        return Expr(lambda t: [op(a, b) for a, b in zip(left.eval(t), right.eval(t))])
+
+    def __add__(self, other): return self._binary(other, operator.add)
+    def __radd__(self, other): return self._binary(other, operator.add, reverse=True)
+    def __sub__(self, other): return self._binary(other, operator.sub)
+    def __mul__(self, other): return self._binary(other, operator.mul)
+    def __rmul__(self, other): return self._binary(other, operator.mul, reverse=True)
+    def __truediv__(self, other): return self._binary(other, operator.truediv)
+    def __gt__(self, other): return self._binary(other, operator.gt)
+    def __lt__(self, other): return self._binary(other, operator.lt)
+    def __eq__(self, other): return self._binary(other, operator.eq)
+    def __and__(self, other): return self._binary(other, lambda a, b: a and b)
+    __hash__ = None
+
+def col(name):
+    return Expr(lambda t: list(t[name]))
+
+def filter_table(table, predicate):
+    keep = predicate.eval(table)
+    return {name: [v for v, k in zip(values, keep) if k] for name, values in table.items()}</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: port a pandas analysis to Polars lazy</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">pandas vs Polars on the same question</span></div>
+      <div class="widget-body">
+        <p>Take an analysis you would write in pandas, port it to the Polars lazy API, prove both give the same
+          answer, and measure the difference on data large enough to matter.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init columnar-bench &amp;&amp; cd columnar-bench
+pixi add python=3.14 pandas polars pyarrow numpy
+pixi run python make_data.py     # writes trips.parquet (10M rows, 20 row groups) and trips.csv
+pixi run python bench.py</code></pre>
+        <p><strong>Data:</strong> generate ~10 million synthetic taxi trips with NumPy: <code>pickup_time</code>,
+          <code>zone</code> (260 zones), <code>distance_km</code>, <code>fare</code>, <code>tip</code>,
+          <code>payment_type</code>. Sort by <code>pickup_time</code> and write Parquet with
+          <code>row_group_size=500_000</code>, plus a CSV copy.</p>
+        <p><strong>Question:</strong> for trips in March paid by card, what are the median fare per km and the average
+          tip percentage per zone, for the 10 busiest zones?</p>
+        <ul class="checklist" data-id="m52-mini">
+          <li>A pandas version reads Parquet with <code>columns=</code> and answers the question</li>
+          <li>A Polars version uses <code>scan_parquet</code> and a single lazy chain ending in <code>collect()</code></li>
+          <li><code>explain()</code> output shows the date filter and column projection pushed into the scan (paste it in a comment)</li>
+          <li>An assertion proves both versions return the same zones and values (within float tolerance)</li>
+          <li>Timings use the best of 5 runs, for both Parquet and CSV inputs, printed as a small table</li>
+          <li>A short README explains which tool you would pick for this job and why</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> answer the same question with DuckDB SQL on the Parquet file; try
+          <code>collect(engine="streaming")</code> with 50M rows; compare file sizes for Snappy vs Zstandard
+          compression.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m52-quiz">
+<script type="application/json">
+{"title": "Columnar data quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which workload favors a column-oriented layout?", "options": ["Updating one customer's address", "Fetching every field of order 1234", "Averaging one column over 100 million rows", "Inserting single rows at high frequency"], "answer": 2, "explanation": "<p>Analytics reads few columns across many rows; a column store reads just those contiguous columns. Single-record reads and writes favor row stores.</p>"},
+  {"type": "multi", "prompt": "Why do column stores compress well?", "options": ["Values in one column share a type", "Neighboring values are often similar or repeated", "They store data as JSON", "Encodings like dictionary and RLE apply naturally"], "answer": [0, 1, 3], "explanation": "<p>Same-typed, similar neighbors make dictionary, run-length, and delta encodings effective, and general compressors work better too.</p>"},
+  {"type": "single", "prompt": "What does zero-copy mean for Arrow data?", "options": ["Data is never written to disk", "Another library can use the same memory buffers without converting or copying them", "Arrays cannot be modified", "Nulls take zero bytes"], "answer": 1, "explanation": "<p>Because the layout is standardized, a consumer can read the producer's buffers directly.</p>"},
+  {"type": "text", "prompt": "An Arrow string array holds [\"ab\", \"\", \"cde\"]. What are its offsets? (write them comma-separated)", "answer": ["0,2,2,5", "0, 2, 2, 5", "[0, 2, 2, 5]"], "explanation": "<p>Offsets have n+1 entries: start at 0, add each string's byte length: 0, 2, 2, 5.</p>"},
+  {"type": "single", "prompt": "How does Arrow represent a null in an int64 array?", "options": ["With the value -1", "With NaN", "With a 0 bit in the validity bitmap", "By removing the element"], "answer": 2, "explanation": "<p>The validity bitmap marks presence; the data buffer keeps an ignored placeholder so positions stay aligned. That is why Polars can keep integer columns integer when values are missing.</p>"},
+  {"type": "single", "prompt": "A Parquet row group has statistics min(amt)=3, max(amt)=50. The query filters <code>amt &gt; 60</code>. What can the reader do?", "options": ["Read the row group and filter it", "Skip the row group without reading its pages", "Read only the footer of the row group", "Fail, because statistics are approximate"], "answer": 1, "explanation": "<p>max=50 proves no row exceeds 60, so predicate pushdown skips the entire row group.</p>"},
+  {"type": "single", "prompt": "What is projection pushdown?", "options": ["Filtering rows inside the scan", "Reading only the columns a query uses", "Sorting data before writing", "Running on the GPU"], "answer": 1, "explanation": "<p>A projection is the set of selected columns. Pushing it down means unused column chunks are never read.</p>"},
+  {"type": "multi", "prompt": "Which statements about Polars are true?", "options": ["It has no row index", "pl.col(\"a\") * 2 immediately computes a list", "Expressions passed to with_columns can run in parallel", "It is built on the Arrow memory model"], "answer": [0, 2, 3], "explanation": "<p>An expression is a description that Polars evaluates inside a context, which allows parallelism and optimization.</p>"},
+  {"type": "single", "prompt": "Which Polars expression is the equivalent of pandas <code>groupby('k')['a'].transform('sum')</code>?", "options": ["<code>pl.col('a').sum()</code>", "<code>pl.col('a').sum().over('k')</code>", "<code>pl.col('a').cum_sum()</code>", "<code>df.group_by('k').agg(pl.col('a').sum())</code>"], "answer": 1, "explanation": "<p><code>.over('k')</code> computes the aggregation per group and broadcasts it back to every row: a window expression.</p>"},
+  {"type": "single", "prompt": "When does a Polars LazyFrame execute?", "options": ["As each method is called", "When collect() (or a sink_* method) is called", "When explain() is called", "Only on files larger than memory"], "answer": 1, "explanation": "<p>Lazy methods build a plan. collect() optimizes and executes it; explain() only prints the plan.</p>"},
+  {"type": "single", "prompt": "In an optimized plan, the scan line shows <code>SELECTION: col(\"city\") == \"Oslo\"</code>. What happened?", "options": ["The query failed", "The filter was pushed down into the file scan", "Only one column is read", "The query will run twice"], "answer": 1, "explanation": "<p>Predicate pushdown moved the filter into the reader, so rows (and, for Parquet, row groups) are discarded as early as possible.</p>"},
+  {"type": "single", "prompt": "Which practice makes a Polars query slow?", "options": ["Using scan_parquet instead of read_parquet", "Calling map_elements with a Python lambda on every row", "Using pl.when().then().otherwise()", "Chaining with_columns calls"], "answer": 1, "explanation": "<p>map_elements runs Python per value, losing parallel Rust kernels. Prefer native expressions.</p>"},
+  {"type": "text", "prompt": "Name the in-process analytical SQL engine that can query pandas and Polars DataFrames and Parquet files directly.", "answer": ["duckdb", "duck db"], "explanation": "<p>DuckDB is an embedded, columnar, vectorized SQL engine; M61 covers it.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Column stores read less, loop faster, and compress better for analytics.</li>
+      <li>Arrow standardizes columnar memory: validity bitmaps, offsets, data buffers, record batches; zero-copy interop.</li>
+      <li>Parquet stores row groups of encoded, compressed column chunks with min/max stats for skipping.</li>
+      <li>Polars: no index, expressions in contexts, strict Arrow types, parallel execution.</li>
+      <li>Lazy plans let the optimizer push down predicates and projections; check with <code>explain()</code>.</li>
+      <li>pandas, Polars, PyArrow, and DuckDB convert cheaply; choose by size, interface, and ecosystem.</li>
+    </ul>
+    <div class="flashcards" data-title="Columnar ideas">
+<script type="application/json">
+[{"front": "Row store vs column store", "back": "Row: all fields of a record together (transactions). Column: all values of a column together (analytics)."},
+ {"front": "Apache Arrow", "back": "A standard in-memory columnar format so tools share data without copying or converting."},
+ {"front": "Validity bitmap", "back": "One bit per value marking present (1) or null (0)."},
+ {"front": "Offsets buffer", "back": "n+1 integers locating each variable-length value inside one data buffer."},
+ {"front": "Parquet row group", "back": "A horizontal slice of the file; each column inside it is a column chunk with its own statistics."},
+ {"front": "Predicate pushdown", "back": "Apply filters during the scan, skipping row groups whose min/max cannot match."},
+ {"front": "Projection pushdown", "back": "Read only the columns the query uses."},
+ {"front": "Dictionary encoding", "back": "Store distinct values once and small integer codes per row (like pandas category)."},
+ {"front": "Polars expression", "back": "A lazy description like pl.col(\"a\") * 2, evaluated inside select/with_columns/filter/agg."},
+ {"front": "LazyFrame.collect()", "back": "Optimizes the recorded plan and executes it; explain() shows the plan."},
+ {"front": ".over(\"k\")", "back": "A Polars window: aggregate per group and broadcast back to each row (pandas transform)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.pola.rs/">Polars user guide</a> (expressions, lazy API, and "Coming from pandas")</li>
+      <li><a href="https://arrow.apache.org/docs/format/Columnar.html">Arrow columnar format specification</a></li>
+      <li><a href="https://parquet.apache.org/docs/file-format/">Parquet file format documentation</a></li>
+      <li><a href="https://arrow.apache.org/docs/python/">PyArrow documentation</a></li>
+      <li>Next: <a href="m53-visualization.html">M53 Data Visualization</a>; later, <a href="m61-sql-duckdb.html">M61 Analytical SQL &amp; DuckDB</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

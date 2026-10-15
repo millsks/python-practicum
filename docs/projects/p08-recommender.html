@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 8 · Movie Recommender · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p08">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Graded project</p>
+    <h1>Project 8: Movie Recommender</h1>
+    <p class="lede">Build the recommendation engine for a small streaming service, from a sparse ratings matrix to a
+      tested <code>recommend(user_id, k)</code> API. You will implement five model families, measure them with the
+      offline metrics real teams use, and show that matrix factorization finds hidden tastes a popularity chart cannot.
+      Fifty-one tests tell you when each piece is right.</p>
+    <div class="lesson-meta"><span>⏱ ~10–14 hours</span><span>Prerequisites: <a href="../modules/m55-ml-foundations.html">M55</a>, <a href="../modules/m56-scikit-learn.html">M56</a>, <a href="../modules/m57-unsupervised-embeddings.html">M57</a>, <a href="../modules/m59-ml-production.html">M59</a></span></div>
+    <ul class="objectives">
+      <li>Store user × item ratings in a <code>scipy.sparse.csr_matrix</code> with stable id mappings</li>
+      <li>Build an honest baseline with a Bayesian (damped) average and explain why the plain mean is misleading</li>
+      <li>Implement item-item and user-user collaborative filtering with cosine similarity, including cold-start fallbacks</li>
+      <li>Train biased matrix factorization with SGD and L2 regularization in NumPy, tracking RMSE per epoch</li>
+      <li>Blend a content-based genre model with collaborative models into a hybrid</li>
+      <li>Evaluate with a per-user hold-out split, RMSE, precision@k, recall@k, and catalogue coverage</li>
+      <li>Wrap the best model in a small, typed recommendation API with sensible fallbacks</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p><strong>Reelhouse</strong> is a small streaming service: a few hundred subscribers, a few hundred films. Today the
+      home page shows the same "Top 10" to everyone, and people stop browsing after the first row. The product lead's
+      request is short: "Show each subscriber films <em>they</em> will like, and prove it works before we ship it."</p>
+    <p>That sentence hides three jobs. First, a <strong>model</strong> that predicts how much a user would like a film they
+      have not seen. Second, an <strong>evaluation</strong> that shows, without real users, that the model beats what we
+      have now. Third, an <strong>API</strong> the web team can call with a user id. You will do all three.</p>
+    <p>Real ratings are private, so the package ships a deterministic synthetic generator,
+      <code>generate_ratings(n_users, n_items, seed)</code>. It is not random noise: every user and every film has a hidden
+      three-number "taste" vector (think "how much action, how much drama, how much sci-fi"), plus a bias (some users are
+      generous, some films are just good). A rating is roughly <code>3 + user_bias + film_bias + 1.2 · (taste_user ·
+      taste_film) / √3</code>, plus noise, rounded to whole stars. Genres are derived from the same hidden tastes. So there
+      is real structure to find, which means your evaluation can tell good models from bad ones.</p>
+    <aside class="callout think"><p>Before you start: the popularity list recommends the same films to everybody. What
+      would you expect its <em>coverage</em> (fraction of the catalogue that ever gets recommended) to be, compared to a
+      personalized model? Write your guess down; milestone 6 will tell you.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Sparse data</h4><p>Most users rate a tiny fraction of the catalogue. CSR matrices store only
+        what exists and make "all ratings of user <em>u</em>" a cheap slice.</p></div>
+      <div class="card"><h4>Collaborative filtering</h4><p>"People who liked what you liked also liked…" expressed as
+        cosine similarity between rating vectors.</p></div>
+      <div class="card"><h4>Latent factors</h4><p>Matrix factorization learns the hidden taste vectors directly, with
+        gradient descent and regularization from M55.</p></div>
+      <div class="card"><h4>Honest evaluation</h4><p>Rating error (RMSE) and ranking quality (precision@k, recall@k) can
+        disagree. Coverage catches models that only ever recommend hits.</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>Feature specification</h2>
+    <p>Every model subclasses <code>Recommender</code> (provided in <code>base.py</code>):</p>
+    <pre><code class="language-python">class Recommender(ABC):
+    def fit(self, train: RatingMatrix) -&gt; Self: ...            # learn; store train in self._train
+    def score_items(self, user: int) -&gt; np.ndarray: ...       # predicted rating for EVERY item (1-5 scale)
+    def predict(self, user: int, item: int) -&gt; float: ...     # provided: score_items(user)[item]
+    def predict_many(self, pairs: np.ndarray) -&gt; np.ndarray:  # provided: batch predictions for RMSE</code></pre>
+    <p>Because every model returns predicted <em>ratings</em>, the same scores serve both RMSE (how close is the predicted
+      star count?) and ranking (sort the scores, take the top <em>k</em>).</p>
+    <table>
+      <thead><tr><th>Module</th><th>Public API</th><th>Behavior</th></tr></thead>
+      <tbody>
+        <tr><td><code>data</code></td><td><code>generate_ratings</code>, <code>generate_items</code> (provided), <code>load_ratings_csv</code>, <code>build_matrix</code>, <code>RatingMatrix</code></td>
+          <td>Sorted id → index maps; <code>0</code> means unrated so ratings must be positive; duplicates raise <code>ValueError</code>; optional <code>item_ids</code> adds cold items.</td></tr>
+        <tr><td><code>baseline</code></td><td><code>bayesian_average</code>, <code>PopularityRecommender(prior_weight=5)</code></td>
+          <td><code>(C·m + Σr) / (C + n)</code> per item, where <code>m</code> is the global mean.</td></tr>
+        <tr><td><code>neighbors</code></td><td><code>cosine_similarity</code>, <code>top_k_mask</code>, <code>ItemKNN(k)</code>, <code>UserKNN(k)</code></td>
+          <td>Zero vectors have similarity 0 (never NaN). Predictions are a mean plus a similarity-weighted average of deviations; no neighbors means fall back to the mean.</td></tr>
+        <tr><td><code>mf</code></td><td><code>rmse</code>, <code>MatrixFactorization(n_factors, lr, reg, n_epochs, seed)</code></td>
+          <td><code>r̂ = μ + b_u + b_i + p_u·q_i</code>; seeded SGD; <code>history_</code> holds training RMSE per epoch; predictions clipped to 1–5.</td></tr>
+        <tr><td><code>content</code></td><td><code>genre_matrix</code>, <code>ContentRecommender(features, k)</code>, <code>HybridRecommender([(model, w), …])</code></td>
+          <td>Genre cosine replaces rating cosine, so never-rated films still get scores. The hybrid normalizes weights to sum to 1.</td></tr>
+        <tr><td><code>evaluate</code></td><td><code>train_test_split_by_user</code>, <code>top_k</code>, <code>precision_at_k</code>, <code>recall_at_k</code>, <code>coverage</code>, <code>evaluate</code>, <code>compare_models</code>, <code>format_table</code></td>
+          <td>Each user with enough ratings gives some to test and keeps at least one in train. Rankings exclude training items. Ties break toward the lower index.</td></tr>
+        <tr><td><code>api</code></td><td><code>RecommenderService(model).fit(data).recommend(user_id, k=10, exclude_seen=True)</code></td>
+          <td>Returns <code>Recommendation(item_id, score)</code> objects, best first. Unknown users get the popularity ranking.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <pre class="mermaid">
+flowchart LR
+  G[generate_ratings / CSV] --> B[build_matrix]
+  B --> M[(RatingMatrix: CSR + id maps)]
+  M --> S[train_test_split_by_user]
+  S --> T[train matrix]
+  S --> H[held-out ratings]
+  T --> P[PopularityRecommender]
+  T --> K[ItemKNN / UserKNN]
+  T --> F[MatrixFactorization]
+  T --> C[ContentRecommender]
+  I[generate_items: genres] --> C
+  F --> Y[HybridRecommender]
+  C --> Y
+  P --> E[evaluate / compare_models]
+  K --> E
+  F --> E
+  Y --> E
+  H --> E
+  E --> R[format_table]
+  F --> A[RecommenderService.recommend]
+  P -. cold users .-> A
+    </pre>
+    <p>The data layer knows nothing about models; models know only <code>RatingMatrix</code>; evaluation knows only the
+      <code>Recommender</code> interface. That is why one <code>evaluate</code> function can compare every model, and why
+      the API can serve any of them.</p>
+    <p>Try the two core data ideas right here in the browser (the first SciPy import takes a few seconds):</p>
+    <div class="runnable" data-title="A tiny CSR rating matrix">
+<textarea>
+import numpy as np
+from scipy.sparse import csr_matrix
+
+users = ["ann", "bob", "cat"]
+items = ["Alien", "Brave", "Coco", "Dune"]
+# (user index, item index, stars)
+triples = [(0, 0, 5), (0, 3, 4), (1, 1, 3), (1, 2, 5), (2, 0, 4), (2, 3, 5)]
+rows, cols, vals = zip(*triples)
+R = csr_matrix((vals, (rows, cols)), shape=(len(users), len(items)), dtype=float)
+
+print(R.toarray())
+print("stored ratings:", R.nnz, "of", R.shape[0] * R.shape[1], "cells")
+u = 2
+start, end = R.indptr[u], R.indptr[u + 1]
+print(users[u], "rated", [items[j] for j in R.indices[start:end]], R.data[start:end])
+</textarea>
+    </div>
+    <div class="runnable" data-title="Why a Bayesian average?" data-predict>
+<textarea>
+import numpy as np
+
+global_mean = 3.6
+sums = np.array([5.0, 4.5 * 40])     # one 5-star rating vs forty ratings averaging 4.5
+counts = np.array([1, 40])
+C = 5                                 # five "virtual" ratings at the global mean
+damped = (C * global_mean + sums) / (C + counts)
+print(np.round(sums / counts, 2), np.round(damped, 2))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started with Pixi</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects                  # list projects and your progress
+pixi run start p08                 # copy the starter into work/p08_recommender/
+pixi run grade p08                 # run the 51 tests against your work/ copy
+pixi run grade p08 -- -k recommender_data   # only the milestone 1 tests (pytest -k)
+cd work/p08_recommender
+pixi run python -m recommender     # print the model comparison table once everything works</code></pre>
+    <aside class="callout pixi"><p>Everything you need (NumPy, SciPy, pandas) is already in the course's Pixi
+      environment. If you go on to the stretch goals and want an HTTP API, add it to your own project with
+      <code>pixi add fastapi uvicorn</code>; never <code>pip install</code> into a Pixi environment.</p></aside>
+    <p>The starter gives you the complete generator and the <code>Recommender</code> base class. Every other function
+      has its real signature and docstring, a body of <code>raise NotImplementedError</code>, and <code># TODO</code>
+      comments describing the approach. Work milestone by milestone; the tests are grouped the same way.</p>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h4>Milestone 1 · Data loading and the sparse matrix</h4>
+      <p>Implement <code>load_ratings_csv</code>, <code>build_matrix</code>, and the <code>RatingMatrix</code> helpers.
+        Users and items are indexed in <em>sorted</em> id order so the same data always gives the same matrix.</p>
+      <ul class="checklist" data-id="p08-m1">
+        <li><code>build_matrix</code> returns a <code>csr_matrix</code> of shape <code>(n_users, n_items)</code> with <code>user_index</code>/<code>item_index</code> maps</li>
+        <li>Duplicate (user, item) pairs and zero/negative ratings raise <code>ValueError</code></li>
+        <li>Passing <code>item_ids</code> adds cold catalogue items as empty columns</li>
+        <li><code>user_ratings(u)</code> slices <code>indices</code>/<code>data</code> with <code>indptr</code> (no dense conversion)</li>
+        <li><code>pixi run grade p08 -- -k recommender_data</code> passes</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 2 · Popularity baseline</h4>
+      <p>Implement <code>bayesian_average</code> and <code>PopularityRecommender</code>. This is the number every
+        other model must beat.</p>
+      <ul class="checklist" data-id="p08-m2">
+        <li>The damped mean matches <code>(C·m + Σr) / (C + n)</code> for hand-computed inputs</li>
+        <li>An item with no ratings scores exactly the global mean (no division by zero)</li>
+        <li>Four good ratings outrank one perfect rating</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 3 · Item-item and user-user collaborative filtering</h4>
+      <p>Implement <code>cosine_similarity</code> (sparse-friendly, zero rows give 0), <code>top_k_mask</code>,
+        <code>ItemKNN</code>, and <code>UserKNN</code>. Both predict <code>mean + Σ sim·deviation / Σ sim</code> over the
+        <em>k</em> most similar neighbors with positive similarity.</p>
+      <ul class="checklist" data-id="p08-m3">
+        <li>Item-item similarity is computed once in <code>fit</code> from <code>train.matrix.T</code></li>
+        <li>A cold item (or one with no similar rated items) predicts the user's mean</li>
+        <li>User-user kNN uses each neighbor's deviation from <em>their own</em> mean</li>
+        <li>The small hand-computed examples in the tests give 5.0, 2.0, and 1.0</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 4 · Matrix factorization</h4>
+      <p>Implement <code>rmse</code> and <code>MatrixFactorization.fit</code>/<code>score_items</code>. This is gradient
+        descent from M55 on a new loss: squared error over the <em>observed</em> ratings plus
+        <code>reg · (b_u² + b_i² + |p_u|² + |q_i|²)</code>.</p>
+      <ul class="checklist" data-id="p08-m4">
+        <li>Initialization and shuffling use <code>np.random.default_rng(self.seed)</code>, so runs are reproducible</li>
+        <li><code>history_</code> gets one training RMSE per epoch and it goes down</li>
+        <li>Optional <code>validation</code> rows fill <code>validation_history_</code></li>
+        <li>Predictions are clipped to <code>self.clip</code> (1–5)</li>
+        <li>The statistical test passes: MF beats popularity by at least 0.1 RMSE</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 5 · Content-based and hybrid</h4>
+      <p>Implement <code>genre_matrix</code>, <code>ContentRecommender</code>, and <code>HybridRecommender</code>. Content
+        similarity does not need ratings, so it can recommend a film on the day it is added.</p>
+      <ul class="checklist" data-id="p08-m5">
+        <li>Genre vectors follow the matrix's item order; unknown genres and missing metadata give zero rows</li>
+        <li>A cold item that shares a genre with a loved film gets a high score</li>
+        <li>The hybrid validates weights and returns <code>Σ w·score / Σ w</code></li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 6 · Evaluation and the comparison table</h4>
+      <p>Implement the split, the metrics, <code>evaluate</code>, <code>compare_models</code>, and
+        <code>format_table</code>. Then run <code>pixi run python -m recommender</code> and read your table.</p>
+      <ul class="checklist" data-id="p08-m6">
+        <li>The split holds out ratings <em>per user</em>; every eligible user keeps at least one training rating</li>
+        <li>Rankings exclude items the user rated in training</li>
+        <li>precision@k divides by <em>k</em>; recall@k divides by the number of relevant items</li>
+        <li>Coverage is the fraction of the catalogue that appears in any user's top-k list</li>
+        <li>You can explain in two sentences why your best RMSE model and best coverage model differ</li>
+      </ul>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 7 · The recommend() API</h4>
+      <p>Implement <code>RecommenderService.fit</code> and <code>recommend</code>. This is the only function the web team
+        will ever call, so its contract matters more than its internals.</p>
+      <ul class="checklist" data-id="p08-m7">
+        <li><code>recommend(user_id, k, exclude_seen=True)</code> returns at most <em>k</em> <code>Recommendation</code>s, best first</li>
+        <li><code>exclude_seen=False</code> allows already-rated items</li>
+        <li>Unknown users get the popularity ranking instead of an exception</li>
+        <li><code>k &lt; 1</code> raises <code>ValueError</code>; calling before <code>fit</code> raises <code>RuntimeError</code></li>
+        <li><code>pixi run grade p08</code> reports 51 passed</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>Building the CSR matrix</summary>
+      <p><code>csr_matrix((values, (rows, cols)), shape=(n_users, n_items))</code> builds it in one call from three
+        aligned lists. Map ids to positions with dicts built from the sorted unique ids. Call
+        <code>matrix.sort_indices()</code> so each row's columns are in ascending order; the tests rely on it.</p>
+    </details>
+    <details class="reveal"><summary>Cosine similarity without dividing by zero</summary>
+      <pre><code class="language-python">norms = np.sqrt(np.asarray(X.multiply(X).sum(axis=1)).ravel())
+inverse = np.divide(1.0, norms, out=np.zeros_like(norms), where=norms &gt; 0)
+unit = scipy.sparse.diags(inverse) @ X          # each nonzero row now has length 1
+sim = (unit @ unit.T).toarray()</code></pre>
+      <p>A zero row stays zero after scaling, so all its similarities are 0 rather than NaN.</p>
+    </details>
+    <details class="reveal"><summary>Vectorizing item-kNN for one user</summary>
+      <p>Take the user's rated item indices <code>J</code> and ratings <code>r</code>. Then
+        <code>W = top_k_mask(sim[:, J], k)</code> is an <code>(n_items, |J|)</code> weight matrix, and every prediction at
+        once is <code>mean + (W @ (r - mean)) / W.sum(axis=1)</code>, using <code>np.where</code> where the denominator
+        is 0.</p>
+    </details>
+    <details class="reveal"><summary>The SGD update for matrix factorization</summary>
+      <p>For one rating, <code>err = r - (mu + b_u + b_i + p_u @ q_i)</code>. The gradient of
+        <code>err² + reg·(…)</code> gives these updates (the factor 2 is folded into the learning rate):</p>
+      <pre><code class="language-python">b_u += lr * (err - reg * b_u)
+b_i += lr * (err - reg * b_i)
+p_u, q_i = p_u + lr * (err * q_i - reg * p_u), q_i + lr * (err * p_u - reg * q_i)</code></pre>
+      <p>Update <code>p_u</code> and <code>q_i</code> from the <em>old</em> values (the tuple assignment does that). If
+        RMSE explodes to NaN, your learning rate is too high.</p>
+    </details>
+    <details class="reveal"><summary>My MF does not beat the baseline</summary>
+      <p>Check that you shuffle each epoch, that biases start at zero and factors at small random values (not zero: with
+        all-zero factors the gradients for <code>p</code> and <code>q</code> are zero forever), and that the test uses
+        enough epochs. With 3 factors, <code>lr=0.03</code>, 30 epochs, the reference solution gets test RMSE around 0.7–0.85
+        versus about 1.1–1.2 for popularity.</p>
+    </details>
+    <details class="reveal"><summary>Deterministic ties in top_k</summary>
+      <p><code>np.argsort(-scores, kind="stable")</code> keeps equal scores in index order. Set excluded items to
+        <code>-np.inf</code> first, then drop them from the result.</p>
+    </details>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table class="rubric">
+      <thead><tr><th>Area</th><th>Weight</th><th>What "excellent" looks like</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>40%</td><td>All 51 tests pass, including the statistical MF-vs-baseline check.</td></tr>
+        <tr><td>Data handling</td><td>10%</td><td>Sparse operations throughout; no full dense user × item matrix except where clearly small.</td></tr>
+        <tr><td>Evaluation</td><td>20%</td><td>A comparison table with all models and a short written interpretation (which model wins which metric, and why).</td></tr>
+        <tr><td>Code quality</td><td>15%</td><td>Type hints, Google docstrings, ruff-clean, small functions, no duplicated scoring logic.</td></tr>
+        <tr><td>API design</td><td>10%</td><td>Clear errors, cold-user fallback, deterministic output.</td></tr>
+        <tr><td>Reproducibility</td><td>5%</td><td>Seeds everywhere randomness appears; the same command prints the same table.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>ALS.</strong> Add alternating least squares: fix item factors and solve a small ridge regression per user,
+        then swap. Plot RMSE per iteration against SGD.</li>
+      <li><strong>Implicit feedback.</strong> Treat "rated at all" as a positive signal and train with a ranking loss (BPR).</li>
+      <li><strong>Beyond accuracy.</strong> Measure diversity (average genre distance inside a list) and novelty (how
+        unpopular recommended items are); re-rank to raise coverage at a small precision cost.</li>
+      <li><strong>Tune the hybrid.</strong> Choose weights on a validation split, never on the test split (M55's leakage rule).</li>
+      <li><strong>Serve it.</strong> Wrap <code>RecommenderService</code> in FastAPI with a Pydantic response model, as in
+        <a href="../modules/m59-ml-production.html">M59</a>.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p08-quiz">
+<script type="application/json">
+{"title": "Recommender reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why store ratings in a CSR matrix instead of a dense NumPy array?", "options": ["CSR is always faster for every operation", "Most cells are unrated, so storing only the observed ratings saves memory and makes per-user row slices cheap", "NumPy cannot hold floats between 1 and 5", "scikit-learn requires it"], "answer": 1, "explanation": "<p>With 15% density, a dense matrix wastes 85% of its memory on zeros. CSR keeps three arrays (data, indices, indptr), and a row is a contiguous slice.</p>"},
+  {"type": "single", "prompt": "An item has one 5-star rating. The global mean is 3.5 and the prior weight is C = 4. What is its Bayesian average?", "options": ["5.0", "3.8", "4.25", "3.5"], "answer": 1, "explanation": "<p>(4 × 3.5 + 5) / (4 + 1) = 19 / 5 = 3.8. One rating barely moves it away from the prior.</p>"},
+  {"type": "multi", "prompt": "Which models can give a sensible score to a film nobody has rated yet?", "options": ["ContentRecommender (genre similarity)", "ItemKNN (rating cosine)", "PopularityRecommender (falls back to the global mean)", "A hybrid that includes the content model"], "answer": [0, 2, 3], "explanation": "<p>Rating-based similarity is all zeros for a cold item, so ItemKNN can only return the user's mean. Genres exist from day one, so content (and any hybrid containing it) can rank the new film. Popularity gives it the prior mean, which is at least defined.</p>"},
+  {"type": "single", "prompt": "Why does the split hold out ratings <em>per user</em> rather than a random 20% of all ratings?", "options": ["It is faster", "So every test user still has training ratings: we evaluate personalization, not cold start", "Random splits are not allowed with sparse matrices", "To make RMSE smaller"], "answer": 1, "explanation": "<p>A global random split can leave some users with all of their ratings in test, which measures the cold-start fallback rather than the model. Per-user hold-out keeps the question fair.</p>"},
+  {"type": "single", "prompt": "Popularity has precision@10 close to MF's but coverage of 0.09. What does that tell you?", "options": ["Popularity is the better model", "It recommends the same handful of hits to everyone; it finds relevant items only because hits are often relevant", "Coverage is a broken metric", "MF overfits"], "answer": 1, "explanation": "<p>Popular films are often liked, so precision looks fine, but 91% of the catalogue is never shown. That is bad for users with niche tastes and for the business.</p>"},
+  {"type": "text", "prompt": "In <code>r̂ = μ + b_u + b_i + p_u · q_i</code>, what is the name of the regularization added to keep <code>p_u</code> and <code>q_i</code> small (one letter and a number)?", "answer": ["L2", "l2"], "explanation": "<p>L2 (ridge) regularization adds reg · (|p_u|² + |q_i|²) to the loss, which shrinks factors toward zero and reduces overfitting on users with few ratings.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "recommended = [4, 2, 9, 7]\nrelevant = {2, 7, 8}\nhits = sum(1 for i in recommended[:4] if i in relevant)\nprint(hits / 4, round(hits / len(relevant), 2))", "answer": "0.5 0.67", "explanation": "<p>Two hits (2 and 7). Precision@4 = 2/4 = 0.5; recall@4 = 2/3 ≈ 0.67.</p>"},
+  {"type": "single", "prompt": "Why must matrix factors start at small random values rather than zeros?", "options": ["Zeros use more memory", "With all-zero factors every gradient for p and q is zero, so they never move", "Random values make predictions exact", "NumPy cannot multiply zeros"], "answer": 1, "explanation": "<p>The gradient for p_u is err · q_i - reg · p_u. If q_i = 0 and p_u = 0 it is zero forever. Small random values break the symmetry.</p>"},
+  {"type": "single", "prompt": "Where should you choose the hybrid's blend weights?", "options": ["On the test split, to report the best number", "On a separate validation split carved from training data", "Weights cannot be tuned", "On the full data before splitting"], "answer": 1, "explanation": "<p>Tuning on the test split leaks test information into the model, so the reported score is optimistic. Use a validation split and touch test once.</p>"},
+  {"type": "single", "prompt": "<code>recommend()</code> gets a user id it has never seen. What does a good API do?", "options": ["Raise KeyError", "Return an empty list", "Fall back to a non-personalized ranking such as popularity", "Pick a random user's recommendations"], "answer": 2, "explanation": "<p>New users are normal, not exceptional. A popularity fallback gives them something reasonable until they have ratings.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

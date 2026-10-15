@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M55 · Machine Learning Foundations · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m55">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Module 55</p>
+    <h1>Machine Learning Foundations</h1>
+    <p class="lede">Machine learning is not magic: it is choosing a family of functions, measuring how wrong each one is
+      with a loss, and searching for the least wrong one with calculus and linear algebra. In this module you build
+      linear and logistic regression from scratch in NumPy, so that every library you use afterwards is a convenience,
+      not a mystery.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m48-numpy.html">M48</a>, <a href="m49-linear-algebra.html">M49</a>, <a href="m54-statistics.html">M54</a></span></div>
+    <ul class="objectives">
+      <li>Explain what machine learning is (and is not), and tell supervised, unsupervised, and reinforcement learning apart</li>
+      <li>Arrange data as a feature matrix of shape <code>(n_samples, n_features)</code> and a label vector, and split it into train, validation, and test sets without leakage</li>
+      <li>Define mean squared error and cross-entropy, and say which problems each one fits</li>
+      <li>Fit linear regression twice, with the normal equation and with gradient descent, and explain the gradient in plain words</li>
+      <li>Choose a learning rate, recognize divergence, and explain why feature scaling speeds up convergence</li>
+      <li>Diagnose underfitting and overfitting with the bias-variance trade-off, and control it with ridge and lasso regularization</li>
+      <li>Build logistic regression from scratch and evaluate classifiers with accuracy, precision, recall, F1, ROC-AUC, and a confusion matrix</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="what-is-ml">
+    <h2>What machine learning is (and is not)</h2>
+    <p>In ordinary programming you write the rules: "if the email contains 'WIN A PRIZE', mark it as spam". In
+      <strong>machine learning (ML)</strong> you supply <em>examples</em> (thousands of emails already marked spam or not)
+      and an algorithm finds the rules for you. More precisely, an ML algorithm picks a function <code>f</code> from a
+      family of candidate functions (the <strong>model</strong>) so that <code>f(input)</code> is close to the desired
+      output on the examples, and, crucially, on <em>new</em> examples it has never seen. That second part,
+      <strong>generalization</strong>, is the whole point. Memorizing the training emails is easy; correctly flagging
+      tomorrow's spam is the job.</p>
+    <p>Three ingredients appear in every ML method, from a straight line to a large language model:</p>
+    <ol>
+      <li>A <strong>model family</strong>: the shapes of function allowed. "All straight lines <code>y = w·x + b</code>"
+        is a family; each choice of the <strong>parameters</strong> <code>w</code> and <code>b</code> is one member.</li>
+      <li>A <strong>loss function</strong>: a number that says how wrong a particular member is on the data. Smaller is
+        better.</li>
+      <li>An <strong>optimizer</strong>: a procedure that searches the family for parameters with small loss, often
+        gradient descent.</li>
+    </ol>
+    <p>ML is <em>not</em> a replacement for thinking. It cannot learn a pattern that is not in the data, it inherits
+      every bias in how the data was collected, and it gives confident wrong answers outside the range of its examples.
+      If a simple rule works ("orders over $10,000 need manual review"), write the rule. Reach for ML when the rules are
+      too many, too fuzzy, or too fast-changing to write by hand: recognizing handwriting, ranking search results,
+      predicting demand.</p>
+
+    <div class="card-grid">
+      <div class="card"><h4>Supervised learning</h4><p>Every example comes with the right answer, the
+        <strong>label</strong>. Predict a number (<strong>regression</strong>: house price, delivery time) or a category
+        (<strong>classification</strong>: spam/not spam, digit 0–9). Most of this module.</p></div>
+      <div class="card"><h4>Unsupervised learning</h4><p>No labels. Find structure: groups of similar customers
+        (<strong>clustering</strong>), a smaller set of features that keeps most information (<strong>dimensionality
+        reduction</strong>), unusual records (<strong>anomaly detection</strong>). See <a href="m57-unsupervised-embeddings.html">M57</a>.</p></div>
+      <div class="card"><h4>Reinforcement learning</h4><p>An <strong>agent</strong> takes actions in an
+        <strong>environment</strong> and receives <strong>rewards</strong>, learning a policy that maximizes reward over
+        time: game playing, robot control. Powerful but data-hungry; out of scope for this course beyond this card.</p></div>
+    </div>
+    <aside class="callout think"><p>Classify each task before reading on: (a) predict tomorrow's temperature from today's
+      weather readings; (b) group news articles by topic with no topic labels; (c) decide whether a credit-card
+      transaction is fraud using past transactions marked fraud/not fraud; (d) teach a program to play chess by playing
+      itself. <em>Answers: (a) supervised regression, (b) unsupervised clustering, (c) supervised classification, (d)
+      reinforcement learning.</em></p></aside>
+    <aside class="callout note"><p>The browser cells on this page run real NumPy, scikit-learn, and matplotlib through
+      Pyodide. The <strong>first</strong> cell that imports them takes several seconds while the packages download;
+      later cells are fast. Locally, everything here runs with <code>pixi run python file.py</code> in a project where you
+      have run <code>pixi add numpy scikit-learn matplotlib</code>.</p></aside>
+    <p><strong>Remember:</strong> ML = model family + loss + optimizer, judged by performance on unseen data.</p>
+  </section>
+
+  <section class="lesson-section" id="features-labels">
+    <h2>Features, labels, and the feature matrix</h2>
+    <p>Each example (also called a <strong>sample</strong>, row, or observation) is described by a fixed list of numbers
+      called <strong>features</strong>. A house might have features <code>[area_m2, bedrooms, age_years]</code>. Stack
+      the feature lists of all <code>n</code> examples as rows and you get the <strong>feature matrix</strong>
+      <code>X</code> with shape <code>(n_samples, n_features)</code>. The answers form the <strong>label vector</strong>
+      (or <strong>target</strong>) <code>y</code> with shape <code>(n_samples,)</code>. Row <code>i</code> of
+      <code>X</code> goes with entry <code>i</code> of <code>y</code>.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 200" role="img" aria-label="A feature matrix X with rows as samples and columns as features, next to a label vector y">
+        <g font-size="12" fill="var(--fg)">
+          <text x="30" y="22" font-weight="600">X: shape (n_samples, n_features)</text>
+          <text x="380" y="22" font-weight="600">y: shape (n_samples,)</text>
+        </g>
+        <g stroke="var(--border-strong)" fill="none">
+          <rect x="30" y="35" width="300" height="140" rx="4"/>
+          <rect x="380" y="35" width="90" height="140" rx="4"/>
+          <line x1="30" y1="70" x2="330" y2="70"/><line x1="30" y1="105" x2="330" y2="105"/><line x1="30" y1="140" x2="330" y2="140"/>
+          <line x1="130" y1="35" x2="130" y2="175"/><line x1="230" y1="35" x2="230" y2="175"/>
+          <line x1="380" y1="70" x2="470" y2="70"/><line x1="380" y1="105" x2="470" y2="105"/><line x1="380" y1="140" x2="470" y2="140"/>
+        </g>
+        <rect x="31" y="71" width="298" height="33" fill="var(--viz-1)" opacity="0.18"/>
+        <rect x="381" y="71" width="88" height="33" fill="var(--viz-1)" opacity="0.18"/>
+        <rect x="131" y="36" width="98" height="138" fill="var(--viz-2)" opacity="0.14"/>
+        <g font-size="12" fill="var(--fg)" text-anchor="middle">
+          <text x="80" y="57">120</text><text x="180" y="57">3</text><text x="280" y="57">15</text><text x="425" y="57">410</text>
+          <text x="80" y="92">65</text><text x="180" y="92">1</text><text x="280" y="92">40</text><text x="425" y="92">180</text>
+          <text x="80" y="127">95</text><text x="180" y="127">2</text><text x="280" y="127">5</text><text x="425" y="127">350</text>
+          <text x="80" y="162">⋮</text><text x="180" y="162">⋮</text><text x="280" y="162">⋮</text><text x="425" y="162">⋮</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)">
+          <text x="80" y="192" text-anchor="middle">area_m2</text><text x="180" y="192" text-anchor="middle">bedrooms (a column = a feature)</text>
+          <text x="280" y="192" text-anchor="middle"></text><text x="425" y="192" text-anchor="middle">price (k$)</text>
+          <text x="336" y="92">← one sample</text>
+        </g>
+      </svg>
+      <figcaption>Rows are samples, columns are features. The highlighted row and its label form one training example.</figcaption>
+    </figure>
+    <p>Every scikit-learn estimator, and every from-scratch model in this module, expects exactly this layout. A single
+      feature still needs a 2-D <code>X</code>: shape <code>(n, 1)</code>, not <code>(n,)</code>. Text, images, and
+      categories must first be turned into numbers (<strong>feature engineering</strong>); M56 shows the standard tools.</p>
+    <div class="runnable" data-title="Meet a real dataset: iris">
+<textarea>
+from sklearn.datasets import load_iris
+import numpy as np
+
+iris = load_iris()
+X, y = iris.data, iris.target
+print("X shape:", X.shape, "  y shape:", y.shape)
+print("features:", iris.feature_names)
+print("classes:", iris.target_names.tolist())
+print("first 3 rows of X:\n", X[:3])
+print("first 3 labels:", y[:3])
+print("samples per class:", np.bincount(y))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the shapes" data-predict>
+<textarea>
+import numpy as np
+heights = np.array([1.62, 1.75, 1.80, 1.68])
+X = heights.reshape(-1, 1)
+X2 = np.column_stack([heights, heights ** 2])
+print(heights.shape, X.shape, X2.shape)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Shape bugs are the most common ML bug. <code>y</code> of shape <code>(n, 1)</code>
+      minus predictions of shape <code>(n,)</code> broadcasts to an <code>(n, n)</code> matrix, and your "error" silently
+      becomes nonsense. Print shapes often and keep <code>y</code> one-dimensional.</p></aside>
+    <p><strong>Remember:</strong> <code>X</code> is <code>(n_samples, n_features)</code>, <code>y</code> is
+      <code>(n_samples,)</code>, and row <code>i</code> of one matches entry <code>i</code> of the other.</p>
+  </section>
+
+  <section class="lesson-section" id="splits">
+    <h2>Train, validation, and test splits (and leakage)</h2>
+    <p>A model that scores perfectly on the data it learned from may have simply memorized it. To estimate how it will do
+      on <em>future</em> data we hold some data back and never let the model see it while learning. The standard
+      arrangement uses three parts:</p>
+    <ul>
+      <li><strong>Training set</strong> (often 60–80%): the model's parameters are fitted on it.</li>
+      <li><strong>Validation set</strong> (10–20%): used to make <em>choices</em>: which model, which polynomial degree,
+        which regularization strength (these choices are called <strong>hyperparameters</strong>, because they are set by
+        you rather than learned from the data).</li>
+      <li><strong>Test set</strong> (10–20%): used <em>once</em>, at the very end, to report an honest estimate. If you
+        look at the test score and then change the model, the test set has become a second validation set and its score
+        is no longer honest.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 90" role="img" aria-label="A bar split into 70 percent train, 15 percent validation, 15 percent test">
+        <rect x="10" y="20" width="350" height="34" fill="var(--viz-1)" opacity="0.8"/>
+        <rect x="360" y="20" width="75" height="34" fill="var(--viz-2)" opacity="0.8"/>
+        <rect x="435" y="20" width="75" height="34" fill="var(--viz-3)" opacity="0.8"/>
+        <g font-size="13" fill="var(--bg)" font-weight="600" text-anchor="middle">
+          <text x="185" y="42">train 70%: fit parameters</text><text x="397" y="42">val 15%</text><text x="472" y="42">test 15%</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="397" y="72">choose hyperparameters</text><text x="472" y="84">report once</text>
+        </g>
+      </svg>
+      <figcaption>Shuffle first, then cut. The test slice is a sealed envelope.</figcaption>
+    </figure>
+    <p><strong>Data leakage</strong> happens when information from the validation or test data sneaks into training. The
+      result is a model that looks great in the notebook and fails in production. Classic leaks:</p>
+    <ul>
+      <li>Computing a scaling mean/standard deviation (or filling missing values) on the <em>whole</em> dataset before
+        splitting. The training step has then "seen" test statistics. Fit preprocessing on train only, then apply it to the
+        others. M56's Pipelines automate this.</li>
+      <li>Random splits of <strong>time series</strong>: training on Wednesday to predict Tuesday. Split by time instead.</li>
+      <li>Duplicates or the same customer in both train and test. Split by group (customer id), not by row.</li>
+      <li>A feature that is a disguised label: "refund_issued" when predicting "complaint filed".</li>
+    </ul>
+    <div class="runnable" data-title="A shuffled split by hand">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(42)          # a seeded generator makes the split reproducible
+n = 20
+X = np.arange(n * 2).reshape(n, 2)
+y = np.arange(n)
+
+order = rng.permutation(n)               # shuffle the row indices, not the data
+n_test = int(0.2 * n)
+n_val = int(0.2 * n)
+test_idx = order[:n_test]
+val_idx = order[n_test:n_test + n_val]
+train_idx = order[n_test + n_val:]
+
+print("train", sorted(train_idx.tolist()))
+print("val  ", sorted(val_idx.tolist()))
+print("test ", sorted(test_idx.tolist()))
+print("overlap?", set(train_idx) & set(test_idx))
+
+# Leak-free scaling: statistics come from the training rows only
+mean, std = X[train_idx].mean(axis=0), X[train_idx].std(axis=0)
+X_test_scaled = (X[test_idx] - mean) / std
+print("scaled test rows:\n", X_test_scaled.round(2))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Professionals use <code>sklearn.model_selection.train_test_split(X, y, test_size=0.2,
+      random_state=0, stratify=y)</code>. <code>stratify=y</code> keeps class proportions equal in both parts, which
+      matters for imbalanced labels. For small datasets, cross-validation (M56) replaces a single validation split.</p></aside>
+    <p><strong>Remember:</strong> fit on train, choose on validation, report on test once. Anything computed from data
+      (means, vocabularies, imputation values) is part of fitting and must use train only.</p>
+  </section>
+
+  <section class="lesson-section" id="loss">
+    <h2>Loss functions: measuring wrongness</h2>
+    <p>A <strong>loss function</strong> turns predictions and true labels into one number. Training means "find
+      parameters that make this number small", so the loss you choose defines what "good" means.</p>
+    <h3>Mean squared error (regression)</h3>
+    <p>For true values <code>y<sub>i</sub></code> and predictions <code>ŷ<sub>i</sub></code> ("y-hat"), the
+      <strong>mean squared error</strong> is</p>
+    <p style="text-align:center"><code>MSE = (1/n) Σ (y<sub>i</sub> − ŷ<sub>i</sub>)²</code></p>
+    <p>Squaring makes every error positive and punishes big misses much more than small ones: an error of 4 costs 16, four
+      errors of 1 cost only 4. That is good when big misses are truly worse, and bad when the data has wild outliers (one
+      outlier can dominate the fit). Its square root, <strong>RMSE</strong>, is in the same units as <code>y</code>, so
+      it is easier to read ("off by about $23k").</p>
+    <h3>Cross-entropy (classification)</h3>
+    <p>A classifier usually outputs a <strong>probability</strong> <code>p</code> that the label is 1. For a true label
+      <code>y ∈ {0, 1}</code>, the <strong>binary cross-entropy</strong> (also called <strong>log loss</strong>) is</p>
+    <p style="text-align:center"><code>L = −[ y·log(p) + (1 − y)·log(1 − p) ]</code></p>
+    <p>Read it case by case. If <code>y = 1</code>, the loss is <code>−log(p)</code>: 0 when <code>p = 1</code>, about
+      0.69 when <code>p = 0.5</code>, and enormous as <code>p → 0</code>. A confident wrong answer is punished far
+      harder than a hesitant one. That is exactly the behavior we want from a probability, and it is why we do not use
+      MSE for classification.</p>
+    <div class="runnable" data-title="Plot both losses">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(9, 3.4))
+err = np.linspace(-3, 3, 200)
+a1.plot(err, err ** 2, label="squared error")
+a1.plot(err, np.abs(err), label="absolute error", linestyle="--")
+a1.set(title="Regression losses", xlabel="prediction − truth", ylabel="loss")
+a1.legend()
+
+p = np.linspace(0.001, 0.999, 300)
+a2.plot(p, -np.log(p), label="true label y = 1")
+a2.plot(p, -np.log(1 - p), label="true label y = 0")
+a2.set(title="Cross-entropy", xlabel="predicted probability p", ylabel="loss", ylim=(0, 5))
+a2.legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Which prediction costs more?" data-predict>
+<textarea>
+import numpy as np
+y = 1
+for p in (0.9, 0.5, 0.1):
+    print(p, round(float(-np.log(p)), 2))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> MSE for numbers, cross-entropy for probabilities. The loss encodes what you care about;
+      choosing it is a modeling decision.</p>
+  </section>
+
+  <section class="lesson-section" id="normal-equation">
+    <h2>Linear regression, part 1: the normal equation</h2>
+    <p><strong>Linear regression</strong> predicts a number as a weighted sum of the features plus a constant:</p>
+    <p style="text-align:center"><code>ŷ = w<sub>1</sub>x<sub>1</sub> + w<sub>2</sub>x<sub>2</sub> + … + w<sub>d</sub>x<sub>d</sub> + b</code></p>
+    <p>The <strong>weights</strong> <code>w</code> say how much each feature pushes the prediction up or down; the
+      <strong>bias</strong> (intercept) <code>b</code> is the prediction when every feature is 0. A neat trick folds
+      <code>b</code> into <code>w</code>: add a column of ones to <code>X</code>. Then for all samples at once,
+      <code>ŷ = X w</code> (a matrix-vector product from <a href="m49-linear-algebra.html">M49</a>).</p>
+    <p>Which <code>w</code> minimizes MSE? Calculus gives an exact answer. Setting the derivative of
+      <code>‖Xw − y‖²</code> to zero yields the <strong>normal equation</strong>:</p>
+    <p style="text-align:center"><code>(XᵀX) w = Xᵀy</code></p>
+    <p>Solve that linear system and you are done, no iteration needed. In NumPy, prefer
+      <code>np.linalg.lstsq(X, y)</code> (or <code>np.linalg.solve(X.T @ X, X.T @ y)</code>) over computing an explicit
+      inverse: it is faster and numerically safer.</p>
+    <div class="runnable" data-title="Fit a line exactly">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+x = rng.uniform(0, 10, size=50)
+y = 3.0 * x + 7.0 + rng.normal(0, 2.0, size=50)       # true w = 3, b = 7, plus noise
+
+X = np.column_stack([x, np.ones_like(x)])            # the ones column holds the bias
+w, *_ = np.linalg.lstsq(X, y, rcond=None)
+print("learned w, b:", w.round(3))
+print("same via normal equation:", np.linalg.solve(X.T @ X, X.T @ y).round(3))
+
+pred = X @ w
+print("train RMSE:", round(float(np.sqrt(np.mean((y - pred) ** 2))), 3))
+
+plt.scatter(x, y, s=14, label="data")
+grid = np.linspace(0, 10, 2)
+plt.plot(grid, w[0] * grid + w[1], color="C1", label=f"ŷ = {w[0]:.2f}x + {w[1]:.2f}")
+plt.legend(); plt.xlabel("x"); plt.ylabel("y"); plt.title("Least squares fit")
+</textarea>
+    </div>
+    <aside class="callout note"><p>Why not always use the normal equation? Solving <code>XᵀX</code> costs about
+      O(d³) in the number of features <code>d</code> and needs all data in memory. With a million features or a billion
+      rows, or with models that have no closed-form solution (logistic regression, neural networks), we need an iterative
+      method. That method is gradient descent.</p></aside>
+    <p><strong>Remember:</strong> linear regression is <code>ŷ = Xw</code>; least squares has an exact solution, the
+      normal equation, which <code>lstsq</code> computes stably.</p>
+  </section>
+
+  <section class="lesson-section" id="gradient-descent">
+    <h2>Linear regression, part 2: gradient descent</h2>
+    <p>Picture the loss as a landscape: each point on the ground is a choice of parameters, and the height is the loss.
+      You are standing somewhere on a foggy hillside and want to reach the valley floor. You cannot see far, but you can
+      feel which way the ground slopes under your feet. So you take a step downhill, feel again, and repeat. That is
+      <strong>gradient descent</strong>.</p>
+    <p>The <strong>gradient</strong> <code>∇L(w)</code> is the vector of partial derivatives: for each parameter, "if I
+      nudge this up a little, how fast does the loss go up?" It points uphill, so we step the opposite way:</p>
+    <p style="text-align:center"><code>w ← w − η · ∇L(w)</code></p>
+    <p>The step size <code>η</code> (eta) is the <strong>learning rate</strong>. Try it on the landscape below: drag the
+      learning-rate slider and watch small rates crawl, good rates glide in, and large ones overshoot and diverge.</p>
+    <div class="viz" data-viz="gradient-descent" data-config='{"fn": "quadratic", "lr": 0.1}'></div>
+    <h3>Deriving the MSE gradient intuitively</h3>
+    <p>For one sample, the error is <code>e = ŷ − y = w·x − y</code> and the loss is <code>e²</code>. By the chain rule,
+      the derivative of <code>e²</code> with respect to <code>w<sub>j</sub></code> is <code>2e · x<sub>j</sub></code>.
+      Read that as a sentence: <em>the blame assigned to weight j is the error times how much feature j was present</em>.
+      If the prediction was too high (<code>e &gt; 0</code>) and <code>x<sub>j</sub></code> was large, <code>w<sub>j</sub></code>
+      gets pushed down hard; if <code>x<sub>j</sub> = 0</code>, that weight was not involved and gets no blame. Averaging
+      over all samples and writing it with matrices gives</p>
+    <p style="text-align:center"><code>∇MSE(w) = (2/n) · Xᵀ (Xw − y)</code></p>
+    <p><code>Xw − y</code> is the vector of errors; multiplying by <code>Xᵀ</code> computes, for every feature at once,
+      "sum over samples of error × feature value". That one line is the engine of linear regression, and the same
+      pattern (error times input) reappears in logistic regression and in every layer of a neural network (M58).</p>
+    <div class="runnable" data-title="Gradient descent from scratch">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+x = rng.uniform(0, 10, size=50)
+y = 3.0 * x + 7.0 + rng.normal(0, 2.0, size=50)
+X = np.column_stack([x, np.ones_like(x)])
+n = len(y)
+
+def mse(w):
+    return float(np.mean((X @ w - y) ** 2))
+
+def grad(w):
+    return (2 / n) * X.T @ (X @ w - y)
+
+w = np.zeros(2)
+lr = 0.01
+history = []
+for step in range(2000):
+    w -= lr * grad(w)
+    history.append(mse(w))
+
+print("gradient descent:", w.round(3))
+print("exact (lstsq):   ", np.linalg.lstsq(X, y, rcond=None)[0].round(3))
+plt.plot(history)
+plt.yscale("log"); plt.xlabel("step"); plt.ylabel("training MSE"); plt.title("Loss goes down, then levels off")
+</textarea>
+    </div>
+    <h3>Learning rate and convergence</h3>
+    <p>The algorithm has <strong>converged</strong> when the loss stops changing meaningfully (or the gradient is nearly
+      zero). Too small a learning rate wastes thousands of steps; too large a rate makes each step overshoot the valley
+      so the loss grows, often to <code>inf</code> or <code>nan</code>. A useful habit: always plot the loss curve.
+      A smooth decreasing curve that flattens is healthy; a zig-zag means the rate is near the edge; a curve that rises
+      means divergence.</p>
+    <div class="runnable" data-title="Three learning rates">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+x = rng.uniform(0, 10, size=50)
+y = 3.0 * x + 7.0 + rng.normal(0, 2.0, size=50)
+X = np.column_stack([x, np.ones_like(x)])
+
+for lr in (0.001, 0.02, 0.031):
+    w = np.zeros(2)
+    losses = []
+    for _ in range(300):
+        w -= lr * (2 / len(y)) * X.T @ (X @ w - y)
+        losses.append(np.mean((X @ w - y) ** 2))
+    plt.plot(losses, label=f"lr={lr}  final={losses[-1]:.3g}")
+plt.yscale("log"); plt.legend(); plt.xlabel("step"); plt.ylabel("MSE")
+plt.title("Too small crawls, too large diverges")
+</textarea>
+    </div>
+    <h3>Feature scaling</h3>
+    <p>If one feature is measured in square metres (values near 100) and another in bedrooms (values near 2), the loss
+      landscape is a long, narrow valley: very steep along one weight, nearly flat along the other. One learning rate
+      cannot suit both directions, so descent zig-zags across the steep walls while crawling along the floor. Try the
+      elongated bowl below, then imagine it rounded.</p>
+    <div class="viz" data-viz="gradient-descent" data-config='{"fn": "bowl", "lr": 0.05}'></div>
+    <p><strong>Standardization</strong> fixes this: subtract each feature's (training) mean and divide by its (training)
+      standard deviation, so every feature has mean 0 and standard deviation 1. The valley becomes round and gradient
+      descent heads straight for the bottom. Scaling does not change what the best model <em>can</em> predict; it changes
+      how fast you find it. (Tree models in M56 do not care about scaling; distance-based models such as k-nearest
+      neighbors care a lot.)</p>
+    <div class="runnable" data-title="Scaling speeds up convergence">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(1)
+area = rng.uniform(40, 200, 200)
+rooms = rng.integers(1, 6, 200).astype(float)
+price = 2.0 * area + 15 * rooms + rng.normal(0, 10, 200)
+
+def steps_to_converge(X, y, lr, tol=1e-6, max_steps=200_000):
+    X = np.column_stack([X, np.ones(len(y))])
+    w = np.zeros(X.shape[1])
+    prev = np.inf
+    for step in range(max_steps):
+        w -= lr * (2 / len(y)) * X.T @ (X @ w - y)
+        loss = np.mean((X @ w - y) ** 2)
+        if abs(prev - loss) < tol * max(loss, 1):
+            return step, loss
+        prev = loss
+    return max_steps, loss
+
+raw = np.column_stack([area, rooms])
+scaled = (raw - raw.mean(axis=0)) / raw.std(axis=0)
+for name, X, lr in (("raw", raw, 2e-5), ("standardized", scaled, 0.1)):
+    steps, loss = steps_to_converge(X, price, lr)
+    print(f"{name:13s} features: {steps:6d} steps, final MSE {loss:.1f}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>w ← w − η∇L</code>; the MSE gradient is <code>(2/n)Xᵀ(Xw − y)</code>, "error
+      times input"; plot the loss curve; standardize features before gradient descent.</p>
+  </section>
+
+  <section class="lesson-section" id="bias-variance">
+    <h2>Underfitting, overfitting, and bias vs variance</h2>
+    <p>Give linear regression polynomial features <code>[x, x², …, x<sup>d</sup>]</code> and it can fit curves. The degree
+      <code>d</code> controls the model's <strong>capacity</strong> (how wiggly a function it can represent). Too little
+      capacity and the model <strong>underfits</strong>: it misses real structure and is wrong on train <em>and</em> test.
+      Too much and it <strong>overfits</strong>: it bends to chase the noise in the training points, so training error is
+      tiny while test error explodes.</p>
+    <div class="runnable" data-title="Degree 1 vs 4 vs 15">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(3)
+def truth(x):
+    return np.sin(2 * np.pi * x)
+x_train = np.sort(rng.uniform(0, 1, 20)); y_train = truth(x_train) + rng.normal(0, 0.25, 20)
+x_test = rng.uniform(0, 1, 200);          y_test = truth(x_test) + rng.normal(0, 0.25, 200)
+
+def design(x, d):
+    return np.vander(x, d + 1, increasing=True)        # columns 1, x, x^2, ..., x^d
+
+grid = np.linspace(0, 1, 300)
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.2), sharey=True)
+for ax, d in zip(axes, (1, 4, 15)):
+    w, *_ = np.linalg.lstsq(design(x_train, d), y_train, rcond=None)
+    tr = np.sqrt(np.mean((design(x_train, d) @ w - y_train) ** 2))
+    te = np.sqrt(np.mean((design(x_test, d) @ w - y_test) ** 2))
+    ax.scatter(x_train, y_train, s=14)
+    ax.plot(grid, truth(grid), color="gray", linestyle=":", label="truth")
+    ax.plot(grid, design(grid, d) @ w, color="C1", label="model")
+    ax.set(title=f"degree {d}: train {tr:.2f}, test {te:.2f}", ylim=(-2, 2))
+axes[0].legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <p>Sweep the degree and plot both errors and you get the most important picture in ML: training error falls
+      forever, validation error falls and then rises. The best model sits at the bottom of the validation curve.</p>
+    <div class="runnable" data-title="The U-shaped validation curve">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(3)
+truth = lambda x: np.sin(2 * np.pi * x)
+x_tr = rng.uniform(0, 1, 30); y_tr = truth(x_tr) + rng.normal(0, 0.25, 30)
+x_va = rng.uniform(0, 1, 200); y_va = truth(x_va) + rng.normal(0, 0.25, 200)
+rmse = lambda a, b: np.sqrt(np.mean((a - b) ** 2))
+
+degrees = range(0, 16)
+train_err, val_err = [], []
+for d in degrees:
+    w, *_ = np.linalg.lstsq(np.vander(x_tr, d + 1), y_tr, rcond=None)
+    train_err.append(rmse(np.vander(x_tr, d + 1) @ w, y_tr))
+    val_err.append(rmse(np.vander(x_va, d + 1) @ w, y_va))
+best = int(np.argmin(val_err))
+plt.plot(degrees, train_err, "o-", label="train")
+plt.plot(degrees, val_err, "o-", label="validation")
+plt.axvline(best, color="gray", linestyle=":")
+plt.yscale("log"); plt.xlabel("polynomial degree"); plt.ylabel("RMSE"); plt.legend()
+plt.title(f"Best degree on validation: {best}")
+</textarea>
+    </div>
+    <p>The <strong>bias-variance trade-off</strong> names the two failure modes. <strong>Bias</strong> is error from
+      wrong assumptions: a straight line can never fit a sine wave, no matter how much data you give it.
+      <strong>Variance</strong> is error from sensitivity to the particular training sample: refit a degree-15 polynomial
+      on a fresh sample of 20 points and you get a completely different wiggly curve. Simple models have high bias and low
+      variance; flexible models have low bias and high variance. More data reduces variance (it is harder to chase noise
+      in 10,000 points than in 20), which is why big flexible models need big datasets.</p>
+    <table>
+      <thead><tr><th>Symptom</th><th>Diagnosis</th><th>Try</th></tr></thead>
+      <tbody>
+        <tr><td>Train error high, validation about the same</td><td>Underfitting (high bias)</td><td>More features, a more flexible model, less regularization</td></tr>
+        <tr><td>Train error low, validation much higher</td><td>Overfitting (high variance)</td><td>More data, a simpler model, more regularization, early stopping</td></tr>
+        <tr><td>Both low and close</td><td>Good fit</td><td>Check the test set once, then ship</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Remember:</strong> judge models by validation error; the gap between train and validation error is your
+      overfitting meter.</p>
+  </section>
+
+  <section class="lesson-section" id="regularization">
+    <h2>Regularization: ridge and lasso</h2>
+    <p>Overfit polynomials have enormous, alternating weights (+3,000, −9,000, +12,000…) that cancel out on the training
+      points and swing wildly between them. <strong>Regularization</strong> adds a penalty on weight size to the loss, so
+      the optimizer must trade fit against simplicity:</p>
+    <ul>
+      <li><strong>Ridge</strong> (L2): <code>loss = MSE + α · Σ w<sub>j</sub>²</code>. Shrinks every weight smoothly
+        toward zero. Closed form: <code>w = (XᵀX + αI)⁻¹ Xᵀy</code>. Adding <code>αI</code> also makes the system
+        solvable when features are highly correlated.</li>
+      <li><strong>Lasso</strong> (L1): <code>loss = MSE + α · Σ |w<sub>j</sub>|</code>. Pushes many weights to
+        <em>exactly</em> zero, so it doubles as automatic feature selection. No closed form; solved iteratively.</li>
+    </ul>
+    <p>Geometrically, ridge's penalty is a circle and lasso's is a diamond. The optimum is where the loss contours first
+      touch the penalty shape, and a diamond is usually touched at a corner, where some coordinates are zero. The
+      strength <code>α</code> is a hyperparameter: choose it on validation data. Conventionally the bias term is not
+      penalized, and features are standardized first so one penalty is fair to all of them.</p>
+    <div class="runnable" data-title="Ridge tames a degree-12 polynomial">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(3)
+truth = lambda x: np.sin(2 * np.pi * x)
+x = np.sort(rng.uniform(0, 1, 20)); y = truth(x) + rng.normal(0, 0.25, 20)
+grid = np.linspace(0, 1, 300)
+
+def features(x, d=12):
+    return np.vander(x, d + 1, increasing=True)[:, 1:]   # x .. x^12 (no constant)
+
+F, G = features(x), features(grid)
+mu, sd = F.mean(axis=0), F.std(axis=0)
+Fs, Gs = (F - mu) / sd, (G - mu) / sd
+
+for alpha in (0.0, 1e-3, 1.0):
+    A = Fs.T @ Fs + alpha * np.eye(Fs.shape[1])
+    w = np.linalg.lstsq(A, Fs.T @ (y - y.mean()), rcond=None)[0]
+    plt.plot(grid, Gs @ w + y.mean(), label=f"alpha={alpha}: max|w|={np.abs(w).max():.0f}")
+plt.scatter(x, y, color="black", s=14, zorder=3)
+plt.ylim(-2, 2); plt.legend(); plt.title("Larger alpha, smaller weights, smoother curve")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>scikit-learn names: <code>Ridge(alpha=…)</code>, <code>Lasso(alpha=…)</code>, and
+      <code>ElasticNet</code> (a mix of both). For logistic regression the knob is <code>C</code>, the
+      <em>inverse</em> strength: smaller <code>C</code> means more regularization.</p></aside>
+    <p><strong>Remember:</strong> regularization = loss + penalty on weight size. Ridge shrinks, lasso shrinks and
+      zeroes. Tune <code>α</code> on validation data.</p>
+  </section>
+
+  <section class="lesson-section" id="logistic">
+    <h2>Logistic regression from scratch</h2>
+    <p>For classification we want a probability between 0 and 1, but <code>Xw</code> can be any real number. The
+      <strong>sigmoid</strong> (logistic) function squashes it:</p>
+    <p style="text-align:center"><code>σ(z) = 1 / (1 + e<sup>−z</sup>)</code></p>
+    <p><code>σ(0) = 0.5</code>, large positive <code>z</code> gives nearly 1, large negative gives nearly 0.
+      <strong>Logistic regression</strong> predicts <code>p = σ(Xw)</code> and is trained by minimizing cross-entropy.
+      Despite the name it is a classification method. The quantity <code>z = Xw</code> is called the
+      <strong>logit</strong> (log-odds): <code>z = log(p / (1 − p))</code>.</p>
+    <p>The gradient is delightfully familiar. Working through the chain rule, the sigmoid's derivative
+      <code>σ(z)(1 − σ(z))</code> cancels against the derivative of the log, leaving</p>
+    <p style="text-align:center"><code>∇CE(w) = (1/n) · Xᵀ (σ(Xw) − y)</code></p>
+    <p>Same shape as linear regression: error (predicted probability minus label) times input. To <em>classify</em>,
+      threshold the probability, usually at 0.5. The set of points where <code>p = 0.5</code>, that is where
+      <code>Xw = 0</code>, is the <strong>decision boundary</strong>; for logistic regression it is a straight line (a
+      plane in higher dimensions).</p>
+    <div class="runnable" data-title="Train logistic regression and draw the boundary">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_classification
+
+X, y = make_classification(n_samples=200, n_features=2, n_redundant=0, n_informative=2,
+                           n_clusters_per_class=1, class_sep=1.0, flip_y=0.05, random_state=4)
+Xb = np.column_stack([X, np.ones(len(y))])
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+w = np.zeros(3)
+for _ in range(2000):
+    p = sigmoid(Xb @ w)
+    w -= 0.5 * Xb.T @ (p - y) / len(y)
+
+p = sigmoid(Xb @ w)
+loss = -np.mean(y * np.log(p) + (1 - y) * np.log(1 - p))
+print("weights:", w.round(3), " cross-entropy:", round(float(loss), 4))
+print("accuracy:", np.mean((p >= 0.5) == y))
+
+xx, yy = np.meshgrid(np.linspace(X[:, 0].min() - 1, X[:, 0].max() + 1, 200),
+                     np.linspace(X[:, 1].min() - 1, X[:, 1].max() + 1, 200))
+grid = np.column_stack([xx.ravel(), yy.ravel(), np.ones(xx.size)])
+plt.contourf(xx, yy, sigmoid(grid @ w).reshape(xx.shape), levels=20, cmap="RdBu_r", alpha=0.5)
+plt.contour(xx, yy, sigmoid(grid @ w).reshape(xx.shape), levels=[0.5], colors="black")
+plt.scatter(X[:, 0], X[:, 1], c=y, cmap="RdBu_r", edgecolor="k", s=18)
+plt.title("Color = predicted probability; black line = decision boundary (p = 0.5)")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the sigmoid" data-predict>
+<textarea>
+import math
+for z in (-4, 0, 4):
+    print(z, round(1 / (1 + math.exp(-z)), 3))
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>np.log(0)</code> is <code>-inf</code>. When a probability rounds to exactly 0 or
+      1, cross-entropy becomes <code>nan</code>. Real implementations clip probabilities to
+      <code>[ε, 1 − ε]</code> (for example <code>ε = 1e-12</code>) or compute the loss from logits directly.</p></aside>
+    <p><strong>Remember:</strong> logistic regression = linear score → sigmoid → probability, trained with cross-entropy;
+      its gradient is again "error times input"; its decision boundary is linear.</p>
+  </section>
+
+  <section class="lesson-section" id="metrics">
+    <h2>Evaluation metrics</h2>
+    <p>Accuracy (fraction correct) is the obvious metric and often the wrong one. If 1% of transactions are fraud, a model
+      that always says "not fraud" is 99% accurate and completely useless. Better metrics start from the
+      <strong>confusion matrix</strong>, which counts the four outcomes of a binary prediction:</p>
+    <table>
+      <thead><tr><th></th><th>Predicted 0</th><th>Predicted 1</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Actual 0</strong></td><td>TN (true negative)</td><td>FP (false positive, "false alarm")</td></tr>
+        <tr><td><strong>Actual 1</strong></td><td>FN (false negative, "missed")</td><td>TP (true positive)</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>Precision</strong> = TP / (TP + FP): of everything we flagged, how much was really positive? High
+        precision means few false alarms.</li>
+      <li><strong>Recall</strong> (sensitivity) = TP / (TP + FN): of all real positives, how many did we catch? High
+        recall means few misses.</li>
+      <li><strong>F1</strong> = 2 · precision · recall / (precision + recall): their harmonic mean, high only when both
+        are high.</li>
+      <li><strong>ROC-AUC</strong>: lowering the threshold catches more positives (recall up) but raises false alarms. The
+        <strong>ROC curve</strong> plots true-positive rate against false-positive rate for every threshold; the
+        <strong>area under it</strong> (AUC) is the probability that a random positive gets a higher score than a random
+        negative. 0.5 is coin-flipping, 1.0 is perfect, and it does not depend on any single threshold.</li>
+    </ul>
+    <p>Which to optimize is a business decision. A cancer screen wants high recall (do not miss cases; a follow-up test
+      handles false alarms). A spam filter wants high precision (never bin a real email).</p>
+    <div class="runnable" data-title="Metrics by hand, checked against scikit-learn">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn import metrics
+
+X, y = load_breast_cancer(return_X_y=True)          # 1 = benign, 0 = malignant
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+scaler = StandardScaler().fit(X_tr)                 # fitted on train only
+model = LogisticRegression(max_iter=1000).fit(scaler.transform(X_tr), y_tr)
+scores = model.predict_proba(scaler.transform(X_te))[:, 1]
+pred = (scores >= 0.5).astype(int)
+
+tp = int(np.sum((pred == 1) & (y_te == 1))); fp = int(np.sum((pred == 1) & (y_te == 0)))
+fn = int(np.sum((pred == 0) & (y_te == 1))); tn = int(np.sum((pred == 0) & (y_te == 0)))
+precision, recall = tp / (tp + fp), tp / (tp + fn)
+print(f"TN={tn} FP={fp} FN={fn} TP={tp}")
+print(f"accuracy  {(tp + tn) / len(y_te):.3f}  sklearn {metrics.accuracy_score(y_te, pred):.3f}")
+print(f"precision {precision:.3f}  sklearn {metrics.precision_score(y_te, pred):.3f}")
+print(f"recall    {recall:.3f}  sklearn {metrics.recall_score(y_te, pred):.3f}")
+print(f"F1        {2 * precision * recall / (precision + recall):.3f}  sklearn {metrics.f1_score(y_te, pred):.3f}")
+print(f"ROC-AUC   {metrics.roc_auc_score(y_te, scores):.4f}")
+print(metrics.confusion_matrix(y_te, pred))
+
+fpr, tpr, _ = metrics.roc_curve(y_te, scores)
+plt.plot(fpr, tpr, label="logistic regression")
+plt.plot([0, 1], [0, 1], linestyle=":", color="gray", label="random guessing")
+plt.xlabel("false positive rate"); plt.ylabel("true positive rate (recall)"); plt.legend(); plt.title("ROC curve")
+</textarea>
+    </div>
+    <h3>Regression metrics</h3>
+    <ul>
+      <li><strong>MAE</strong> (mean absolute error) = mean of <code>|y − ŷ|</code>: average miss in the target's units;
+        robust to outliers.</li>
+      <li><strong>RMSE</strong> = √MSE: also in target units, but weights big misses more.</li>
+      <li><strong>R²</strong> (coefficient of determination) = 1 − SS<sub>res</sub>/SS<sub>tot</sub>: the fraction of the
+        target's variance explained. 1 is perfect; 0 means "no better than always predicting the mean"; negative means
+        worse than that.</li>
+    </ul>
+    <div class="runnable" data-title="Predict R² for the mean predictor" data-predict>
+<textarea>
+import numpy as np
+y = np.array([2.0, 4.0, 6.0, 8.0])
+pred = np.full_like(y, y.mean())
+r2 = 1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2)
+mae = np.mean(np.abs(y - pred))
+print(r2, mae)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> look at the confusion matrix first; choose precision vs recall by the cost of each
+      mistake; AUC compares rankings independent of threshold; report RMSE/MAE in target units and R² for "how much is
+      explained".</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise runs your code, then the tests. NumPy is available.</p>
+
+    <div class="exercise" data-id="m55-e1" data-title="A reproducible train/test split">
+      <div class="exercise-prompt">
+        <p>Write <code>split_indices(n, test_fraction, seed)</code> that returns <code>(train_idx, test_idx)</code> as
+          NumPy integer arrays. Shuffle <code>range(n)</code> with <code>np.random.default_rng(seed).permutation</code>,
+          put the first <code>int(n * test_fraction)</code> shuffled indices in test and the rest in train. The two must
+          not overlap and together must cover every index. The same seed must give the same split.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def split_indices(n, test_fraction, seed):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_sizes():
+    tr, te = split_indices(10, 0.3, seed=0)
+    assert len(te) == 3 and len(tr) == 7, f"expected 7 train / 3 test, got {len(tr)} / {len(te)}"
+
+def test_disjoint_and_complete():
+    tr, te = split_indices(25, 0.2, seed=1)
+    assert not set(tr.tolist()) & set(te.tolist()), "train and test must not overlap"
+    assert sorted(tr.tolist() + te.tolist()) == list(range(25)), "every index must appear exactly once"
+
+def test_reproducible():
+    a = split_indices(30, 0.25, seed=7)
+    b = split_indices(30, 0.25, seed=7)
+    assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]), "the same seed must give the same split"
+
+def test_shuffled():
+    tr, te = split_indices(100, 0.2, seed=3)
+    assert te.tolist() != list(range(20)), "the test indices should be shuffled, not the first 20"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>order = np.random.default_rng(seed).permutation(n)</code>, then
+        slice <code>order[:k]</code> and <code>order[k:]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def split_indices(n, test_fraction, seed):
+    order = np.random.default_rng(seed).permutation(n)
+    k = int(n * test_fraction)
+    return order[k:], order[:k]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m55-e2" data-title="MSE and its gradient">
+      <div class="exercise-prompt">
+        <p>Write <code>mse(X, y, w)</code> returning the mean squared error of predictions <code>X @ w</code> as a Python
+          float, and <code>mse_grad(X, y, w)</code> returning the gradient <code>(2/n) Xᵀ(Xw − y)</code> as an array of
+          the same shape as <code>w</code>. The tests compare your gradient with a numerical estimate.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def mse(X, y, w):
+    ...
+
+def mse_grad(X, y, w):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+X0 = np.array([[1.0, 2.0], [3.0, 1.0], [0.0, 1.0]])
+y0 = np.array([5.0, 4.0, 1.0])
+
+def test_mse_value():
+    assert abs(mse(X0, y0, np.array([1.0, 2.0])) - 2 / 3) < 1e-9, "predictions 5, 5, 2 vs 5, 4, 1: errors 0, 1, 1 -> MSE 2/3"
+
+def test_mse_returns_float():
+    assert isinstance(mse(X0, y0, np.zeros(2)), float), "return a Python float (use float(...))"
+    assert abs(mse(X0, y0, np.zeros(2)) - 14) < 1e-9, "with w = 0 the MSE is mean(25, 16, 1) = 14"
+
+def test_gradient_shape_and_value():
+    w = np.array([0.5, -1.0])
+    g = mse_grad(X0, y0, w)
+    assert np.shape(g) == (2,), f"gradient shape should be (2,), got {np.shape(g)}"
+    eps = 1e-6
+    numeric = np.array([(mse(X0, y0, w + eps * e) - mse(X0, y0, w - eps * e)) / (2 * eps) for e in np.eye(2)])
+    assert np.allclose(g, numeric, atol=1e-5), f"gradient {g} does not match numerical estimate {numeric}"
+
+def test_gradient_zero_at_least_squares():
+    w = np.linalg.lstsq(X0, y0, rcond=None)[0]
+    assert np.allclose(mse_grad(X0, y0, w), 0, atol=1e-9), "the gradient is zero at the least-squares solution"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The residual vector is <code>X @ w - y</code>. MSE is its squared
+        mean; the gradient is <code>2 * X.T @ residual / len(y)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def mse(X, y, w):
+    return float(np.mean((X @ w - y) ** 2))
+
+def mse_grad(X, y, w):
+    return 2 * X.T @ (X @ w - y) / len(y)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m55-e3" data-title="Linear regression by gradient descent">
+      <div class="exercise-prompt">
+        <p>Write <code>fit_gd(X, y, lr=0.1, n_iter=1000)</code>. It should add a column of ones to <code>X</code> (for
+          the bias), start from all-zero weights, run <code>n_iter</code> gradient-descent steps on MSE, and return
+          <code>(w, b, losses)</code>: the feature weights, the bias, and a list of the MSE after each step. The tests use
+          standardized data, so <code>lr=0.1</code> converges.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def fit_gd(X, y, lr=0.1, n_iter=1000):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+rng = np.random.default_rng(0)
+Xt = rng.normal(size=(100, 3))
+yt = Xt @ np.array([2.0, -1.0, 0.5]) + 4.0 + rng.normal(0, 0.1, 100)
+
+def test_matches_least_squares():
+    w, b, _ = fit_gd(Xt, yt)
+    exact = np.linalg.lstsq(np.column_stack([Xt, np.ones(100)]), yt, rcond=None)[0]
+    assert np.allclose(w, exact[:3], atol=1e-3), f"weights {w} should be close to {exact[:3]}"
+    assert abs(b - exact[3]) < 1e-3, f"bias {b} should be close to {exact[3]}"
+
+def test_losses_decrease():
+    _, _, losses = fit_gd(Xt, yt, n_iter=50)
+    assert len(losses) == 50, "one loss per step"
+    assert losses[-1] < losses[0], "the loss should go down"
+    assert all(a >= b - 1e-12 for a, b in zip(losses, losses[1:])), "with a good learning rate the loss never rises"
+
+def test_shapes():
+    w, b, _ = fit_gd(Xt, yt, n_iter=5)
+    assert np.shape(w) == (3,), "one weight per feature"
+    assert np.ndim(b) == 0, "the bias is a single number"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build <code>Xb = np.column_stack([X, np.ones(len(y))])</code>, loop
+        <code>theta -= lr * 2 * Xb.T @ (Xb @ theta - y) / len(y)</code>, and split <code>theta[:-1]</code>,
+        <code>theta[-1]</code> at the end.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def fit_gd(X, y, lr=0.1, n_iter=1000):
+    Xb = np.column_stack([X, np.ones(len(y))])
+    theta = np.zeros(Xb.shape[1])
+    losses = []
+    for _ in range(n_iter):
+        residual = Xb @ theta - y
+        theta = theta - lr * 2 * Xb.T @ residual / len(y)
+        losses.append(float(np.mean((Xb @ theta - y) ** 2)))
+    return theta[:-1], float(theta[-1]), losses</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m55-e4" data-title="Precision, recall, and F1 from scratch">
+      <div class="exercise-prompt">
+        <p>Write <code>classification_report(y_true, y_pred)</code> for binary labels (0/1, lists or arrays). Return a dict
+          with keys <code>"tp"</code>, <code>"fp"</code>, <code>"fn"</code>, <code>"tn"</code> (ints) and
+          <code>"precision"</code>, <code>"recall"</code>, <code>"f1"</code> (floats). When a denominator is zero, the
+          metric is <code>0.0</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def classification_report(y_true, y_pred):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_counts():
+    r = classification_report([1, 0, 1, 1, 0, 0], [1, 1, 0, 1, 0, 0])
+    assert (r["tp"], r["fp"], r["fn"], r["tn"]) == (2, 1, 1, 2), f"counts wrong: {r}"
+
+def test_metrics():
+    r = classification_report([1, 0, 1, 1, 0, 0], [1, 1, 0, 1, 0, 0])
+    assert abs(r["precision"] - 2 / 3) < 1e-9, "precision = TP / (TP + FP) = 2/3"
+    assert abs(r["recall"] - 2 / 3) < 1e-9, "recall = TP / (TP + FN) = 2/3"
+    assert abs(r["f1"] - 2 / 3) < 1e-9, "F1 of equal precision and recall equals them"
+
+def test_unequal():
+    r = classification_report([1, 1, 1, 1], [1, 0, 0, 0])
+    assert r["precision"] == 1.0 and r["recall"] == 0.25, "one flagged, it was right; caught 1 of 4"
+    assert abs(r["f1"] - 0.4) < 1e-9, "F1 = 2 * 1 * 0.25 / 1.25 = 0.4"
+
+def test_zero_division():
+    r = classification_report([0, 0, 0], [0, 0, 0])
+    assert r["precision"] == 0.0 and r["recall"] == 0.0 and r["f1"] == 0.0, "no positives anywhere -> 0.0, not an error"
+    assert r["tn"] == 3, "three true negatives"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Convert to arrays and count with boolean masks:
+        <code>tp = int(np.sum((t == 1) &amp; (p == 1)))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def classification_report(y_true, y_pred):
+    t, p = np.asarray(y_true), np.asarray(y_pred)
+    tp = int(np.sum((t == 1) &amp; (p == 1)))
+    fp = int(np.sum((t == 0) &amp; (p == 1)))
+    fn = int(np.sum((t == 1) &amp; (p == 0)))
+    tn = int(np.sum((t == 0) &amp; (p == 0)))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn, "precision": precision, "recall": recall, "f1": f1}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m55-e5" data-title="Logistic regression from scratch">
+      <div class="exercise-prompt">
+        <p>Write <code>sigmoid(z)</code>, <code>log_loss(y, p)</code> (mean binary cross-entropy, clipping
+          <code>p</code> to <code>[1e-12, 1 - 1e-12]</code>), and <code>fit_logistic(X, y, lr=0.5, n_iter=2000)</code>
+          returning a weight vector whose <strong>last entry is the bias</strong> (append a ones column). Use the gradient
+          <code>Xᵀ(σ(Xw) − y) / n</code>. The tests check the loss, the gradient's effect, and accuracy on a
+          separable dataset.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def sigmoid(z):
+    ...
+
+def log_loss(y, p):
+    ...
+
+def fit_logistic(X, y, lr=0.5, n_iter=2000):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_sigmoid():
+    assert abs(sigmoid(0) - 0.5) < 1e-12, "sigmoid(0) = 0.5"
+    assert np.allclose(sigmoid(np.array([-100.0, 100.0])), [0.0, 1.0], atol=1e-6), "saturates at 0 and 1"
+
+def test_log_loss():
+    assert abs(log_loss(np.array([1, 0]), np.array([0.5, 0.5])) - np.log(2)) < 1e-9, "p = 0.5 costs log 2"
+    assert np.isfinite(log_loss(np.array([1]), np.array([0.0]))), "clip p so a confident miss is finite, not inf"
+
+def test_fit_separates():
+    rng = np.random.default_rng(1)
+    X = np.vstack([rng.normal(-2, 1, (50, 2)), rng.normal(2, 1, (50, 2))])
+    y = np.array([0] * 50 + [1] * 50)
+    w = fit_logistic(X, y)
+    assert np.shape(w) == (3,), "two feature weights plus a bias"
+    p = sigmoid(np.column_stack([X, np.ones(100)]) @ w)
+    assert np.mean((p >= 0.5) == y) >= 0.95, "should classify at least 95% of these well-separated points"
+    assert log_loss(y, p) < 0.2, "the training loss should be small"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Clip with <code>np.clip(p, 1e-12, 1 - 1e-12)</code>. The training loop
+        is the same as linear regression's, with <code>sigmoid(Xb @ w)</code> as the prediction and no factor 2.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-np.asarray(z, dtype=float)))
+
+def log_loss(y, p):
+    p = np.clip(np.asarray(p, dtype=float), 1e-12, 1 - 1e-12)
+    y = np.asarray(y, dtype=float)
+    return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+
+def fit_logistic(X, y, lr=0.5, n_iter=2000):
+    Xb = np.column_stack([X, np.ones(len(y))])
+    w = np.zeros(Xb.shape[1])
+    for _ in range(n_iter):
+        w = w - lr * Xb.T @ (sigmoid(Xb @ w) - y) / len(y)
+    return w</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Regression from scratch, evaluated honestly</span></div>
+      <div class="widget-body">
+        <p>Build a tiny NumPy-only ML library, then evaluate it against scikit-learn on two built-in datasets. Create a
+          project with <code>pixi init ml-scratch</code>, <code>cd ml-scratch</code>, and
+          <code>pixi add numpy scikit-learn matplotlib pytest</code> (scikit-learn is used only for datasets and as a
+          reference to compare against).</p>
+        <ol>
+          <li><code>scratch.py</code>: a <code>LinearRegressionGD</code> class with <code>fit(X, y)</code>,
+            <code>predict(X)</code>, attributes <code>coef_</code>, <code>intercept_</code>, <code>loss_history_</code>, and
+            hyperparameters <code>lr</code>, <code>n_iter</code>, <code>alpha</code> (ridge strength). A matching
+            <code>LogisticRegressionGD</code> with <code>predict_proba</code> and <code>predict</code>.</li>
+          <li>A <code>StandardScaler</code>-like helper that is fitted on train only.</li>
+          <li><code>evaluate.py</code>: regression on <code>sklearn.datasets.load_diabetes</code> (report MAE, RMSE, R²);
+            classification on <code>load_breast_cancer</code> (report the confusion matrix, precision, recall, F1, and
+            ROC-AUC computed by your own function). Print your numbers next to scikit-learn's
+            <code>LinearRegression</code>/<code>LogisticRegression</code>.</li>
+          <li>Save two plots: the loss curve for three learning rates, and validation error vs ridge <code>alpha</code>.</li>
+          <li><code>test_scratch.py</code>: tests that your gradient matches a numerical gradient, that predictions have the
+            right shape, and that fitting is reproducible. Run with <code>pixi run pytest</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m55-mini">
+          <li>Both classes follow the <code>fit</code>/<code>predict</code> convention with trailing-underscore learned attributes</li>
+          <li>Train/validation/test split with a fixed seed; scaling statistics come from train only</li>
+          <li>Your R² on diabetes is within 0.02 of scikit-learn's <code>LinearRegression</code></li>
+          <li>Your ROC-AUC on breast cancer is within 0.01 of scikit-learn's</li>
+          <li>Loss-curve and alpha plots saved as PNG files</li>
+          <li><code>pixi run pytest</code> passes, including a numerical gradient check</li>
+        </ul>
+        <p><strong>Stretch:</strong> add mini-batch gradient descent with a <code>batch_size</code> parameter and compare
+          wall-clock time; implement lasso with coordinate descent and show which diabetes features it zeroes out.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m55-quiz">
+<script type="application/json">
+{"title": "ML foundations quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Predicting a house's sale price from its features is…", "options": ["unsupervised clustering", "supervised regression", "supervised classification", "reinforcement learning"], "answer": 1, "explanation": "<p>There is a known numeric answer (the price) for each training example, so it is supervised, and the target is a number, so it is regression.</p>"},
+  {"type": "single", "prompt": "You have 500 samples with 12 features each. What is the shape of <code>X</code>?", "options": ["(12, 500)", "(500,)", "(500, 12)", "(6000,)"], "answer": 2, "explanation": "<p>Rows are samples and columns are features: <code>(n_samples, n_features) = (500, 12)</code>.</p>"},
+  {"type": "multi", "prompt": "Which of these are data leakage?", "options": ["Standardizing with the mean of the full dataset before splitting", "Fitting the scaler on the training set and applying it to test", "Randomly splitting daily sales so that training includes days after the test days", "Using a feature that is recorded only after the outcome happens"], "answer": [0, 2, 3], "explanation": "<p>Leakage is any path for test or future information into training. Fitting preprocessing on train only (option 2) is the correct practice.</p>"},
+  {"type": "single", "prompt": "Why is the test set used only once, at the end?", "options": ["It is too small to use twice", "If you tune on it, its score stops being an unbiased estimate of performance on new data", "scikit-learn deletes it after one use", "It makes training faster"], "answer": 1, "explanation": "<p>Every decision made by looking at the test score fits the model a little to the test set. Use validation data (or cross-validation) for decisions.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\ny = np.array([1.0, 2.0, 3.0])\npred = np.array([1.0, 2.0, 5.0])\nprint(np.mean((y - pred) ** 2))", "answer": "1.3333333333333333", "explanation": "<p>The squared errors are 0, 0, 4; their mean is 4/3.</p>"},
+  {"type": "single", "prompt": "Gradient descent's loss grows from step to step and becomes <code>nan</code>. The most likely fix is…", "options": ["Increase the learning rate", "Decrease the learning rate (and check feature scaling)", "Add more features", "Remove the bias term"], "answer": 1, "explanation": "<p>Growing loss means each step overshoots the minimum. A smaller learning rate, and standardized features so one rate suits every direction, fix it.</p>"},
+  {"type": "single", "prompt": "In the MSE gradient <code>(2/n) Xᵀ(Xw − y)</code>, what does <code>Xw − y</code> represent?", "options": ["The weights", "The vector of prediction errors (residuals)", "The learning rate", "The feature means"], "answer": 1, "explanation": "<p>It is prediction minus truth for every sample. Multiplying by <code>Xᵀ</code> credits each weight with error × feature value.</p>"},
+  {"type": "single", "prompt": "Training error is 0.02 and validation error is 0.85. The model is…", "options": ["underfitting (high bias)", "overfitting (high variance)", "well fitted", "leaking data"], "answer": 1, "explanation": "<p>A large gap between low training error and high validation error is the signature of overfitting. Try more data, a simpler model, or more regularization.</p>"},
+  {"type": "multi", "prompt": "Which statements about regularization are true?", "options": ["Ridge (L2) shrinks weights toward zero smoothly", "Lasso (L1) can set some weights exactly to zero", "Larger alpha means a more flexible model", "The strength should be chosen on validation data"], "answer": [0, 1, 3], "explanation": "<p>Larger alpha means a stronger penalty and therefore a <em>simpler</em> model, not a more flexible one.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import math\nprint(round(1 / (1 + math.exp(0)), 2))", "answer": "0.5", "explanation": "<p><code>exp(0) = 1</code>, so the sigmoid is 1 / 2. A logit of 0 means even odds.</p>"},
+  {"type": "single", "prompt": "Only 1% of patients have a disease. A model predicts 'healthy' for everyone. Which metric exposes how useless it is?", "options": ["Accuracy", "Recall for the disease class", "Training loss", "The number of features"], "answer": 1, "explanation": "<p>Accuracy is 99%, but recall is 0: it catches none of the sick patients.</p>"},
+  {"type": "text", "prompt": "What is the name of the curve that plots true-positive rate against false-positive rate over all thresholds? (three letters)", "answer": ["ROC", "roc"], "explanation": "<p>The ROC (receiver operating characteristic) curve. Its area, ROC-AUC, is the probability that a random positive is scored above a random negative.</p>"},
+  {"type": "single", "prompt": "A regression model has R² = −0.3 on test data. This means…", "options": ["It explains 30% of the variance", "It is worse than always predicting the mean", "It is perfect", "R² cannot be negative, so there is a bug"], "answer": 1, "explanation": "<p>R² = 1 − SS_res/SS_tot. If the model's squared error exceeds that of the constant mean predictor, R² is negative. It is a real (and alarming) result, not a bug.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>ML picks a function from a model family by minimizing a loss with an optimizer; success means generalizing to new data.</li>
+      <li>Supervised learning has labels (regression or classification); unsupervised finds structure; reinforcement learns from rewards.</li>
+      <li><code>X</code> is <code>(n_samples, n_features)</code>; <code>y</code> is <code>(n_samples,)</code>.</li>
+      <li>Fit on train, tune on validation, report on test once; fit every preprocessing statistic on train only.</li>
+      <li>MSE for regression, cross-entropy for probabilities.</li>
+      <li>Linear regression: exact via the normal equation (<code>lstsq</code>), or iterative via gradient descent with gradient <code>(2/n)Xᵀ(Xw − y)</code>.</li>
+      <li>The learning rate trades speed against stability; standardized features make descent much faster.</li>
+      <li>Underfitting = high bias, overfitting = high variance; regularization (ridge, lasso) controls capacity.</li>
+      <li>Logistic regression = sigmoid of a linear score, trained with cross-entropy; its boundary is linear.</li>
+      <li>Evaluate classifiers with the confusion matrix, precision, recall, F1, and ROC-AUC; regressors with MAE, RMSE, and R².</li>
+    </ul>
+    <div class="flashcards" data-title="ML foundations">
+<script type="application/json">
+[
+  {"front": "The three ingredients of an ML method", "back": "A model family, a loss function, and an optimizer."},
+  {"front": "Shape of the feature matrix X", "back": "(n_samples, n_features): one row per example, one column per feature."},
+  {"front": "Data leakage", "back": "Information from validation/test (or the future) influencing training, making scores look better than reality."},
+  {"front": "Normal equation", "back": "(XᵀX) w = Xᵀy: the exact least-squares solution. Compute it with np.linalg.lstsq."},
+  {"front": "Gradient descent update", "back": "w ← w − η ∇L(w), where η is the learning rate."},
+  {"front": "MSE gradient", "back": "(2/n) Xᵀ(Xw − y): error times input, averaged."},
+  {"front": "Why standardize features?", "back": "It makes the loss surface round so one learning rate suits every direction; descent converges much faster."},
+  {"front": "Bias vs variance", "back": "Bias: error from too-simple assumptions (underfit). Variance: error from sensitivity to the training sample (overfit)."},
+  {"front": "Ridge vs lasso", "back": "Ridge adds α·Σw² and shrinks; lasso adds α·Σ|w| and can zero weights out."},
+  {"front": "Sigmoid", "back": "σ(z) = 1 / (1 + e^−z); maps any real number to (0, 1); σ(0) = 0.5."},
+  {"front": "Precision vs recall", "back": "Precision = TP/(TP+FP): how many flags were right. Recall = TP/(TP+FN): how many positives were caught."},
+  {"front": "ROC-AUC", "back": "Probability a random positive scores above a random negative; 0.5 random, 1.0 perfect; threshold-independent."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://scikit-learn.org/stable/modules/linear_model.html">scikit-learn user guide: linear models</a></li>
+      <li><a href="https://scikit-learn.org/stable/modules/model_evaluation.html">scikit-learn: metrics and scoring</a></li>
+      <li><a href="https://scikit-learn.org/stable/common_pitfalls.html">scikit-learn: common pitfalls and recommended practices</a> (leakage)</li>
+      <li><a href="https://numpy.org/doc/stable/reference/generated/numpy.linalg.lstsq.html">numpy.linalg.lstsq</a></li>
+      <li>Next: <a href="m56-scikit-learn.html">M56 · scikit-learn in Practice</a> turns everything here into reusable, leak-proof pipelines.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

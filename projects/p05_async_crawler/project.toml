@@ -1,0 +1,4 @@
+id = "p05"
+title = "Project 5: Async Web Crawler"
+part = 5
+package = "crawler"

@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M34 · Strings, Bits &amp; Number Theory · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m34">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 34</p>
+    <h1>Strings, Bits &amp; Number Theory</h1>
+    <p class="lede">Three toolkits that show up everywhere from search engines to cryptography: linear-time string
+      matching, bit manipulation that packs whole sets into one integer, and the number theory behind hashing and
+      public-key encryption. Python's arbitrary-precision integers make all three unusually pleasant.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites:
+      <a href="m33-greedy-backtracking.html">M33 Greedy &amp; Backtracking</a>, <a href="m23-hash-tables.html">M23 Hash Tables</a></span></div>
+    <ul class="objectives">
+      <li>Match patterns naively, with KMP's failure table, and with Rabin-Karp rolling hashes, and compare their costs</li>
+      <li>Find palindromes with expand-around-center</li>
+      <li>Read and write bits: masks, set/clear/toggle, <code>x &amp; (x - 1)</code>, <code>int.bit_count()</code>, XOR tricks</li>
+      <li>Enumerate subsets as bitmasks</li>
+      <li>Use Euclid's algorithm, the sieve of Eratosthenes, and modular arithmetic including
+        <code>pow(a, b, m)</code> and <code>pow(a, -1, m)</code></li>
+      <li>Explain how these ideas power hashing and RSA, and preview <code>math.integer</code> in Python 3.15</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="naive-matching">
+    <h2>String matching: the naive algorithm</h2>
+    <p>The <strong>string matching</strong> problem: find every position where a pattern <code>p</code> (length m)
+      occurs in a text <code>t</code> (length n). The naive algorithm tries every alignment and compares character by
+      character.</p>
+    <div class="runnable" data-title="Naive matching with a comparison counter">
+<textarea>
+def naive_find(text: str, pattern: str) -> tuple[list[int], int]:
+    hits, comparisons = [], 0
+    n, m = len(text), len(pattern)
+    for i in range(n - m + 1):
+        j = 0
+        while j < m:
+            comparisons += 1
+            if text[i + j] != pattern[j]:
+                break
+            j += 1
+        if j == m:
+            hits.append(i)
+    return hits, comparisons
+
+print(naive_find("abracadabra", "abra"))
+print(naive_find("a" * 30 + "b", "a" * 10 + "b"))   # the bad case
+</textarea>
+    </div>
+    <p>Worst case O(n·m): on <code>aaaa…ab</code> each alignment matches m − 1 characters before failing, and all that
+      knowledge is thrown away when the window slides by one. In practice, <code>str.find</code>, <code>in</code>, and
+      <code>str.count</code> use a highly tuned C implementation (a two-way / Boyer-Moore-Horspool hybrid), so always
+      reach for them first. Learn the algorithms below for when you need what the built-ins do not offer: matching on
+      lists or token streams, many patterns at once, or fingerprints for similarity search.</p>
+    <aside class="callout pro"><p>For overlapping matches with the built-ins, loop with
+      <code>text.find(pattern, start + 1)</code>; <code>str.count</code> and <code>re.finditer</code> report only
+      non-overlapping occurrences (unless you use a lookahead such as <code>(?=abra)</code>).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="kmp">
+    <h2>Knuth-Morris-Pratt: never re-read the text</h2>
+    <p>KMP's insight: when a mismatch happens after matching <code>p[:j]</code>, we already know the last j text
+      characters. The longest proper prefix of <code>p[:j]</code> that is also a suffix of it tells us how much of the
+      pattern is still matched after shifting. Precompute that for every j in the <strong>failure table</strong>
+      (also called the prefix function), <code>fail[j]</code> = length of the longest proper prefix of
+      <code>p[:j+1]</code> that is also its suffix.</p>
+    <div class="viz" data-viz="kmp" data-config='{"text": "ababcabcabababd", "pattern": "ababd"}'></div>
+    <div class="runnable" data-title="KMP: failure table and search">
+<textarea>
+def failure_table(p: str) -> list[int]:
+    fail = [0] * len(p)
+    k = 0                                   # length of the current matched prefix
+    for i in range(1, len(p)):
+        while k and p[i] != p[k]:
+            k = fail[k - 1]                 # fall back to a shorter border
+        if p[i] == p[k]:
+            k += 1
+        fail[i] = k
+    return fail
+
+def kmp_find(text: str, p: str) -> list[int]:
+    fail, hits, k = failure_table(p), [], 0
+    for i, ch in enumerate(text):
+        while k and ch != p[k]:
+            k = fail[k - 1]
+        if ch == p[k]:
+            k += 1
+        if k == len(p):
+            hits.append(i - k + 1)
+            k = fail[k - 1]                 # keep going: allows overlapping matches
+    return hits
+
+print(failure_table("ababd"), failure_table("aabaaab"))
+print(kmp_find("ababcabcabababd", "ababd"), kmp_find("aaaa", "aa"))
+</textarea>
+    </div>
+    <p><strong>Why it is linear.</strong> The text index <code>i</code> only moves forward. Each successful comparison
+      increases k by one, and each fallback decreases it by at least one, so the total number of fallbacks is at most
+      the total number of increases, which is at most n. Searching is O(n), building the table is O(m) by the same
+      argument: O(n + m) total, O(m) extra space.</p>
+    <div class="runnable" data-title="Predict the failure table" data-predict>
+<textarea>
+def failure_table(p):
+    fail, k = [0] * len(p), 0
+    for i in range(1, len(p)):
+        while k and p[i] != p[k]:
+            k = fail[k - 1]
+        if p[i] == p[k]:
+            k += 1
+        fail[i] = k
+    return fail
+
+print(failure_table("abcabcab"))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="rabin-karp">
+    <h2>Rabin-Karp: matching by rolling hash</h2>
+    <p>Rabin-Karp compares <em>hashes</em> of windows instead of characters. Treat a window as a number in base
+      B modulo a large prime M: <code>h = (c₀·B^(m-1) + c₁·B^(m-2) + … + c_(m-1)) mod M</code>. Sliding the window one
+      step is O(1): remove the leading character's contribution, multiply by B, add the new one.</p>
+    <pre><code class="language-python">h = ((h - ord(out_char) * B**(m-1)) * B + ord(in_char)) % M</code></pre>
+    <p>Equal hashes might be a <em>collision</em>, so confirm with a direct comparison. With a random-ish large prime,
+      collisions are rare and the expected time is O(n + m); the worst case (every window collides) is O(n·m). Its real
+      strength is matching <em>many</em> patterns of the same length at once: put their hashes in a set.</p>
+    <div class="runnable" data-title="Rabin-Karp">
+<textarea>
+B, M = 256, 1_000_000_007
+
+def rabin_karp(text: str, p: str) -> list[int]:
+    n, m = len(text), len(p)
+    if m > n:
+        return []
+    high = pow(B, m - 1, M)                 # weight of the leading character
+    hp = ht = 0
+    for i in range(m):
+        hp = (hp * B + ord(p[i])) % M
+        ht = (ht * B + ord(text[i])) % M
+    hits = []
+    for i in range(n - m + 1):
+        if ht == hp and text[i:i + m] == p:  # verify to rule out collisions
+            hits.append(i)
+        if i + m < n:
+            ht = ((ht - ord(text[i]) * high) * B + ord(text[i + m])) % M
+    return hits
+
+print(rabin_karp("abracadabra", "abra"), rabin_karp("aaaa", "aa"))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Python's <code>%</code> always returns a non-negative result for a positive modulus,
+      so <code>(ht - ...) % M</code> is safe. In C or Java you must add M before taking the remainder. Also, do not use
+      the built-in <code>hash()</code> for rolling hashes: it is not rolling, and string hashes are randomized per
+      process (<code>PYTHONHASHSEED</code>) to defeat collision attacks.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="palindromes">
+    <h2>Palindromes: expand around the center</h2>
+    <p>A palindrome reads the same backwards. Checking one string is <code>s == s[::-1]</code>. Finding the longest
+      palindromic <em>substring</em> naively checks O(n²) substrings at O(n) each. Better: every palindrome has a
+      center, either a character (odd length) or a gap between two characters (even length). There are 2n − 1 centers;
+      expand outwards from each while the ends match. O(n²) time, O(1) space, and very fast in practice.</p>
+    <div class="runnable" data-title="Longest palindromic substring">
+<textarea>
+def longest_palindrome(s: str) -> str:
+    best = s[:1]
+    for center in range(2 * len(s) - 1):
+        lo = center // 2
+        hi = lo + center % 2                 # odd centers: lo == hi; even: hi = lo + 1
+        while lo >= 0 and hi < len(s) and s[lo] == s[hi]:
+            lo -= 1
+            hi += 1
+        if hi - lo - 1 > len(best):
+            best = s[lo + 1:hi]
+    return best
+
+for word in ["babad", "cbbd", "forgeeksskeegfor", "a", ""]:
+    print(repr(word), "->", repr(longest_palindrome(word)))
+</textarea>
+    </div>
+    <aside class="callout note"><p>Manacher's algorithm finds the longest palindromic substring in O(n) by reusing
+      mirror information, the same "do not throw away what you learned" idea as KMP. Expand-around-center is what most
+      engineers write, because it is short and correct.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="bits">
+    <h2>Bit manipulation</h2>
+    <p>An <code>int</code> is a sequence of bits. Python integers have unlimited width; negative numbers behave as if
+      they had infinitely many leading 1s (two's complement). The operators: <code>&amp;</code> (and),
+      <code>|</code> (or), <code>^</code> (xor), <code>~</code> (not, <code>~x == -x - 1</code>), <code>&lt;&lt;</code>
+      and <code>&gt;&gt;</code> (shifts). Explore them, and the IEEE-754 float layout, in the visualizer.</p>
+    <div class="viz" data-viz="bits" data-config='{"value": 44, "width": 8, "mode": "int"}'></div>
+    <table>
+      <thead><tr><th>Goal</th><th>Expression</th><th>Example with x = 0b101100 (44)</th></tr></thead>
+      <tbody>
+        <tr><td>Test bit i</td><td><code>(x &gt;&gt; i) &amp; 1</code></td><td>bit 2 → 1</td></tr>
+        <tr><td>Set bit i</td><td><code>x | (1 &lt;&lt; i)</code></td><td>set bit 0 → 45</td></tr>
+        <tr><td>Clear bit i</td><td><code>x &amp; ~(1 &lt;&lt; i)</code></td><td>clear bit 2 → 40</td></tr>
+        <tr><td>Toggle bit i</td><td><code>x ^ (1 &lt;&lt; i)</code></td><td>toggle bit 5 → 12</td></tr>
+        <tr><td>Drop lowest set bit</td><td><code>x &amp; (x - 1)</code></td><td>44 → 40</td></tr>
+        <tr><td>Isolate lowest set bit</td><td><code>x &amp; -x</code></td><td>→ 4</td></tr>
+        <tr><td>Power of two?</td><td><code>x &gt; 0 and x &amp; (x - 1) == 0</code></td><td>False</td></tr>
+        <tr><td>Count set bits</td><td><code>x.bit_count()</code></td><td>3</td></tr>
+        <tr><td>Number of bits</td><td><code>x.bit_length()</code></td><td>6</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Masks in action">
+<textarea>
+x = 0b101100
+print(f"{x:08b}  x")
+print(f"{x | 1 << 0:08b}  set bit 0")
+print(f"{x & ~(1 << 2):08b}  clear bit 2")
+print(f"{x ^ 1 << 5:08b}  toggle bit 5")
+print(f"{x & (x - 1):08b}  drop lowest set bit")
+print(f"{x & -x:08b}  lowest set bit alone")
+print(x.bit_count(), x.bit_length(), bin(x), int("101100", 2))
+
+# Kernighan's bit count: each iteration removes one set bit
+def popcount(n: int) -> int:
+    count = 0
+    while n:
+        n &= n - 1
+        count += 1
+    return count
+print(popcount(x), all(popcount(n) == n.bit_count() for n in range(1000)))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: precedence trap" data-predict>
+<textarea>
+x = 6
+print(x & 1 == 0)      # comparison binds tighter than &
+print((x & 1) == 0)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>In Python, comparisons bind tighter than <code>&amp;</code>, <code>|</code>, and
+      <code>^</code>, so <code>x &amp; 1 == 0</code> means <code>x &amp; (1 == 0)</code>, which is <code>x &amp; False</code>,
+      which is always 0. Parenthesize every bitwise expression inside a comparison.</p></aside>
+    <h3>XOR tricks</h3>
+    <p>XOR is its own inverse: <code>a ^ a == 0</code> and <code>a ^ 0 == a</code>, and it is commutative and
+      associative. So XOR-ing a list where every value appears twice except one leaves exactly the odd one out, in O(n)
+      time and O(1) space. The same property powers RAID parity, simple checksums, and the one-time pad.</p>
+    <div class="runnable" data-title="XOR finds the unpaired value">
+<textarea>
+from functools import reduce
+from operator import xor
+
+nums = [4, 1, 2, 1, 2, 9, 4]
+print(reduce(xor, nums))              # 9
+
+a, b = 12, 30
+a ^= b; b ^= a; a ^= b                # swap without a temporary (a party trick; use a, b = b, a)
+print(a, b)
+
+missing = [0, 1, 3, 4, 5]             # one number from 0..5 is missing
+print(reduce(xor, range(6)) ^ reduce(xor, missing))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="bitmask-subsets">
+    <h2>Subsets as bitmasks</h2>
+    <p>A set drawn from n items can be stored as an n-bit integer: bit i is 1 when item i is in the set. Union is
+      <code>|</code>, intersection <code>&amp;</code>, difference <code>a &amp; ~b</code>, membership a bit test, and
+      the size is <code>bit_count()</code>. Iterating <code>mask</code> from 0 to 2<sup>n</sup> − 1 visits every subset,
+      an iterative alternative to the backtracking in <a href="m33-greedy-backtracking.html">M33</a>.</p>
+    <div class="runnable" data-title="Every subset, and subset sum by brute force">
+<textarea>
+items = ["a", "b", "c"]
+for mask in range(1 << len(items)):
+    chosen = [items[i] for i in range(len(items)) if mask >> i & 1]
+    print(f"{mask:03b}", chosen)
+
+weights = [3, 34, 4, 12, 5, 2]
+target = 9
+hits = [m for m in range(1 << len(weights))
+        if sum(w for i, w in enumerate(weights) if m >> i & 1) == target]
+print([[weights[i] for i in range(len(weights)) if m >> i & 1] for m in hits])
+</textarea>
+    </div>
+    <p>Bitmasks are also the state in <em>bitmask DP</em> (M32 + this section): the travelling salesman problem's
+      Held-Karp algorithm uses <code>dp[mask][last]</code> = shortest path visiting exactly the cities in
+      <code>mask</code> and ending at <code>last</code>, O(2<sup>n</sup>·n²) instead of O(n!).</p>
+    <div class="runnable" data-title="Enumerate the submasks of a mask">
+<textarea>
+mask = 0b1011
+sub = mask
+while True:
+    print(f"{sub:04b}")
+    if sub == 0:
+        break
+    sub = (sub - 1) & mask       # next smaller submask
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="gcd">
+    <h2>Number theory: gcd, lcm, and Euclid</h2>
+    <p>The greatest common divisor of a and b is the largest integer dividing both. Euclid's algorithm (about 300 BCE)
+      rests on one fact: any common divisor of a and b also divides <code>a % b</code>, so
+      <code>gcd(a, b) = gcd(b, a % b)</code>, and <code>gcd(a, 0) = a</code>. Step through it:</p>
+    <div class="tracer" data-title="Euclid's algorithm, recursively">
+<textarea>
+def gcd(a, b):
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+g = gcd(252, 105)
+lcm = 252 * 105 // g
+</textarea>
+    </div>
+    <p>Each two steps at least halve the larger argument, so Euclid runs in O(log min(a, b)) steps. The least common
+      multiple follows: <code>lcm(a, b) = a // gcd(a, b) * b</code> (divide first to keep numbers small). In real code
+      use <code>math.gcd</code> and <code>math.lcm</code>, which accept any number of arguments.</p>
+    <p>The <strong>extended Euclidean algorithm</strong> also finds integers x, y with
+      <code>a·x + b·y = gcd(a, b)</code> (Bézout's identity), which is how modular inverses are computed.</p>
+    <div class="runnable" data-title="math.gcd, math.lcm, and extended Euclid">
+<textarea>
+import math
+
+print(math.gcd(252, 105), math.gcd(12, 18, 27), math.lcm(4, 6, 10))
+
+def ext_gcd(a: int, b: int) -> tuple[int, int, int]:
+    """Return (g, x, y) with a*x + b*y == g == gcd(a, b)."""
+    if b == 0:
+        return a, 1, 0
+    g, x, y = ext_gcd(b, a % b)
+    return g, y, x - (a // b) * y
+
+g, x, y = ext_gcd(240, 46)
+print(g, x, y, 240 * x + 46 * y)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="primes">
+    <h2>Primes and the sieve of Eratosthenes</h2>
+    <p>Trial division tests one number n in O(√n): if n has a factor larger than √n, it also has one smaller. To find
+      <em>all</em> primes up to N, the sieve of Eratosthenes is far better: cross off multiples of each prime, starting
+      at p² (smaller multiples were already crossed off by smaller primes). It runs in O(N log log N), which is almost
+      linear.</p>
+    <div class="runnable" data-title="Sieve with a bytearray">
+<textarea>
+import math
+
+def primes_up_to(n: int) -> list[int]:
+    if n < 2:
+        return []
+    is_prime = bytearray([1]) * (n + 1)
+    is_prime[0] = is_prime[1] = 0
+    for p in range(2, math.isqrt(n) + 1):
+        if is_prime[p]:
+            is_prime[p * p::p] = bytes(len(range(p * p, n + 1, p)))   # cross off in one slice
+    return [i for i, flag in enumerate(is_prime) if flag]
+
+print(primes_up_to(50))
+print(len(primes_up_to(1_000_000)), "primes below one million")
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>math.isqrt(n)</code> is the exact integer square root. Never use
+      <code>int(n ** 0.5)</code> for big integers: floating point loses precision above 2<sup>53</sup>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="modular">
+    <h2>Modular arithmetic and fast exponentiation</h2>
+    <p>Arithmetic modulo m wraps around like a clock. Addition, subtraction, and multiplication commute with taking
+      remainders: <code>(a * b) % m == ((a % m) * (b % m)) % m</code>. That lets you compute huge results (the number of
+      ways mod 10<sup>9</sup> + 7, a hash value) without ever building huge intermediate numbers.</p>
+    <p><strong>Fast modular exponentiation</strong> (square and multiply) computes a<sup>b</sup> mod m in
+      O(log b) multiplications by reading b's bits: square the base at every step, and multiply it into the result when
+      the current bit is 1. Python's three-argument <code>pow(a, b, m)</code> does exactly this in C.</p>
+    <div class="runnable" data-title="Square and multiply vs pow">
+<textarea>
+def mod_pow(a: int, b: int, m: int) -> int:
+    result, a = 1 % m, a % m
+    while b:
+        if b & 1:                     # lowest bit set: include this power
+            result = result * a % m
+        a = a * a % m                 # a, a^2, a^4, a^8, ...
+        b >>= 1
+    return result
+
+print(mod_pow(3, 200, 1_000_000_007), pow(3, 200, 1_000_000_007))
+print(pow(2, 10**18, 10**9 + 7))      # instant, though 2**(10**18) has 3 * 10**17 digits
+</textarea>
+    </div>
+    <p><strong>Modular inverse.</strong> x is the inverse of a mod m when <code>a·x % m == 1</code>. It exists exactly
+      when <code>gcd(a, m) == 1</code>. Since Python 3.8, <code>pow(a, -1, m)</code> computes it (raising
+      <code>ValueError</code> when no inverse exists). For a prime m, Fermat's little theorem gives another route:
+      <code>pow(a, m - 2, m)</code>.</p>
+    <div class="runnable" data-title="Modular inverse and division mod p">
+<textarea>
+p = 1_000_000_007
+inv3 = pow(3, -1, p)
+print(inv3, 3 * inv3 % p, pow(3, p - 2, p) == inv3)
+
+# "Divide" mod p: n choose k mod p via factorials and inverses
+import math
+n, k = 1000, 300
+num = math.factorial(n) % p
+den = math.factorial(k) * math.factorial(n - k) % p
+print(num * pow(den, -1, p) % p == math.comb(n, k) % p)
+
+try:
+    pow(6, -1, 9)
+except ValueError as e:
+    print("ValueError:", e)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: negative numbers and %" data-predict>
+<textarea>
+print(-7 % 3, -7 // 3, divmod(-7, 3))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="crypto-teaser">
+    <h2>Hashing and a crypto teaser</h2>
+    <p>Polynomial rolling hashes (Rabin-Karp) are modular arithmetic. So is the most famous public-key system, RSA. A
+      toy version with tiny primes shows the whole idea in six lines; real RSA uses primes with hundreds of digits.</p>
+    <ol>
+      <li>Pick primes p and q; let n = p·q and φ = (p − 1)(q − 1).</li>
+      <li>Pick e with gcd(e, φ) = 1 (65537 is standard); compute d = e<sup>−1</sup> mod φ.</li>
+      <li>Encrypt: c = m<sup>e</sup> mod n. Decrypt: m = c<sup>d</sup> mod n. This works by Euler's theorem.</li>
+      <li>Security rests on factoring: knowing n but not p and q, nobody can compute φ and therefore d.</li>
+    </ol>
+    <div class="runnable" data-title="Toy RSA">
+<textarea>
+import math
+
+p, q = 1009, 1013
+n, phi = p * q, (p - 1) * (q - 1)
+e = 65537
+assert math.gcd(e, phi) == 1
+d = pow(e, -1, phi)
+
+message = 424242
+cipher = pow(message, e, n)
+print(cipher, pow(cipher, d, n))      # decrypts back to the message
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Never implement cryptography yourself for real use. Textbook RSA is insecure
+      without padding, and side channels (timing, cache) leak keys. Use the standard library's <code>hashlib</code>,
+      <code>hmac</code>, and <code>secrets</code>, and a vetted package such as <code>cryptography</code> (installed
+      with <code>pixi add cryptography</code>) for encryption.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="math-integer">
+    <h2>Python 3.15 preview: <code>math.integer</code></h2>
+    <aside class="callout py315"><p>PEP 791 adds a <code>math.integer</code> module to Python 3.15 that gathers the
+      integer-specific functions, such as <code>isqrt</code>, <code>comb</code>, <code>perm</code>,
+      <code>factorial</code>, <code>gcd</code>, and <code>lcm</code>, into one namespace, separating them from the
+      floating-point functions in <code>math</code>. The functions you learned in this module work the same way; the
+      new module is mainly about organization and a home for future integer functions. Check the 3.15 documentation
+      for the exact list of names.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="math.integer (Python 3.15)">
+<textarea>
+from math import integer
+
+print(integer.isqrt(10**20 + 1))
+print(integer.comb(52, 5), integer.perm(5, 2), integer.factorial(10))
+print(integer.gcd(84, 36), integer.lcm(4, 6))
+</textarea>
+    </div>
+    <pre data-label="Terminal"><code class="language-bash">pixi exec --spec "python=3.15" python integer_demo.py</code></pre>
+    <p>On Python 3.14, which this course targets, keep using <code>math.isqrt</code>, <code>math.comb</code>,
+      <code>math.perm</code>, <code>math.factorial</code>, <code>math.gcd</code>, and <code>math.lcm</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m34-e1" data-title="KMP: find every occurrence">
+      <div class="exercise-prompt">
+        <p>Write <code>find_all(text, pattern)</code> returning the start index of every (possibly overlapping)
+          occurrence of a non-empty <code>pattern</code>, using the KMP failure table so the search is O(n + m). Do not
+          use <code>str.find</code>, <code>in</code>, or <code>re</code>.</p>
+      </div>
+<textarea class="starter">
+def find_all(text: str, pattern: str) -> list[int]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    assert find_all("abracadabra", "abra") == [0, 7], "abra occurs at 0 and 7"
+    assert find_all("ababcabcabababd", "ababd") == [10], "single match near the end"
+
+def test_overlapping():
+    assert find_all("aaaa", "aa") == [0, 1, 2], "overlapping matches count"
+    assert find_all("abababab", "abab") == [0, 2, 4], "overlapping periodic pattern"
+
+def test_none_and_edges():
+    assert find_all("abc", "d") == [], "no match"
+    assert find_all("ab", "abc") == [], "pattern longer than text"
+    assert find_all("x" * 1000 + "y", "x" * 50 + "y") == [950], "worst case for naive search"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build <code>fail</code> first. Then scan the text with a matched
+        length k, falling back with <code>k = fail[k - 1]</code> on mismatches and after each full match.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def find_all(text: str, pattern: str) -&gt; list[int]:
+    fail = [0] * len(pattern)
+    k = 0
+    for i in range(1, len(pattern)):
+        while k and pattern[i] != pattern[k]:
+            k = fail[k - 1]
+        if pattern[i] == pattern[k]:
+            k += 1
+        fail[i] = k
+    hits: list[int] = []
+    k = 0
+    for i, ch in enumerate(text):
+        while k and ch != pattern[k]:
+            k = fail[k - 1]
+        if ch == pattern[k]:
+            k += 1
+        if k == len(pattern):
+            hits.append(i - k + 1)
+            k = fail[k - 1]
+    return hits</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m34-e2" data-title="Count palindromic substrings">
+      <div class="exercise-prompt">
+        <p>Write <code>count_palindromes(s)</code> returning the number of palindromic substrings of <code>s</code>,
+          counting each position separately (<code>"aaa"</code> has 6: three <code>a</code>, two <code>aa</code>, one
+          <code>aaa</code>). Use expand-around-center.</p>
+      </div>
+<textarea class="starter">
+def count_palindromes(s: str) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert count_palindromes("abc") == 3, "only the single letters"
+    assert count_palindromes("aaa") == 6, "a, a, a, aa, aa, aaa"
+    assert count_palindromes("abba") == 6, "a, b, b, a, bb, abba"
+
+def test_edges():
+    assert count_palindromes("") == 0, "empty string has none"
+    assert count_palindromes("z") == 1, "a single letter is a palindrome"
+
+def test_matches_brute_force():
+    s = "racecarannakayak"
+    brute = sum(s[i:j] == s[i:j][::-1] for i in range(len(s)) for j in range(i + 1, len(s) + 1))
+    assert count_palindromes(s) == brute, "must agree with brute force"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For each of the 2n − 1 centers, every successful expansion step
+        is one more palindrome.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def count_palindromes(s: str) -&gt; int:
+    total = 0
+    for center in range(2 * len(s) - 1):
+        lo = center // 2
+        hi = lo + center % 2
+        while lo &gt;= 0 and hi &lt; len(s) and s[lo] == s[hi]:
+            total += 1
+            lo -= 1
+            hi += 1
+    return total</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m34-e3" data-title="A bit toolkit">
+      <div class="exercise-prompt">
+        <p>Write three functions using bit operations (no loops over string representations):</p>
+        <ul>
+          <li><code>is_power_of_two(n)</code>: <code>True</code> for 1, 2, 4, 8, …; <code>False</code> for 0 and negatives.</li>
+          <li><code>single_number(nums)</code>: every value appears twice except one; return it in O(1) extra space.</li>
+          <li><code>hamming(a, b)</code>: the number of bit positions where non-negative <code>a</code> and
+            <code>b</code> differ.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+def is_power_of_two(n: int) -> bool:
+    ...
+
+def single_number(nums: list[int]) -> int:
+    ...
+
+def hamming(a: int, b: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_power_of_two():
+    assert [n for n in range(-4, 70) if is_power_of_two(n)] == [1, 2, 4, 8, 16, 32, 64], "powers of two only"
+    assert is_power_of_two(1 << 200) is True, "works for big integers"
+
+def test_single_number():
+    assert single_number([4, 1, 2, 1, 2]) == 4, "4 is unpaired"
+    assert single_number([7]) == 7, "a single element"
+    assert single_number([-3, 5, 5]) == -3, "negative values work too"
+
+def test_hamming():
+    assert hamming(1, 4) == 2, "0b001 vs 0b100 differ in two places"
+    assert hamming(0, 0) == 0, "identical numbers"
+    assert hamming(255, 0) == 8, "eight differing bits"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>n &amp; (n - 1)</code> drops the lowest set bit;
+        XOR cancels pairs; <code>(a ^ b).bit_count()</code> counts differences.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import reduce
+from operator import xor
+
+def is_power_of_two(n: int) -&gt; bool:
+    return n &gt; 0 and (n &amp; (n - 1)) == 0
+
+def single_number(nums: list[int]) -&gt; int:
+    return reduce(xor, nums, 0)
+
+def hamming(a: int, b: int) -&gt; int:
+    return (a ^ b).bit_count()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m34-e4" data-title="Sieve and factorize">
+      <div class="exercise-prompt">
+        <p>Write <code>smallest_factors(n)</code> returning a list <code>spf</code> of length <code>n + 1</code> where
+          <code>spf[k]</code> is the smallest prime factor of k for k ≥ 2 (and 0 for k &lt; 2), built with a sieve. Then
+          write <code>factorize(k, spf)</code> returning the prime factors of k in non-decreasing order.</p>
+      </div>
+<textarea class="starter">
+def smallest_factors(n: int) -> list[int]:
+    ...
+
+def factorize(k: int, spf: list[int]) -> list[int]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_spf():
+    spf = smallest_factors(20)
+    assert spf[:2] == [0, 0], "0 and 1 have no prime factor"
+    assert spf[2:21] == [2, 3, 2, 5, 2, 7, 2, 3, 2, 11, 2, 13, 2, 3, 2, 17, 2, 19, 2], "smallest prime factors"
+
+def test_factorize():
+    spf = smallest_factors(10_000)
+    assert factorize(360, spf) == [2, 2, 2, 3, 3, 5], "360 = 2^3 * 3^2 * 5"
+    assert factorize(9973, spf) == [9973], "9973 is prime"
+    assert factorize(1, spf) == [], "1 has no prime factors"
+
+def test_primes_count():
+    spf = smallest_factors(100_000)
+    assert sum(1 for k in range(2, 100_001) if spf[k] == k) == 9592, "there are 9592 primes below 100,000"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>spf = list(range(n + 1))</code>. For each p up to
+        √n with <code>spf[p] == p</code>, walk multiples from p² and set <code>spf[m] = p</code> if it is still
+        <code>m</code>. To factorize, repeatedly divide by <code>spf[k]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def smallest_factors(n: int) -&gt; list[int]:
+    spf = list(range(n + 1))
+    for k in range(min(2, n + 1)):
+        spf[k] = 0
+    for p in range(2, math.isqrt(n) + 1):
+        if spf[p] == p:
+            for m in range(p * p, n + 1, p):
+                if spf[m] == m:
+                    spf[m] = p
+    return spf
+
+def factorize(k: int, spf: list[int]) -&gt; list[int]:
+    out: list[int] = []
+    while k &gt; 1:
+        out.append(spf[k])
+        k //= spf[k]
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m34-e5" data-title="Modular inverse by extended Euclid">
+      <div class="exercise-prompt">
+        <p>Write <code>mod_inverse(a, m)</code> using the extended Euclidean algorithm (not <code>pow</code>). Return
+          the inverse in the range <code>0..m-1</code>, or raise <code>ValueError</code> if
+          <code>gcd(a, m) != 1</code>.</p>
+      </div>
+<textarea class="starter">
+def mod_inverse(a: int, m: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_matches_pow():
+    for m in (7, 26, 1_000_000_007):
+        for a in (3, 5, 11, 12345):
+            if a % m and __import__("math").gcd(a, m) == 1:
+                assert mod_inverse(a, m) == pow(a, -1, m), f"inverse of {a} mod {m}"
+
+def test_range():
+    inv = mod_inverse(-3, 7)
+    assert 0 <= inv < 7 and (-3 * inv) % 7 == 1, "negative a still gives an inverse in 0..m-1"
+
+def test_no_inverse():
+    try:
+        mod_inverse(6, 9)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("gcd(6, 9) = 3, so mod_inverse must raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Iterative extended Euclid keeps <code>(old_r, r)</code> and
+        <code>(old_s, s)</code>; at the end <code>old_r</code> is the gcd and <code>old_s</code> is the coefficient of
+        a. Reduce it with <code>% m</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def mod_inverse(a: int, m: int) -&gt; int:
+    old_r, r = a % m, m
+    old_s, s = 1, 0
+    while r:
+        q = old_r // r
+        old_r, r = r, old_r - q * r
+        old_s, s = s, old_s - q * s
+    if old_r != 1:
+        raise ValueError(f"{a} has no inverse modulo {m}")
+    return old_s % m</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">A plagiarism-snippet finder</span></div>
+      <div class="widget-body">
+        <p>Build <code>snippets.py</code>, which finds passages shared between two documents, the core idea behind
+          tools like MOSS. Normalize each document (lowercase, collapse whitespace, optionally strip punctuation), split
+          it into words, and compute a Rabin-Karp rolling hash over every window of k consecutive words
+          (a <em>k-gram</em>). Shared hashes point to candidate shared passages; verify them by comparing the actual
+          words, then merge adjacent matching windows into maximal snippets.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init snippets &amp;&amp; cd snippets
+pixi add python pytest
+pixi run python snippets.py essay_a.txt essay_b.txt --k 8
+pixi run pytest -q</code></pre>
+        <ol>
+          <li><code>kgram_hashes(words, k) -&gt; list[int]</code> with an O(1) rolling update per window (hash each word
+            to an int first, for example with <code>zlib.crc32</code> so results are stable across runs).</li>
+          <li><code>shared_windows(a_words, b_words, k) -&gt; list[tuple[int, int]]</code>: index pairs whose k-grams
+            match, verified to rule out collisions.</li>
+          <li><code>merge_snippets(pairs, k)</code>: join runs where both indexes advance by one into
+            <code>(start_a, start_b, length)</code> snippets.</li>
+          <li>Print each snippet with its location and a similarity score (shared k-grams ÷ total k-grams).</li>
+        </ol>
+        <ul class="checklist" data-id="m34-mini">
+          <li>Identical documents produce one snippet covering everything and a score of 1.0</li>
+          <li>Unrelated documents produce no snippets</li>
+          <li>A paragraph copied into the middle of another essay is found with the correct word offsets</li>
+          <li>A test forces a hash collision (tiny modulus) and shows verification rejects it</li>
+          <li>At least six pytest tests run with <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> implement <em>winnowing</em> (keep only the minimum hash in each window of w
+          k-grams) to shrink fingerprints while guaranteeing detection of long matches; compare a whole folder of files
+          and report the most similar pairs.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m34-quiz">
+<script type="application/json">
+{"title": "Strings, bits, and number theory quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the worst-case time of naive string matching for text length n and pattern length m?", "options": ["O(n)", "O(n + m)", "O(n·m)", "O(m log n)"], "answer": 2, "explanation": "<p>Each of about n alignments can compare up to m characters, as on aaaa…ab.</p>"},
+  {"type": "text", "prompt": "Type the KMP failure table of <code>\"aabaa\"</code> as a Python list.", "answer": ["[0, 1, 0, 1, 2]", "[0,1,0,1,2]", "0 1 0 1 2"], "explanation": "<p>Borders: a→0, aa→1 (a), aab→0, aaba→1 (a), aabaa→2 (aa).</p>"},
+  {"type": "single", "prompt": "Why is KMP's search loop linear despite the inner while loop?", "options": ["The while loop runs at most once", "Every fallback decreases k, and k increases at most once per text character, so total fallbacks ≤ n", "It skips characters", "It uses hashing"], "answer": 1, "explanation": "<p>An amortized argument: the potential k rises by at most n in total, so it can fall at most n times.</p>"},
+  {"type": "single", "prompt": "Why must Rabin-Karp compare the actual substring when hashes match?", "options": ["Hashes are slow", "Different strings can have the same hash (a collision)", "Python hashes are random", "It is required for overlapping matches"], "answer": 1, "explanation": "<p>A hash maps many strings to one value. Verification makes the algorithm always correct; good parameters make collisions rare, so it stays fast.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "x = 0b1011000\nprint(x & (x - 1) == 0b1010000)", "answer": "0", "explanation": "<p>Precedence trap: <code>==</code> binds tighter than <code>&amp;</code>, so this is <code>x &amp; ((x - 1) == 0b1010000)</code>. The comparison is False (x - 1 is 0b1010111), and <code>88 &amp; False</code> is the int 0. Write <code>(x &amp; (x - 1)) == 0b1010000</code> to get True.</p>"},
+  {"type": "single", "prompt": "Which expression clears bit i of x?", "options": ["x | (1 << i)", "x ^ (1 << i)", "x & ~(1 << i)", "x >> i"], "answer": 2, "explanation": "<p>The mask ~(1 &lt;&lt; i) has every bit set except bit i; AND keeps everything else and clears bit i. XOR toggles, OR sets.</p>"},
+  {"type": "text", "prompt": "Which int method (Python 3.10+) returns the number of 1 bits?", "answer": ["bit_count", "int.bit_count", "bit_count()"], "explanation": "<p><code>(44).bit_count()</code> is 3. It is implemented in C and much faster than counting characters in <code>bin(x)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from functools import reduce\nfrom operator import xor\nprint(reduce(xor, [3, 8, 3, 5, 8]))", "answer": "5", "explanation": "<p>Pairs cancel (a ^ a = 0), leaving the unpaired 5.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import math\nprint(math.gcd(84, 36), math.lcm(4, 6))", "answer": "12 12", "explanation": "<p>gcd(84, 36): 84 % 36 = 12, 36 % 12 = 0, so 12. lcm(4, 6) = 4 * 6 / gcd = 24 / 2 = 12.</p>"},
+  {"type": "single", "prompt": "Why does the sieve of Eratosthenes start crossing off multiples of p at p*p?", "options": ["To save memory", "Smaller multiples k*p with k < p were already crossed off by the prime factors of k", "p*p is the first even multiple", "It is required for correctness when p = 2"], "answer": 1, "explanation": "<p>Any composite below p² has a prime factor smaller than p, so it is already marked.</p>"},
+  {"type": "single", "prompt": "What does <code>pow(a, -1, m)</code> return?", "options": ["1 / a as a float", "The modular inverse of a mod m, or raises ValueError if none exists", "a ** -1 % m rounded", "Always 1"], "answer": 1, "explanation": "<p>Since Python 3.8, a negative exponent with a modulus computes the inverse, which exists exactly when gcd(a, m) = 1.</p>"},
+  {"type": "single", "prompt": "How many multiplications does square-and-multiply need for a^b mod m?", "options": ["O(b)", "O(log b)", "O(√b)", "O(1)"], "answer": 1, "explanation": "<p>It processes one bit of b per step, squaring each time and multiplying when the bit is 1: about 2·log₂ b multiplications.</p>"},
+  {"type": "single", "prompt": "What does PEP 791 add in Python 3.15?", "options": ["A faster math.sqrt", "A math.integer module grouping integer-specific functions such as isqrt, comb, and gcd", "Arbitrary-precision floats", "A new int type"], "answer": 1, "explanation": "<p>math.integer is an organizational home for integer functions, separate from the floating-point functions in math.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Naive matching is O(n·m); KMP is O(n + m) by never re-reading text; Rabin-Karp is expected O(n + m) using
+        rolling hashes, and excels at many patterns.</li>
+      <li>Expand-around-center finds palindromes in O(n²) time and O(1) space.</li>
+      <li>Masks: test <code>(x &gt;&gt; i) &amp; 1</code>, set <code>|</code>, clear <code>&amp; ~</code>, toggle
+        <code>^</code>; <code>x &amp; (x - 1)</code> drops the lowest set bit; <code>bit_count()</code> counts bits.
+        Parenthesize bitwise expressions in comparisons.</li>
+      <li>An n-bit integer is a subset of n items; loop over <code>range(1 &lt;&lt; n)</code> to enumerate subsets.</li>
+      <li>Euclid computes gcd in O(log n); the sieve finds primes up to N in O(N log log N).</li>
+      <li><code>pow(a, b, m)</code> is fast modular exponentiation; <code>pow(a, -1, m)</code> is the modular inverse;
+        RSA is built from exactly these.</li>
+    </ul>
+    <div class="flashcards" data-title="Strings, bits, and numbers">
+<script type="application/json">
+[{"front": "KMP failure table entry fail[j]", "back": "Length of the longest proper prefix of p[:j+1] that is also its suffix."},
+ {"front": "KMP complexity", "back": "O(n + m) time, O(m) extra space."},
+ {"front": "Rolling hash update", "back": "h = ((h - out * B^(m-1)) * B + in) mod M, then verify on a hash match."},
+ {"front": "Expand around center", "back": "2n - 1 centers (characters and gaps); expand while ends match. O(n²) time, O(1) space."},
+ {"front": "x & (x - 1)", "back": "Clears the lowest set bit; zero exactly when x is 0 or a power of two."},
+ {"front": "x & -x", "back": "Isolates the lowest set bit."},
+ {"front": "XOR identities", "back": "a ^ a = 0, a ^ 0 = a; commutative and associative, so pairs cancel."},
+ {"front": "Euclid's algorithm", "back": "gcd(a, b) = gcd(b, a % b), gcd(a, 0) = a. O(log min(a, b)) steps."},
+ {"front": "Sieve of Eratosthenes", "back": "Cross off multiples of each prime p from p*p. O(N log log N)."},
+ {"front": "pow(a, b, m) and pow(a, -1, m)", "back": "Fast modular exponentiation; modular inverse (ValueError if gcd(a, m) != 1)."},
+ {"front": "math.integer (3.15)", "back": "PEP 791 module gathering integer functions such as isqrt, comb, perm, factorial, gcd, lcm."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/stdtypes.html#int.bit_count">int.bit_count and bit_length</a></li>
+      <li><a href="https://docs.python.org/3/library/functions.html#pow">Built-in pow with a modulus</a></li>
+      <li><a href="https://docs.python.org/3/library/math.html#number-theoretic-functions">math: number-theoretic functions</a></li>
+      <li><a href="https://peps.python.org/pep-0791/">PEP 791: math.integer</a></li>
+      <li><a href="https://docs.python.org/3/library/secrets.html">secrets: generate secure random numbers</a></li>
+      <li>Next: <a href="m35-problem-solving.html">M35 Problem-Solving Patterns</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

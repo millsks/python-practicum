@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M22 · Stacks, Queues &amp; Deques · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m22">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 22</p>
+    <h1>Stacks, Queues &amp; Deques</h1>
+    <p class="lede">Stacks and queues are the simplest data structures with rules: you may only touch the ends. That
+      restriction is exactly what makes them useful. They power undo buttons, parsers, calculators, browsers' back buttons,
+      task schedulers, and breadth-first search.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m20-arrays.html">M20</a>,
+      <a href="m21-linked-lists.html">M21</a></span></div>
+    <ul class="objectives">
+      <li>Distinguish an abstract data type (ADT) from the data structure that implements it</li>
+      <li>Implement a stack on a <code>list</code> and explain why a queue on a <code>list</code> is a trap</li>
+      <li>Use <code>collections.deque</code> fluently, including <code>maxlen</code> and <code>rotate</code>, and explain its block structure</li>
+      <li>Build a circular-buffer queue from scratch with modulo arithmetic</li>
+      <li>Apply stacks to bracket matching, undo/redo, RPN evaluation, the shunting-yard algorithm, and monotonic-stack problems</li>
+      <li>Know when to use <code>queue.Queue</code> for threads, and preview queues in breadth-first search</li>
+    </ul>
+  </header>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="adt">
+    <h2>Abstract data types vs implementations</h2>
+    <p>An <strong>abstract data type</strong> (ADT) is a contract: a set of operations and the rules they obey, with no
+      mention of memory. An <strong>implementation</strong> is the concrete data structure that fulfils the contract.
+      Keeping them separate is one of the most useful ideas in software design: code that depends only on the contract
+      keeps working when you swap the implementation.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Stack (LIFO)</h4><p><strong>Last in, first out.</strong> <code>push(x)</code>, <code>pop()</code>,
+        <code>peek()</code>, <code>is_empty()</code>. Like a stack of plates: you take from the top.</p></div>
+      <div class="card"><h4>Queue (FIFO)</h4><p><strong>First in, first out.</strong> <code>enqueue(x)</code>,
+        <code>dequeue()</code>, <code>peek()</code>, <code>is_empty()</code>. Like a line at a shop.</p></div>
+      <div class="card"><h4>Deque</h4><p><strong>Double-ended queue</strong> (pronounced "deck"). Push and pop at
+        <em>both</em> ends. Can act as either a stack or a queue.</p></div>
+    </div>
+    <p>The same ADT can have several implementations with different costs:</p>
+    <table>
+      <thead><tr><th>ADT</th><th>Implementation</th><th>Push/enqueue</th><th>Pop/dequeue</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Stack</td><td><code>list</code> (top = end)</td><td>O(1) amortized</td><td>O(1)</td><td>excellent</td></tr>
+        <tr><td>Stack</td><td>singly linked list (top = head)</td><td>O(1)</td><td>O(1)</td><td>fine, more memory</td></tr>
+        <tr><td>Queue</td><td><code>list</code> with <code>pop(0)</code></td><td>O(1) amortized</td><td><strong>O(n)</strong></td><td>a trap</td></tr>
+        <tr><td>Queue</td><td><code>collections.deque</code></td><td>O(1)</td><td>O(1)</td><td>the standard choice</td></tr>
+        <tr><td>Queue</td><td>circular buffer (array)</td><td>O(1) amortized</td><td>O(1)</td><td>great, fixed memory</td></tr>
+        <tr><td>Queue</td><td>linked list with tail</td><td>O(1)</td><td>O(1)</td><td>fine, more memory</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p><strong>Remember:</strong> the ADT says <em>what</em>; the implementation decides
+      <em>how fast</em>. Program to the ADT, choose the implementation by its costs.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="stack">
+    <h2>A stack on a list</h2>
+    <p>A Python list is already a great stack, as long as the <em>end</em> of the list is the top: <code>append</code> pushes
+      and <code>pop()</code> pops, both O(1). Wrapping it in a small class documents the intent and prevents callers from
+      reaching into the middle.</p>
+    <div class="viz" data-viz="stack-queue" data-config='{"mode": "stack", "values": [3, 7, 1]}'></div>
+    <div class="runnable" data-title="A Stack class">
+<textarea>
+class Stack:
+    """LIFO stack backed by a list; the top is the end of the list."""
+
+    def __init__(self):
+        self._items = []
+
+    def push(self, item):
+        self._items.append(item)
+
+    def pop(self):
+        if not self._items:
+            raise IndexError("pop from empty stack")
+        return self._items.pop()
+
+    def peek(self):
+        if not self._items:
+            raise IndexError("peek at empty stack")
+        return self._items[-1]
+
+    def __len__(self):
+        return len(self._items)
+
+    def __repr__(self):
+        return f"Stack({self._items!r})"
+
+s = Stack()
+for plate in ["red", "green", "blue"]:
+    s.push(plate)
+print(s, "top:", s.peek())
+print(s.pop(), s.pop(), len(s))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+stack = []
+for ch in "abc":
+    stack.append(ch)
+stack.pop()
+stack.append("d")
+print("".join(stack), stack[-1])
+</textarea>
+    </div>
+    <p>You already use a stack every time you call a function: the <strong>call stack</strong>. Each call pushes a frame
+      holding its local variables; each return pops it. A recursion that never stops overflows that stack, which is what
+      Python's <code>RecursionError</code> protects against.</p>
+    <aside class="callout warn"><p>Never put the top of a list-backed stack at index 0. <code>insert(0, x)</code> and
+      <code>pop(0)</code> shift the whole list, turning O(1) operations into O(n).</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="queue-pitfall">
+    <h2>Queues, and the <code>list.pop(0)</code> trap</h2>
+    <p>A queue adds at the back and removes from the front. With a list, the natural code is
+      <code>append</code> + <code>pop(0)</code>. It works, and it is correct, but <code>pop(0)</code> moves every remaining
+      element one slot left (<a href="m20-arrays.html#costs">M20</a>). Process a queue of <em>n</em> items and you have done
+      O(n²) work.</p>
+    <div class="viz" data-viz="stack-queue" data-config='{"mode": "queue", "values": [4, 2, 9]}'></div>
+    <div class="runnable" data-title="Measure the trap">
+<textarea>
+import time
+from collections import deque
+
+for n in [25_000, 50_000, 100_000]:
+    q = list(range(n))
+    t0 = time.perf_counter()
+    while q:
+        q.pop(0)
+    t1 = time.perf_counter()
+    d = deque(range(n))
+    while d:
+        d.popleft()
+    t2 = time.perf_counter()
+    print(f"n={n:7}: list.pop(0) {t1 - t0:.3f}s   deque.popleft() {t2 - t1:.4f}s")
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> for a FIFO queue in Python use
+      <code>collections.deque</code>: <code>append</code> to enqueue, <code>popleft</code> to dequeue.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="deque">
+    <h2>collections.deque</h2>
+    <p><code>deque</code> gives O(1) <code>append</code>, <code>appendleft</code>, <code>pop</code>, and <code>popleft</code>. In
+      CPython it is a <strong>doubly linked list of fixed-size blocks</strong>, each holding 64 item pointers. The deque
+      tracks the left block and an index into it, and the right block and an index into it. Pushing at either end writes
+      into the current end block, allocating a new block only when that one is full. This hybrid gives linked-list speed at
+      the ends with array-like density in the middle.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 160" role="img" aria-label="A deque as three linked blocks of 64 slots, partially filled at the ends">
+        <g font-size="12" text-anchor="middle">
+          <g stroke="var(--viz-1)" fill="none" stroke-width="1.5">
+            <rect x="30" y="50" width="150" height="40" rx="4"/><rect x="215" y="50" width="150" height="40" rx="4"/>
+            <rect x="400" y="50" width="150" height="40" rx="4"/>
+          </g>
+          <rect x="110" y="50" width="70" height="40" fill="var(--viz-1)" fill-opacity="0.3"/>
+          <rect x="215" y="50" width="150" height="40" fill="var(--viz-1)" fill-opacity="0.3"/>
+          <rect x="400" y="50" width="90" height="40" fill="var(--viz-1)" fill-opacity="0.3"/>
+          <text x="105" y="40" fill="var(--fg-muted)">block (64 slots)</text>
+          <text x="290" y="40" fill="var(--fg-muted)">full block</text>
+          <text x="475" y="40" fill="var(--fg-muted)">block</text>
+          <g stroke="var(--fg-muted)" stroke-width="1.3">
+            <line x1="180" y1="62" x2="213" y2="62"/><line x1="365" y1="62" x2="398" y2="62"/>
+            <line x1="215" y1="78" x2="182" y2="78"/><line x1="400" y1="78" x2="367" y2="78"/>
+          </g>
+          <text x="110" y="115" fill="var(--viz-2)">leftindex ↑</text>
+          <text x="490" y="115" fill="var(--viz-3)">↑ rightindex</text>
+          <text x="290" y="145" fill="var(--fg-muted)">appendleft fills leftwards; append fills rightwards; a new block is linked only when one fills</text>
+        </g>
+      </svg>
+      <figcaption>The shaded slots hold items. Ends are O(1); reaching the middle means walking blocks.</figcaption>
+    </figure>
+    <table>
+      <thead><tr><th>Operation</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td><code>append</code>, <code>appendleft</code>, <code>pop</code>, <code>popleft</code></td><td>O(1)</td></tr>
+        <tr><td><code>d[0]</code>, <code>d[-1]</code></td><td>O(1)</td></tr>
+        <tr><td><code>d[i]</code> in the middle</td><td>O(n) (walks blocks from the nearer end)</td></tr>
+        <tr><td><code>rotate(k)</code></td><td>O(k)</td></tr>
+        <tr><td><code>x in d</code>, <code>remove(x)</code></td><td>O(n)</td></tr>
+        <tr><td><code>extend</code>, <code>extendleft</code></td><td>O(k)</td></tr>
+      </tbody>
+    </table>
+    <div class="viz" data-viz="stack-queue" data-config='{"mode": "deque", "values": [1, 2, 3]}'></div>
+    <div class="runnable" data-title="deque tour: both ends, maxlen, rotate">
+<textarea>
+from collections import deque
+
+d = deque([2, 3])
+d.appendleft(1)
+d.append(4)
+print(d, d[0], d[-1])
+print(d.popleft(), d.pop(), d)
+
+# maxlen: a bounded deque discards from the opposite end when full
+recent = deque(maxlen=3)
+for page in ["home", "about", "blog", "contact", "shop"]:
+    recent.append(page)
+print("last three pages:", list(recent))
+
+# rotate(k): move k items from the right end to the left (negative: the other way)
+r = deque("abcde")
+r.rotate(2)
+print("rotate(2): ", "".join(r))
+r.rotate(-3)
+print("rotate(-3):", "".join(r))
+
+# extendleft reverses the order (each item is appended on the left in turn)
+e = deque([9])
+e.extendleft([1, 2, 3])
+print(e)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: maxlen with appendleft" data-predict>
+<textarea>
+from collections import deque
+
+d = deque([1, 2, 3], maxlen=3)
+d.appendleft(0)
+print(list(d))
+</textarea>
+    </div>
+    <p>With <code>maxlen</code>, adding to one end silently drops an item from the other end. That makes
+      <code>deque(maxlen=n)</code> the idiomatic "keep the last n things" tool: recent log lines, a sliding window of
+      readings, a <code>tail -n</code> on a file.</p>
+    <aside class="callout pro"><p><code>deque(open("log.txt"), maxlen=10)</code> reads a file of any size and keeps only the
+      last ten lines, in O(1) memory. In CPython's default (GIL) build, single <code>append</code> and <code>popleft</code>
+      calls are atomic, so a deque can be shared by threads for simple producer/consumer use, but when you need blocking
+      waits use <code>queue.Queue</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> deque is O(1) at both ends and O(n) in the middle.
+      <code>maxlen</code> bounds it; <code>rotate</code> cycles it.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="thread-queues">
+    <h2>Preview: <code>queue.Queue</code> for threads</h2>
+    <p>When several threads share a queue, you need more than fast ends: you need <strong>locking</strong> (so two threads
+      cannot corrupt the structure) and <strong>blocking</strong> (a consumer should sleep until an item arrives, a producer
+      should wait when a bounded queue is full). The <code>queue</code> module provides exactly that:</p>
+    <ul>
+      <li><code>queue.Queue(maxsize=0)</code>: FIFO. <code>put</code> blocks when full, <code>get</code> blocks when empty;
+        <code>task_done()</code> and <code>join()</code> let you wait until all work is processed.</li>
+      <li><code>queue.LifoQueue</code>: a thread-safe stack. <code>queue.PriorityQueue</code>: smallest item first (a heap, see
+        <a href="m25-heaps.html">M25</a>). <code>queue.SimpleQueue</code>: unbounded FIFO without task tracking.</li>
+      <li>Since Python 3.13, <code>Queue.shutdown()</code> makes further <code>put</code> calls raise
+        <code>queue.ShutDown</code>, a clean way to stop workers.</li>
+    </ul>
+    <div class="runnable" data-local="Real threads are not available in the browser runtime; run this locally." data-title="Producer and consumers">
+<textarea>
+import queue
+import threading
+import time
+
+tasks = queue.Queue(maxsize=5)
+
+def worker(name):
+    while True:
+        item = tasks.get()          # blocks until an item is available
+        if item is None:            # sentinel: time to stop
+            tasks.task_done()
+            break
+        time.sleep(0.01)            # pretend to work
+        print(f"{name} processed {item}")
+        tasks.task_done()
+
+threads = [threading.Thread(target=worker, args=(f"w{i}",)) for i in range(3)]
+for t in threads:
+    t.start()
+for job in range(10):
+    tasks.put(job)                  # blocks if 5 items are already waiting
+for _ in threads:
+    tasks.put(None)
+tasks.join()                        # wait until every task_done() has been called
+print("all done")
+</textarea>
+    </div>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python workers.py</code></pre>
+    <p>Threads are covered fully in <a href="m37-concurrency.html">M37</a>; <code>asyncio.Queue</code>, its coroutine
+      counterpart, appears in <a href="m38-asyncio.html">M38</a>.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="circular">
+    <h2>A circular buffer from scratch</h2>
+    <p>How would you build an O(1) queue on a plain array, with no shifting? Keep a fixed array plus a <code>head</code>
+      index (the front) and a <code>size</code>. The back is at <code>(head + size) % capacity</code>. Dequeuing advances
+      <code>head</code>; enqueuing writes at the back. When an index runs off the end of the array, the modulo wraps it to
+      the beginning, so the queue chases itself around a ring.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 180" role="img" aria-label="A circular array of 8 slots with items wrapping from index 5 around to index 1">
+        <g font-size="13" text-anchor="middle">
+          <g stroke="var(--viz-1)" fill="none">
+            <rect x="40" y="60" width="55" height="40"/><rect x="95" y="60" width="55" height="40"/>
+            <rect x="150" y="60" width="55" height="40"/><rect x="205" y="60" width="55" height="40"/>
+            <rect x="260" y="60" width="55" height="40"/><rect x="315" y="60" width="55" height="40"/>
+            <rect x="370" y="60" width="55" height="40"/><rect x="425" y="60" width="55" height="40"/>
+          </g>
+          <g fill="var(--viz-1)" fill-opacity="0.3">
+            <rect x="40" y="60" width="55" height="40"/><rect x="95" y="60" width="55" height="40"/>
+            <rect x="315" y="60" width="55" height="40"/><rect x="370" y="60" width="55" height="40"/><rect x="425" y="60" width="55" height="40"/>
+          </g>
+          <g fill="var(--fg)"><text x="67" y="85">D</text><text x="122" y="85">E</text><text x="342" y="85">A</text>
+            <text x="397" y="85">B</text><text x="452" y="85">C</text></g>
+          <g fill="var(--fg-muted)" font-size="11">
+            <text x="67" y="120">0</text><text x="122" y="120">1</text><text x="177" y="120">2</text><text x="232" y="120">3</text>
+            <text x="287" y="120">4</text><text x="342" y="120">5</text><text x="397" y="120">6</text><text x="452" y="120">7</text>
+          </g>
+          <text x="342" y="45" fill="var(--viz-2)">head = 5 (front)</text>
+          <text x="177" y="45" fill="var(--viz-3)">back = (5 + 5) % 8 = 2</text>
+          <path d="M480,80 C510,80 510,160 260,160 C30,160 15,140 40,95" fill="none" stroke="var(--fg-muted)" stroke-dasharray="4 3"/>
+          <text x="260" y="175" fill="var(--fg-muted)" font-size="11">wraps around</text>
+        </g>
+      </svg>
+      <figcaption>Queue order is A, B, C, D, E. The next enqueue writes slot 2; the next dequeue reads slot 5.</figcaption>
+    </figure>
+    <pre><code class="language-python">class ArrayQueue:
+    def __init__(self, capacity=4):
+        self._data = [None] * capacity
+        self._head = 0
+        self._size = 0
+
+    def enqueue(self, item):
+        if self._size == len(self._data):
+            self._grow()                                   # or raise / overwrite, for a bounded buffer
+        back = (self._head + self._size) % len(self._data)
+        self._data[back] = item
+        self._size += 1
+
+    def dequeue(self):
+        if self._size == 0:
+            raise IndexError("dequeue from empty queue")
+        item = self._data[self._head]
+        self._data[self._head] = None                      # release the reference
+        self._head = (self._head + 1) % len(self._data)
+        self._size -= 1
+        return item</code></pre>
+    <p>Growing a ring is subtle: you cannot just copy the array, because the items may wrap around the end. Instead, copy
+      them out <em>in queue order</em> (<code>(head + i) % capacity</code> for <code>i</code> in <code>range(size)</code>) into
+      the start of the new array, and reset <code>head</code> to 0. You will write this in exercise 2.</p>
+    <div class="tracer" data-title="Trace the wrap-around">
+<textarea>
+cap = 4
+data = [None] * cap
+head, size = 0, 0
+for item in ["a", "b", "c"]:
+    data[(head + size) % cap] = item
+    size += 1
+front = data[head]
+data[head] = None
+head = (head + 1) % cap
+size -= 1
+for item in ["d", "e"]:
+    data[(head + size) % cap] = item
+    size += 1
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> a ring buffer is an array plus head and size; the back is
+      <code>(head + size) % capacity</code>. Grow by unrolling the items in order into a bigger array.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="brackets">
+    <h2>Application: balanced brackets</h2>
+    <p>Is <code>{[()()]}</code> balanced? Is <code>([)]</code>? Every opening bracket must be closed by the matching kind,
+      in reverse order of opening: the most recently opened bracket must close first. "Most recent first" is the signature
+      of a stack.</p>
+    <ol>
+      <li>Scan left to right. Push every opening bracket.</li>
+      <li>On a closing bracket, the stack must be non-empty and its top must be the matching opener; pop it.</li>
+      <li>At the end, the stack must be empty (nothing left unclosed).</li>
+    </ol>
+    <div class="tracer" data-title="Trace the bracket checker on '([)]'">
+<textarea>
+pairs = {")": "(", "]": "[", "}": "{"}
+text = "([)]"
+stack = []
+ok = True
+for ch in text:
+    if ch in "([{":
+        stack.append(ch)
+    elif ch in pairs:
+        if not stack or stack.pop() != pairs[ch]:
+            ok = False
+            break
+ok = ok and not stack
+</textarea>
+    </div>
+    <p>Compilers, linters, and editors do exactly this (with more bracket types, quotes, and comments) to highlight the
+      matching parenthesis or report "unexpected ')'". You'll implement it in exercise 1.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="undo">
+    <h2>Application: undo and redo</h2>
+    <p>An editor keeps two stacks. Every edit pushes onto the <strong>undo</strong> stack and clears the
+      <strong>redo</strong> stack (a new edit makes the old redo history meaningless). Undo pops from undo and pushes onto
+      redo; redo does the reverse.</p>
+    <div class="runnable" data-title="Two-stack undo/redo">
+<textarea>
+class Editor:
+    def __init__(self):
+        self.text = ""
+        self._undo = []
+        self._redo = []
+
+    def type(self, s):
+        self._undo.append(self.text)   # save the state before the edit
+        self._redo.clear()
+        self.text += s
+
+    def undo(self):
+        if self._undo:
+            self._redo.append(self.text)
+            self.text = self._undo.pop()
+
+    def redo(self):
+        if self._redo:
+            self._undo.append(self.text)
+            self.text = self._redo.pop()
+
+e = Editor()
+e.type("Hello")
+e.type(", world")
+e.undo(); print(repr(e.text))
+e.redo(); print(repr(e.text))
+e.undo(); e.type("!"); e.redo()      # redo history was cleared by the new edit
+print(repr(e.text))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Storing whole snapshots is simple but costs memory. Real editors store <em>commands</em>
+      ("insert 'x' at 5") that know how to undo themselves: the Command pattern (<a href="m46-design.html">M46</a>). Browsers'
+      back and forward buttons use the same two-stack shape. A bounded history is a <code>deque(maxlen=...)</code>.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="rpn">
+    <h2>Application: RPN and the shunting-yard algorithm</h2>
+    <p>We write arithmetic in <strong>infix</strong> notation: the operator sits between operands, <code>3 + 4 * 2</code>.
+      Infix needs precedence rules and parentheses to be unambiguous. <strong>Reverse Polish notation</strong> (RPN, or
+      postfix) puts operators <em>after</em> their operands: <code>3 4 2 * +</code>. It needs no parentheses and no
+      precedence, and it is trivial to evaluate with a stack. HP calculators, the PostScript language, and Python's own
+      bytecode virtual machine all work this way.</p>
+    <h3>Evaluating RPN</h3>
+    <p>Scan tokens. A number is pushed. An operator pops two values (the <em>second</em> pop is the left operand), applies
+      itself, and pushes the result. At the end exactly one value remains.</p>
+    <div class="runnable" data-title="RPN evaluator">
+<textarea>
+import operator
+
+OPS = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.truediv}
+
+def eval_rpn(tokens):
+    stack = []
+    for tok in tokens:
+        if tok in OPS:
+            right = stack.pop()
+            left = stack.pop()
+            stack.append(OPS[tok](left, right))
+        else:
+            stack.append(float(tok))
+    if len(stack) != 1:
+        raise ValueError("malformed expression")
+    return stack[0]
+
+print(eval_rpn("3 4 2 * +".split()))       # 3 + 4 * 2 = 11
+print(eval_rpn("5 1 2 + 4 * + 3 -".split()))  # 5 + (1 + 2) * 4 - 3 = 14
+</textarea>
+    </div>
+    <div class="runnable" data-title="Python is a stack machine too">
+<textarea>
+import dis
+
+dis.dis("a + b * c")
+</textarea>
+    </div>
+    <p>The disassembly loads <code>a</code>, <code>b</code>, <code>c</code> onto the VM's value stack, then multiplies, then
+      adds: it is literally RPN.</p>
+
+    <h3>Converting infix to postfix: shunting-yard</h3>
+    <p>Edsger Dijkstra's <strong>shunting-yard algorithm</strong> (named after a railway yard where carriages are reordered)
+      converts infix to postfix with one stack of operators:</p>
+    <ol>
+      <li>A number goes straight to the output.</li>
+      <li>An operator <code>o</code>: while the stack's top is an operator with <em>higher</em> precedence, or <em>equal</em>
+        precedence and <code>o</code> is left-associative, pop it to the output. Then push <code>o</code>.</li>
+      <li><code>(</code> is pushed. <code>)</code> pops operators to the output until the matching <code>(</code>, which is
+        discarded. If none is found, the parentheses are mismatched.</li>
+      <li>At the end, pop all remaining operators to the output (any <code>(</code> left means a mismatch).</li>
+    </ol>
+    <table>
+      <thead><tr><th>Operator</th><th>Precedence</th><th>Associativity</th></tr></thead>
+      <tbody>
+        <tr><td><code>^</code> (power)</td><td>3</td><td>right: 2 ^ 3 ^ 2 = 2 ^ (3 ^ 2)</td></tr>
+        <tr><td><code>*</code> <code>/</code></td><td>2</td><td>left</td></tr>
+        <tr><td><code>+</code> <code>-</code></td><td>1</td><td>left: 8 - 3 - 2 = (8 - 3) - 2</td></tr>
+      </tbody>
+    </table>
+    <div class="tracer" data-title="Trace shunting-yard on 3 + 4 * (2 - 1)">
+<textarea>
+PREC = {"+": 1, "-": 1, "*": 2, "/": 2}
+tokens = ["3", "+", "4", "*", "(", "2", "-", "1", ")"]
+output = []
+ops = []
+for tok in tokens:
+    if tok in PREC:
+        while ops and ops[-1] in PREC and PREC[ops[-1]] >= PREC[tok]:
+            output.append(ops.pop())
+        ops.append(tok)
+    elif tok == "(":
+        ops.append(tok)
+    elif tok == ")":
+        while ops[-1] != "(":
+            output.append(ops.pop())
+        ops.pop()
+    else:
+        output.append(tok)
+while ops:
+    output.append(ops.pop())
+postfix = " ".join(output)
+</textarea>
+    </div>
+    <p>The result is <code>3 4 2 1 - * +</code>. You will implement the full algorithm, with right-associative
+      <code>^</code> and error checking, in exercise 5 and the mini-project.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="bfs-preview">
+    <h2>Preview: queues in breadth-first search</h2>
+    <p>A queue processes things in the order they were discovered. Applied to a graph, that explores everything 1 step
+      away, then everything 2 steps away, and so on: <strong>breadth-first search</strong> (BFS), which finds shortest paths
+      in unweighted graphs. Swap the queue for a stack and you get depth-first search instead. Same loop, different ADT,
+      completely different behaviour.</p>
+    <div class="runnable" data-title="BFS on a tiny graph">
+<textarea>
+from collections import deque
+
+graph = {"A": ["B", "C"], "B": ["D"], "C": ["D", "E"], "D": ["F"], "E": ["F"], "F": []}
+
+def bfs_order(start):
+    seen = {start}
+    queue = deque([start])
+    order = []
+    while queue:
+        node = queue.popleft()          # FIFO: oldest discovery first
+        order.append(node)
+        for nxt in graph[node]:
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+    return order
+
+print("BFS:", bfs_order("A"))
+</textarea>
+    </div>
+    <div class="viz" data-viz="graph" data-config='{"preset": "small", "algorithms": ["bfs", "dfs"]}'></div>
+    <p>Graphs get a full treatment in <a href="m26-graphs.html">M26</a> and <a href="m31-graph-algorithms.html">M31</a>.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="monotonic">
+    <h2>Application: the monotonic stack</h2>
+    <p>Problem: for each day's temperature, how many days until a warmer day? Or more generally, for each element, find
+      the <strong>next greater element</strong> to its right. The brute force checks every later element: O(n²).</p>
+    <p>A <strong>monotonic stack</strong> solves it in O(n). Keep a stack of <em>indexes</em> whose answers are still
+      unknown, with their values in decreasing order from bottom to top. When a new value arrives, it is the answer for every
+      smaller value on top of the stack: pop them and record it. Then push the new index.</p>
+    <div class="tracer" data-title="Trace next-greater-element on [2, 1, 2, 4, 3]">
+<textarea>
+nums = [2, 1, 2, 4, 3]
+answer = [-1] * len(nums)
+stack = []
+for i, x in enumerate(nums):
+    while stack and nums[stack[-1]] < x:
+        answer[stack.pop()] = x
+    stack.append(i)
+</textarea>
+    </div>
+    <p>Why is this O(n) when there is a loop inside a loop? Each index is pushed once and popped at most once, so the inner
+      <code>while</code> runs at most <em>n</em> times <em>in total</em> across the whole outer loop. That is an amortized
+      argument, just like the dynamic array in <a href="m19-complexity.html#amortized">M19</a>.</p>
+    <p>Monotonic stacks solve a whole family of problems: daily temperatures, stock span, largest rectangle in a histogram,
+      trapping rain water, and removing digits to make the smallest number.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> "the next element bigger/smaller than this one" is a monotonic
+      stack. Every element is pushed and popped at most once, so the total cost is O(n).</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls and choosing the right tool</h2>
+    <ul>
+      <li><strong><code>list.pop(0)</code> as a queue</strong>: O(n) per dequeue. Use <code>deque.popleft()</code>.</li>
+      <li><strong>Popping an empty stack</strong>: <code>[].pop()</code> raises <code>IndexError</code>; check first or catch it,
+        and give your own classes a clear message.</li>
+      <li><strong>Operand order in RPN</strong>: the first pop is the <em>right</em> operand. <code>5 2 -</code> is 3, not −3.</li>
+      <li><strong>Indexing a deque in the middle</strong> is O(n). If you need random access, you want a list.</li>
+      <li><strong>Forgetting <code>maxlen</code> drops silently</strong>: data falls off the other end with no error.</li>
+      <li><strong>Sharing a plain list between threads</strong> for producer/consumer work: use <code>queue.Queue</code>.</li>
+    </ul>
+    <table>
+      <thead><tr><th>Need</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td>Stack in one thread</td><td><code>list</code> (<code>append</code>/<code>pop</code>)</td></tr>
+        <tr><td>Queue or deque in one thread</td><td><code>collections.deque</code></td></tr>
+        <tr><td>Last <em>n</em> items</td><td><code>deque(maxlen=n)</code></td></tr>
+        <tr><td>Queue between threads</td><td><code>queue.Queue</code> (or <code>SimpleQueue</code>)</td></tr>
+        <tr><td>Queue between coroutines</td><td><code>asyncio.Queue</code></td></tr>
+        <tr><td>Smallest-first</td><td><code>heapq</code> or <code>queue.PriorityQueue</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m22-e1" data-title="Balanced brackets">
+      <div class="exercise-prompt">
+        <p>Write <code>is_balanced(text)</code> that returns <code>True</code> if every <code>()</code>, <code>[]</code>, and
+          <code>{}</code> in <code>text</code> is properly matched and nested. Ignore all other characters.</p>
+      </div>
+<textarea class="starter">
+def is_balanced(text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_balanced():
+    for s in ["", "()", "([]{})", "{[()()]}", "f(a[1], {b: 2})"]:
+        assert is_balanced(s) is True, f"{s!r} should be balanced"
+
+def test_wrong_order():
+    assert is_balanced("([)]") is False, "'([)]' closes in the wrong order"
+
+def test_unclosed_and_extra():
+    assert is_balanced("((") is False, "unclosed openers are unbalanced"
+    assert is_balanced("())") is False, "an extra closer is unbalanced"
+    assert is_balanced(")(") is False, "a closer before its opener is unbalanced"
+
+def test_long_input():
+    assert is_balanced("([{" * 10000 + "}])" * 10000) is True, "deep nesting should work (no recursion)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Map each closer to its opener:
+        <code>{")": "(", "]": "[", "}": "{"}</code>. Push openers; on a closer, the stack must be non-empty and pop the
+        matching opener. Return <code>not stack</code> at the end.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def is_balanced(text):
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack = []
+    for ch in text:
+        if ch in "([{":
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack.pop() != pairs[ch]:
+                return False
+    return not stack</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m22-e2" data-title="A growable circular-buffer queue">
+      <div class="exercise-prompt">
+        <p>Complete <code>ArrayQueue</code>: <code>enqueue</code>, <code>dequeue</code> (raise <code>IndexError</code> when empty),
+          <code>peek</code>, <code>__len__</code>, and <code>__iter__</code> (front to back). Use only index assignments on
+          <code>self._data</code>. When full, <code>_grow</code> doubles the capacity by copying items <em>in queue order</em> to
+          the start of a new array and resetting <code>head</code> to 0.</p>
+      </div>
+<textarea class="starter">
+class ArrayQueue:
+    def __init__(self, capacity=4):
+        self._data = [None] * capacity
+        self._head = 0
+        self._size = 0
+
+    def __len__(self):
+        return self._size
+
+    def _grow(self):
+        ...
+
+    def enqueue(self, item):
+        ...
+
+    def dequeue(self):
+        ...
+
+    def peek(self):
+        ...
+
+    def __iter__(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_fifo_order():
+    q = ArrayQueue()
+    for x in "abc":
+        q.enqueue(x)
+    assert [q.dequeue(), q.dequeue()] == ["a", "b"], "dequeue returns items first in, first out"
+    assert q.peek() == "c" and len(q) == 1, "peek shows the front without removing it"
+
+def test_wraps_without_growing():
+    q = ArrayQueue(4)
+    for i in range(3):
+        q.enqueue(i)
+    q.dequeue(); q.dequeue()
+    for i in range(3, 6):
+        q.enqueue(i)
+    assert len(q._data) == 4, "4 items fit in capacity 4 by wrapping; no growth needed"
+    assert list(q) == [2, 3, 4, 5], f"iteration should be front to back, got {list(q)}"
+
+def test_grow_preserves_order_after_wrap():
+    q = ArrayQueue(4)
+    for i in range(4):
+        q.enqueue(i)
+    q.dequeue(); q.dequeue()
+    q.enqueue(4); q.enqueue(5)
+    q.enqueue(6)
+    assert len(q._data) == 8, "a full queue should double its capacity"
+    assert q._head == 0, "after growing, head should be reset to 0"
+    assert [q.dequeue() for _ in range(5)] == [2, 3, 4, 5, 6], "order must survive growth across the wrap point"
+
+def test_empty_errors():
+    q = ArrayQueue()
+    for op in (q.dequeue, q.peek):
+        try:
+            op()
+        except IndexError:
+            pass
+        else:
+            raise AssertionError(f"{op.__name__} on an empty queue should raise IndexError")
+
+def test_releases_references():
+    q = ArrayQueue(4)
+    q.enqueue("x")
+    q.dequeue()
+    assert all(slot is None for slot in q._data), "dequeue should reset the vacated slot to None"
+
+def test_matches_deque():
+    import random
+    from collections import deque
+    rng = random.Random(3)
+    q, ref = ArrayQueue(2), deque()
+    for step in range(2000):
+        if ref and rng.random() < 0.45:
+            assert q.dequeue() == ref.popleft(), "dequeue disagrees with deque"
+        else:
+            q.enqueue(step)
+            ref.append(step)
+    assert list(q) == list(ref) and len(q) == len(ref), "final contents should match a deque"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Front-to-back slot <code>i</code> is
+        <code>self._data[(self._head + i) % len(self._data)]</code>. Use that in <code>__iter__</code> and in
+        <code>_grow</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class ArrayQueue:
+    def __init__(self, capacity=4):
+        self._data = [None] * capacity
+        self._head = 0
+        self._size = 0
+
+    def __len__(self):
+        return self._size
+
+    def _grow(self):
+        old = self._data
+        new = [None] * (2 * len(old))
+        for i in range(self._size):
+            new[i] = old[(self._head + i) % len(old)]
+        self._data = new
+        self._head = 0
+
+    def enqueue(self, item):
+        if self._size == len(self._data):
+            self._grow()
+        self._data[(self._head + self._size) % len(self._data)] = item
+        self._size += 1
+
+    def dequeue(self):
+        if self._size == 0:
+            raise IndexError("dequeue from empty queue")
+        item = self._data[self._head]
+        self._data[self._head] = None
+        self._head = (self._head + 1) % len(self._data)
+        self._size -= 1
+        return item
+
+    def peek(self):
+        if self._size == 0:
+            raise IndexError("peek at empty queue")
+        return self._data[self._head]
+
+    def __iter__(self):
+        for i in range(self._size):
+            yield self._data[(self._head + i) % len(self._data)]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m22-e3" data-title="Evaluate RPN">
+      <div class="exercise-prompt">
+        <p>Write <code>eval_rpn(expr)</code> for a space-separated postfix expression with numbers (ints or decimals, possibly
+          negative like <code>-3</code>) and the operators <code>+ - * /</code>. Return a <code>float</code>. Raise
+          <code>ValueError</code> if an operator lacks operands or if more than one value remains.</p>
+      </div>
+<textarea class="starter">
+def eval_rpn(expr):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_simple():
+    assert eval_rpn("3 4 +") == 7.0, "3 4 + is 7"
+    assert eval_rpn("3 4 2 * +") == 11.0, "3 4 2 * + is 3 + 4*2 = 11"
+
+def test_operand_order():
+    assert eval_rpn("5 2 -") == 3.0, "5 2 - is 5 - 2 (first pop is the right operand)"
+    assert eval_rpn("8 2 /") == 4.0, "8 2 / is 8 / 2"
+
+def test_complex_and_negative():
+    assert eval_rpn("5 1 2 + 4 * + 3 -") == 14.0, "5 + (1 + 2) * 4 - 3 = 14"
+    assert eval_rpn("-3 2.5 *") == -7.5, "negative and decimal numbers are operands"
+
+def test_errors():
+    for bad in ["+", "1 +", "1 2", ""]:
+        try:
+            eval_rpn(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad!r} is malformed and should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check the token against the operator table first (so <code>-3</code>,
+        which is not exactly <code>"-"</code>, is treated as a number). Before popping, check <code>len(stack) &gt;= 2</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import operator
+
+OPS = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.truediv}
+
+def eval_rpn(expr):
+    stack = []
+    for tok in expr.split():
+        if tok in OPS:
+            if len(stack) &lt; 2:
+                raise ValueError(f"operator {tok!r} needs two operands")
+            right = stack.pop()
+            left = stack.pop()
+            stack.append(OPS[tok](left, right))
+        else:
+            stack.append(float(tok))
+    if len(stack) != 1:
+        raise ValueError("malformed expression")
+    return stack[0]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m22-e4" data-title="Next greater element (monotonic stack)">
+      <div class="exercise-prompt">
+        <p>Write <code>next_greater(nums)</code> returning a list where position <code>i</code> holds the first value to the
+          right of <code>nums[i]</code> that is strictly greater, or <code>-1</code> if none. It must run in O(n): the tests
+          include 200,000 descending numbers, which would take minutes with the O(n²) approach.</p>
+      </div>
+<textarea class="starter">
+def next_greater(nums):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_examples():
+    assert next_greater([2, 1, 2, 4, 3]) == [4, 2, 4, -1, -1], "example from the lesson"
+    assert next_greater([]) == [], "empty input gives empty output"
+    assert next_greater([5, 5, 5]) == [-1, -1, -1], "equal values are not strictly greater"
+
+def test_ascending():
+    assert next_greater([1, 2, 3]) == [2, 3, -1], "each element's next greater is its neighbour"
+
+def test_linear_time():
+    nums = list(range(200_000, 0, -1)) + [10**9]
+    t0 = time.perf_counter()
+    result = next_greater(nums)
+    elapsed = time.perf_counter() - t0
+    assert result[:3] == [10**9] * 3 and result[-1] == -1, "every element's answer is the final huge value"
+    assert elapsed < 2.0, f"took {elapsed:.2f}s; use a monotonic stack of indexes"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a stack of indexes. For each <code>i, x</code>: while the stack is
+        non-empty and <code>nums[stack[-1]] &lt; x</code>, pop an index and set its answer to <code>x</code>. Then push <code>i</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def next_greater(nums):
+    answer = [-1] * len(nums)
+    stack = []
+    for i, x in enumerate(nums):
+        while stack and nums[stack[-1]] &lt; x:
+            answer[stack.pop()] = x
+        stack.append(i)
+    return answer</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m22-e5" data-title="Shunting-yard: infix to postfix">
+      <div class="exercise-prompt">
+        <p>Write <code>to_postfix(tokens)</code> that takes a list of infix tokens (numbers as strings, the operators
+          <code>+ - * / ^</code>, and parentheses) and returns the postfix token list. <code>^</code> is right-associative with
+          the highest precedence; the others are left-associative. Raise <code>ValueError</code> for mismatched parentheses.</p>
+      </div>
+<textarea class="starter">
+PREC = {"+": 1, "-": 1, "*": 2, "/": 2, "^": 3}
+RIGHT_ASSOC = {"^"}
+
+def to_postfix(tokens):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_precedence():
+    assert to_postfix("3 + 4 * 2".split()) == ["3", "4", "2", "*", "+"], "* binds tighter than +"
+    assert to_postfix("3 * 4 + 2".split()) == ["3", "4", "*", "2", "+"], "* is applied before +"
+
+def test_left_associative():
+    assert to_postfix("8 - 3 - 2".split()) == ["8", "3", "-", "2", "-"], "8 - 3 - 2 means (8 - 3) - 2"
+
+def test_right_associative_power():
+    assert to_postfix("2 ^ 3 ^ 2".split()) == ["2", "3", "2", "^", "^"], "2 ^ 3 ^ 2 means 2 ^ (3 ^ 2)"
+
+def test_parentheses():
+    assert to_postfix("( 3 + 4 ) * 2".split()) == ["3", "4", "+", "2", "*"], "parentheses override precedence"
+    toks = "3 + 4 * 2 / ( 1 - 5 ) ^ 2 ^ 3".split()
+    assert to_postfix(toks) == ["3", "4", "2", "*", "1", "5", "-", "2", "3", "^", "^", "/", "+"], "Wikipedia's classic example"
+
+def test_mismatched():
+    for bad in ["( 1 + 2", "1 + 2 )", ") 1 ("]:
+        try:
+            to_postfix(bad.split())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad!r} has mismatched parentheses and should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For an operator <code>o</code>, pop while the top is an operator and
+        (<code>PREC[top] &gt; PREC[o]</code> or (<code>PREC[top] == PREC[o]</code> and <code>o</code> is not
+        right-associative)). On <code>)</code>, pop until <code>(</code>; if the stack empties first, raise. At the end, any
+        <code>(</code> left on the stack is an error.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">PREC = {"+": 1, "-": 1, "*": 2, "/": 2, "^": 3}
+RIGHT_ASSOC = {"^"}
+
+def to_postfix(tokens):
+    output = []
+    ops = []
+    for tok in tokens:
+        if tok in PREC:
+            while ops and ops[-1] in PREC and (
+                PREC[ops[-1]] &gt; PREC[tok] or (PREC[ops[-1]] == PREC[tok] and tok not in RIGHT_ASSOC)
+            ):
+                output.append(ops.pop())
+            ops.append(tok)
+        elif tok == "(":
+            ops.append(tok)
+        elif tok == ")":
+            while ops and ops[-1] != "(":
+                output.append(ops.pop())
+            if not ops:
+                raise ValueError("unmatched ')'")
+            ops.pop()
+        else:
+            output.append(tok)
+    while ops:
+        top = ops.pop()
+        if top == "(":
+            raise ValueError("unmatched '('")
+        output.append(top)
+    return output</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an expression calculator</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">calc: infix → postfix → evaluate</span></div>
+      <div class="widget-body">
+        <p>Combine everything into a command-line calculator. It reads an expression like
+          <code>-(2 + 3.5) * 4 ^ 2 / 7</code>, tokenises it, converts it to postfix with shunting-yard, evaluates the postfix
+          with a stack, and prints the result. This is a miniature version of what every interpreter does.</p>
+        <pre class="mermaid">
+flowchart LR
+  A["text: 2*(3+4)"] --> B[tokenize]
+  B --> C["tokens: 2 * ( 3 + 4 )"]
+  C --> D[shunting-yard]
+  D --> E["postfix: 2 3 4 + *"]
+  E --> F[stack evaluator]
+  F --> G[14]
+        </pre>
+        <h4>Set up</h4>
+        <pre data-label="Terminal"><code class="language-bash">pixi init calc
+cd calc
+pixi add python=3.14 pytest
+pixi run python calc.py "2 * (3 + 4)"
+pixi run python -m pytest -q</code></pre>
+        <h4>Spec: <code>calc.py</code></h4>
+        <ul>
+          <li><code>tokenize(text) -&gt; list[str]</code>: numbers (including decimals like <code>3.5</code> and <code>.5</code>),
+            operators, parentheses; whitespace is optional. Unknown characters raise <code>ValueError</code> naming the position.</li>
+          <li><strong>Unary minus</strong>: a <code>-</code> at the start, after another operator, or after <code>(</code> is unary.
+            Emit it as a distinct token (for example <code>"neg"</code>) with higher precedence than <code>*</code> but lower than <code>^</code>,
+            so <code>-2 ^ 2</code> is −4, as in Python.</li>
+          <li><code>to_postfix(tokens)</code>: shunting-yard with right-associative <code>^</code> and unary minus.</li>
+          <li><code>evaluate(postfix) -&gt; float</code>: a stack evaluator; division by zero raises a clear error.</li>
+          <li><code>calculate(text)</code> chains the three; <code>main()</code> reads <code>sys.argv</code> or runs a REPL loop when no argument is given.</li>
+          <li>Tests for each stage separately, plus end-to-end tests compared against Python's own arithmetic.</li>
+        </ul>
+        <ul class="checklist" data-id="m22-mini">
+          <li>Tokenizer handles decimals, optional spaces, and reports bad characters with their position</li>
+          <li>Precedence and associativity match Python (<code>2 ^ 3 ^ 2 == 512</code>, <code>8 - 3 - 2 == 3</code>)</li>
+          <li>Unary minus works at the start, after operators, and after <code>(</code></li>
+          <li>Mismatched parentheses and missing operands raise <code>ValueError</code> with helpful messages</li>
+          <li>Evaluation uses an explicit stack (no <code>eval()</code>!)</li>
+          <li>At least 15 tests pass with <code>pixi run python -m pytest -q</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Variables: <code>x = 3</code> then <code>x * 2</code>, stored in a dict.</li>
+          <li>Functions like <code>sqrt(16)</code> and <code>max(1, 2)</code> (shunting-yard extends to function tokens and commas).</li>
+          <li>Build an expression <em>tree</em> from the postfix instead of evaluating directly, and pretty-print it.</li>
+          <li>Property-based tests with Hypothesis comparing your results with Python on random expressions (<a href="m17-testing.html">M17</a>).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m22-quiz">
+<script type="application/json">
+{"title": "Stacks, queues & deques quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which ordering does a stack follow?", "options": ["FIFO", "LIFO", "Sorted", "Random"], "answer": 1, "explanation": "<p>Last in, first out: the most recently pushed item is popped first.</p>"},
+  {"type": "single", "prompt": "Why is <code>list.pop(0)</code> a poor way to dequeue?", "options": ["It raises on empty lists", "It is O(n): every remaining item shifts left", "It is not thread-safe", "It returns the last item"], "answer": 1, "explanation": "<p>Lists are contiguous arrays; removing the front shifts the rest. Use <code>deque.popleft()</code>, which is O(1).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from collections import deque\nd = deque([1, 2, 3], maxlen=3)\nd.append(4)\nd.appendleft(0)\nprint(list(d))", "answer": "[0, 2, 3]", "explanation": "<p>Appending 4 drops 1 from the left: [2, 3, 4]. Appending 0 on the left drops 4 from the right: [0, 2, 3].</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from collections import deque\nd = deque(\"abcd\")\nd.rotate(1)\nprint(\"\".join(d))", "answer": "dabc", "explanation": "<p><code>rotate(1)</code> moves one item from the right end to the left end.</p>"},
+  {"type": "single", "prompt": "How is CPython's <code>deque</code> implemented?", "options": ["A dynamic array", "A doubly linked list of 64-slot blocks", "A singly linked list of nodes", "A ring buffer that never grows"], "answer": 1, "explanation": "<p>Blocks give O(1) ends without per-item node overhead. Middle indexing walks blocks, so it is O(n).</p>"},
+  {"type": "single", "prompt": "In a circular buffer with <code>head</code>, <code>size</code>, and capacity <code>c</code>, where does the next enqueued item go?", "options": ["<code>head + size</code>", "<code>(head + size) % c</code>", "<code>(head - 1) % c</code>", "<code>size % head</code>"], "answer": 1, "explanation": "<p>The back is size slots after the head, wrapped with modulo so it stays inside the array.</p>"},
+  {"type": "output", "prompt": "What is the value of this RPN expression?", "code": "6 2 3 + -", "answer": "1", "explanation": "<p>Push 6, 2, 3; <code>+</code> gives 5; <code>-</code> pops 5 (right) and 6 (left): 6 − 5 = 1.</p>"},
+  {"type": "single", "prompt": "What is the postfix form of <code>(1 + 2) * 3</code>?", "options": ["<code>1 2 3 + *</code>", "<code>1 2 + 3 *</code>", "<code>* + 1 2 3</code>", "<code>1 + 2 3 *</code>"], "answer": 1, "explanation": "<p>The parenthesised sum is computed first (<code>1 2 +</code>), then multiplied by 3.</p>"},
+  {"type": "single", "prompt": "In shunting-yard, why does <code>^</code> not pop another <code>^</code> of equal precedence?", "options": ["It is a bug", "<code>^</code> is right-associative: <code>2^3^2</code> means <code>2^(3^2)</code>", "<code>^</code> has the lowest precedence", "Powers are evaluated left to right"], "answer": 1, "explanation": "<p>For right-associative operators only strictly higher precedence pops; for left-associative ones equal precedence pops too.</p>"},
+  {"type": "single", "prompt": "Why is the monotonic-stack next-greater-element algorithm O(n) despite its nested loop?", "options": ["The inner loop runs once", "Each index is pushed once and popped at most once, so the inner loop totals at most n iterations", "Python optimises nested loops", "It isn't; it's O(n²)"], "answer": 1, "explanation": "<p>Amortised reasoning: count total pops across the whole run, not per outer iteration.</p>"},
+  {"type": "multi", "prompt": "Which tools are appropriate for a producer/consumer queue between threads?", "options": ["<code>queue.Queue</code>", "<code>queue.SimpleQueue</code>", "A plain <code>list</code> with <code>pop(0)</code>", "<code>asyncio.Queue</code> (for threads)"], "answer": [0, 1], "explanation": "<p><code>queue.Queue</code> and <code>SimpleQueue</code> are thread-safe with blocking <code>get</code>. A plain list has no blocking and O(n) dequeue; <code>asyncio.Queue</code> is for coroutines in one event loop, not threads.</p>"},
+  {"type": "text", "prompt": "In the two-stack undo/redo design, which stack is cleared when the user makes a new edit?", "answer": ["redo", "the redo stack", "redo stack"], "explanation": "<p>A new edit creates a new branch of history, so the old redo entries no longer apply.</p>"},
+  {"type": "single", "prompt": "Which ADT turns the BFS loop into DFS if you swap it in?", "options": ["Queue", "Stack", "Set", "Heap"], "answer": 1, "explanation": "<p>A queue explores oldest discoveries first (breadth-first); a stack explores the newest first (depth-first).</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>An ADT is a contract; implementations fulfil it with different costs.</li>
+      <li>A stack is LIFO: a list with <code>append</code>/<code>pop</code> is ideal.</li>
+      <li>A queue is FIFO: use <code>deque</code> (<code>append</code>/<code>popleft</code>), never <code>list.pop(0)</code>.</li>
+      <li><code>deque</code> is a doubly linked list of blocks: O(1) ends, O(n) middle; <code>maxlen</code> bounds it; <code>rotate</code> cycles it.</li>
+      <li>A circular buffer is an array plus head and size with modulo indexing.</li>
+      <li>Stacks solve bracket matching, undo/redo, RPN evaluation, shunting-yard conversion, and next-greater problems.</li>
+      <li>Queues drive BFS; <code>queue.Queue</code> coordinates threads.</li>
+    </ul>
+    <div class="flashcards" data-title="Stacks &amp; queues">
+<script type="application/json">
+[{"front": "LIFO vs FIFO", "back": "Stack: last in, first out. Queue: first in, first out."},
+ {"front": "Stack on a list", "back": "Top is the end: <code>append</code> to push, <code>pop()</code> to pop. Both O(1)."},
+ {"front": "Queue in Python", "back": "<code>collections.deque</code>: <code>append</code> and <code>popleft</code>, both O(1)."},
+ {"front": "<code>deque(maxlen=n)</code>", "back": "Keeps the last n items; adding at one end silently drops from the other."},
+ {"front": "<code>deque.rotate(k)</code>", "back": "Moves k items from the right end to the left (negative k: the other way). O(k)."},
+ {"front": "Ring buffer back index", "back": "<code>(head + size) % capacity</code>"},
+ {"front": "Balanced brackets", "back": "Push openers; each closer must match the popped top; stack empty at the end."},
+ {"front": "RPN evaluation", "back": "Push numbers; an operator pops right then left, pushes the result."},
+ {"front": "Shunting-yard", "back": "Dijkstra's infix-to-postfix algorithm using an operator stack with precedence and associativity."},
+ {"front": "Monotonic stack", "back": "Stack of indexes with monotone values; finds next greater/smaller elements in O(n)."},
+ {"front": "<code>queue.Queue</code>", "back": "Thread-safe blocking FIFO with <code>put</code>/<code>get</code>, <code>task_done</code>/<code>join</code>, and (3.13+) <code>shutdown</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/collections.html#collections.deque">collections.deque</a></li>
+      <li><a href="https://docs.python.org/3/library/queue.html">queue: a synchronized queue class</a></li>
+      <li><a href="https://docs.python.org/3/library/dis.html">dis: Python's stack-based bytecode</a></li>
+      <li><a href="https://en.wikipedia.org/wiki/Shunting_yard_algorithm">Shunting yard algorithm (Wikipedia)</a></li>
+      <li>Next: <a href="m23-hash-tables.html">M23 Hash Tables &amp; Sets</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

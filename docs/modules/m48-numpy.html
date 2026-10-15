@@ -1,0 +1,1124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M48 · NumPy Fundamentals · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m48">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 48</p>
+    <h1>NumPy Fundamentals</h1>
+    <p class="lede">NumPy's <code>ndarray</code> is the foundation of the entire scientific Python stack: pandas, SciPy,
+      scikit-learn, matplotlib, and every deep-learning framework speak it. Learn how it is laid out in memory and how to
+      think in whole arrays, and your numerical code becomes shorter, clearer, and often a hundred times faster.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m47-vectors-matrices.html">M47</a>, <a href="m20-arrays.html">M20</a></span></div>
+    <ul class="objectives">
+      <li>Explain how an <code>ndarray</code> differs from a list: one dtype, one contiguous buffer, a shape, and strides</li>
+      <li>Create arrays with <code>array</code>, <code>zeros</code>, <code>ones</code>, <code>arange</code>, <code>linspace</code>, <code>eye</code>, and <code>np.random.default_rng</code></li>
+      <li>Choose dtypes deliberately and recognize integer overflow and float precision limits</li>
+      <li>Reshape arrays, reason about <code>axis</code>, and aggregate along rows or columns</li>
+      <li>Index with slices, boolean masks, and integer arrays, and know which give views and which give copies</li>
+      <li>Apply the broadcasting rules step by step and replace Python loops with vectorized expressions</li>
+      <li>Use <code>@</code>, <code>where</code>, <code>clip</code>, <code>cumsum</code>, <code>argsort</code>, <code>unique</code>, and save/load arrays with <code>.npy</code>/<code>.npz</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="ndarray">
+    <h2>The ndarray: what makes it different from a list</h2>
+    <p>In <a href="m47-vectors-matrices.html">M47</a> you represented vectors as Python lists, and saw that a pure-Python
+      matrix multiply spends nearly all its time on interpreter overhead. A list stores <em>pointers</em> to separate
+      Python objects scattered across memory, and each object carries its own type, reference count, and value. That
+      flexibility (any mix of types, any size) is exactly what makes lists slow for arithmetic.</p>
+    <p>A NumPy <strong>ndarray</strong> ("n-dimensional array") makes three promises instead:</p>
+    <ul>
+      <li><strong>Homogeneous</strong>: every element has the same <strong>dtype</strong> (data type), such as
+        <code>float64</code> (8-byte float) or <code>int32</code> (4-byte integer).</li>
+      <li><strong>Contiguous</strong>: the raw values sit side by side in one block of memory (the <em>buffer</em>), with
+        no per-element Python objects.</li>
+      <li><strong>Typed metadata</strong>: a <strong>shape</strong> (how many elements along each dimension) and
+        <strong>strides</strong> (how many bytes to step to reach the next element along each dimension) describe how to
+        interpret that block.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 230" role="img" aria-label="A list of pointers to scattered float objects versus a contiguous NumPy buffer">
+        <text x="10" y="20" fill="var(--fg)" font-size="13" font-weight="bold">Python list [1.0, 2.0, 3.0, 4.0]</text>
+        <g stroke="var(--border-strong)" fill="var(--bg-sunk)">
+          <rect x="10" y="30" width="44" height="28"/><rect x="54" y="30" width="44" height="28"/><rect x="98" y="30" width="44" height="28"/><rect x="142" y="30" width="44" height="28"/>
+        </g>
+        <g fill="var(--fg-muted)" font-size="11" text-anchor="middle"><text x="32" y="48">ptr</text><text x="76" y="48">ptr</text><text x="120" y="48">ptr</text><text x="164" y="48">ptr</text></g>
+        <g stroke="var(--viz-1)" stroke-width="1.5" fill="none">
+          <path d="M32 58 C 40 90, 60 90, 250 40"/><path d="M76 58 C 90 100, 200 120, 300 95"/><path d="M120 58 C 130 110, 150 120, 230 120"/><path d="M164 58 C 200 80, 330 50, 380 60"/>
+        </g>
+        <g fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--viz-1)">
+          <rect x="250" y="25" width="70" height="26" rx="4"/><rect x="300" y="82" width="70" height="26" rx="4"/><rect x="230" y="108" width="70" height="26" rx="4"/><rect x="380" y="47" width="70" height="26" rx="4"/>
+        </g>
+        <g fill="var(--fg)" font-size="10" text-anchor="middle"><text x="285" y="42">float 1.0</text><text x="335" y="99">float 2.0</text><text x="265" y="125">float 3.0</text><text x="415" y="64">float 4.0</text></g>
+        <text x="250" y="152" fill="var(--fg-muted)" font-size="11">each: type ptr + refcount + value = 24 bytes</text>
+        <text x="10" y="180" fill="var(--fg)" font-size="13" font-weight="bold">np.array([1.0, 2.0, 3.0, 4.0])  dtype=float64, shape=(4,), strides=(8,)</text>
+        <g stroke="var(--border-strong)" fill="var(--viz-2)" fill-opacity="0.3">
+          <rect x="10" y="190" width="70" height="28"/><rect x="80" y="190" width="70" height="28"/><rect x="150" y="190" width="70" height="28"/><rect x="220" y="190" width="70" height="28"/>
+        </g>
+        <g fill="var(--fg)" font-size="12" text-anchor="middle"><text x="45" y="209">1.0</text><text x="115" y="209">2.0</text><text x="185" y="209">3.0</text><text x="255" y="209">4.0</text></g>
+        <text x="300" y="209" fill="var(--fg-muted)" font-size="11">32 bytes, side by side</text>
+      </svg>
+      <figcaption>A list is an array of pointers to boxed objects; an ndarray is one buffer of raw values plus metadata.</figcaption>
+    </figure>
+    <p>Because the type is known once for the whole array and the values are contiguous, NumPy can run its loops in
+      compiled C, use SIMD instructions, and stay friendly to the CPU cache. The price is that every element must be the
+      same type and the size is fixed at creation.</p>
+    <aside class="callout note"><p>The first <code>import numpy</code> in a browser cell downloads NumPy into the page,
+      which takes a few seconds. After that it is cached for the rest of your visit. Locally, add it to a Pixi project
+      with <code>pixi add numpy</code> (from conda-forge) and run scripts with <code>pixi run python</code>.</p></aside>
+
+    <div class="runnable" data-title="Meet the ndarray">
+<textarea>
+import sys
+import numpy as np
+
+nums = [1.0, 2.0, 3.0, 4.0]
+a = np.array(nums)
+print(repr(a))
+print("dtype:", a.dtype, " shape:", a.shape, " ndim:", a.ndim, " size:", a.size)
+print("itemsize:", a.itemsize, "bytes  nbytes:", a.nbytes, " strides:", a.strides)
+
+# Arithmetic is element-wise now
+print("a * 2   =", a * 2)
+print("a + a   =", a + a)
+print("nums * 2 =", nums * 2, "(list repetition!)")
+
+# Memory: a million floats
+big_list = [float(i) for i in range(1_000_000)]
+big_arr = np.arange(1_000_000, dtype=np.float64)
+list_bytes = sys.getsizeof(big_list) + sum(sys.getsizeof(x) for x in big_list)
+print(f"list  ~{list_bytes / 1e6:.1f} MB   array {big_arr.nbytes / 1e6:.1f} MB")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: mixing types forces one dtype" data-predict>
+<textarea>
+import numpy as np
+print(np.array([1, 2.5, 3]))
+print(np.array([1, "two", 3]))
+</textarea>
+    </div>
+    <p>NumPy <em>upcasts</em> to a single type that can hold everything: integers plus a float become floats; anything
+      with a string becomes strings (and arithmetic on that array then fails). Mixed data is a sign you want a pandas
+      DataFrame (<a href="m51-pandas.html">M51</a>), which stores one array per column.</p>
+    <p><strong>Remember:</strong> ndarray = one dtype + one buffer + shape + strides. Operators work element-wise.</p>
+  </section>
+
+  <section class="lesson-section" id="creating">
+    <h2>Creating arrays</h2>
+    <p>You rarely type arrays out by hand. These constructors cover most needs:</p>
+    <table>
+      <thead><tr><th>Call</th><th>Result</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>np.array(seq)</code></td><td>array from (nested) lists</td><td>infers dtype; pass <code>dtype=</code> to choose</td></tr>
+        <tr><td><code>np.zeros((2, 3))</code>, <code>np.ones(5)</code>, <code>np.full((2, 2), 7)</code></td><td>filled arrays</td><td>default dtype <code>float64</code>; shape as a tuple</td></tr>
+        <tr><td><code>np.arange(0, 10, 2)</code></td><td><code>[0 2 4 6 8]</code></td><td>like <code>range</code>; stop excluded</td></tr>
+        <tr><td><code>np.linspace(0, 1, 5)</code></td><td><code>[0. .25 .5 .75 1.]</code></td><td><em>count</em> of points; stop included. Prefer for floats</td></tr>
+        <tr><td><code>np.eye(3)</code></td><td>3 × 3 identity</td><td>from M47</td></tr>
+        <tr><td><code>np.empty((1000,))</code></td><td>uninitialized</td><td>fast, contains garbage; fill it before reading</td></tr>
+        <tr><td><code>np.zeros_like(a)</code></td><td>same shape and dtype as <code>a</code></td><td>also <code>ones_like</code>, <code>full_like</code></td></tr>
+        <tr><td><code>rng = np.random.default_rng(42)</code></td><td>a random Generator</td><td><code>rng.random</code>, <code>rng.integers</code>, <code>rng.normal</code></td></tr>
+      </tbody>
+    </table>
+    <aside class="callout warn"><p><code>np.arange</code> with float steps is unreliable: <code>np.arange(0, 1, 0.1)</code>
+      may or may not include a value extremely close to 1 because of rounding. When you want "N evenly spaced floats from a
+      to b", always use <code>np.linspace(a, b, N)</code>.</p></aside>
+    <div class="runnable" data-title="Array constructors">
+<textarea>
+import numpy as np
+
+print(np.zeros((2, 3)))
+print(np.full((2, 2), 7))
+print(np.arange(0, 10, 2))
+print(np.linspace(0, 1, 5))
+print(np.eye(3, dtype=int))
+print(np.array([[1, 2], [3, 4]], dtype=np.float32))
+
+rng = np.random.default_rng(seed=42)
+print(rng.integers(1, 7, size=10))          # ten dice rolls
+print(rng.normal(loc=0, scale=1, size=(2, 3)).round(3))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> shapes are tuples; <code>linspace</code> for float ranges; <code>default_rng(seed)</code>
+      for random numbers.</p>
+  </section>
+
+  <section class="lesson-section" id="dtypes">
+    <h2>dtypes, overflow, and precision</h2>
+    <p>A <strong>dtype</strong> fixes how many bytes each element uses and how those bits are read. Common ones:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Integers</h4><p><code>int8</code> (-128…127), <code>int16</code>, <code>int32</code>
+        (about ±2.1 billion), <code>int64</code> (about ±9.2 × 10¹⁸); unsigned <code>uint8</code> (0…255, used for image
+        pixels).</p></div>
+      <div class="card"><h4>Floats</h4><p><code>float64</code> (default, about 15–16 significant digits),
+        <code>float32</code> (about 7 digits, half the memory; common in ML and GPUs), <code>float16</code>.</p></div>
+      <div class="card"><h4>Others</h4><p><code>bool</code>, <code>complex128</code>, fixed-width strings like
+        <code>&lt;U5</code>, <code>datetime64</code>, and <code>object</code> (pointers to Python objects, which
+        throws away the speed).</p></div>
+    </div>
+    <p>Python's own <code>int</code> never overflows: it grows as needed. NumPy integers are fixed-width hardware
+      integers, so they <strong>wrap around</strong> silently when an array operation exceeds their range, exactly like
+      a car odometer rolling over. Floats don't wrap; they lose precision, and they overflow to <code>inf</code>.</p>
+    <div class="viz" data-viz="bits" data-config='{"value": 127, "width": 8, "mode": "int"}'></div>
+    <div class="runnable" data-title="Predict: an 8-bit odometer" data-predict>
+<textarea>
+import numpy as np
+a = np.array([100, 120, 127], dtype=np.int8)
+print(a + 10)
+</textarea>
+    </div>
+    <div class="runnable" data-title="dtype conversions and limits">
+<textarea>
+import numpy as np
+
+print(np.iinfo(np.int32))
+print("float32 digits:", np.finfo(np.float32).precision, " float64 digits:", np.finfo(np.float64).precision)
+
+pixels = np.array([200, 100, 50], dtype=np.uint8)
+print("uint8 sum wraps:", pixels + pixels)                  # 400 -> 144
+print("convert first:", pixels.astype(np.int16) + pixels)   # safe
+print("sum() widens for you:", pixels.sum())                # reductions use a bigger accumulator
+
+x = np.float32(16_777_216)          # 2**24
+print("float32 2**24 + 1 =", x + np.float32(1))   # cannot represent the +1
+print("float64 overflow:", np.float64(1e308) * 10)   # NumPy also emits a RuntimeWarning
+
+f = np.array([1.7, -1.7, 2.5])
+print("astype(int) truncates toward zero:", f.astype(int))
+print("round first:", np.round(f), "(round half to even)")
+</textarea>
+    </div>
+    <aside class="callout note"><p>The default integer dtype is the platform's pointer size: <code>int64</code> on
+      64-bit Linux, macOS, and (since NumPy 2) Windows, but <code>int32</code> in the 32-bit WebAssembly build that runs
+      these browser cells. Pass <code>dtype=np.int64</code> when the width matters.</p></aside>
+    <p><strong>Remember:</strong> NumPy ints wrap silently on overflow; floats round. Pick the dtype on purpose and
+      convert with <code>astype</code> before arithmetic that might exceed the range.</p>
+  </section>
+
+  <section class="lesson-section" id="shape-axis">
+    <h2>Shape, reshape, and axis</h2>
+    <p>The <strong>shape</strong> is a tuple with one entry per dimension: <code>(5,)</code> is a 1-D array of 5
+      elements, <code>(3, 4)</code> is 3 rows by 4 columns, <code>(10, 28, 28)</code> could be ten 28 × 28 grayscale
+      images. <code>ndim</code> is the length of the shape. <code>reshape</code> reinterprets the same elements in a new
+      shape, as long as the total count is unchanged; pass <code>-1</code> for one dimension and NumPy computes it.</p>
+    <p>Many functions take an <strong>axis</strong> argument. The rule that never fails: <em>axis=k is the dimension
+      that disappears</em>. For a 2-D array, <code>sum(axis=0)</code> collapses the rows (axis 0), going
+      <em>down</em> each column and leaving one result per column; <code>sum(axis=1)</code> collapses the columns,
+      going <em>across</em> each row and leaving one result per row.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 200" role="img" aria-label="axis=0 sums down columns, axis=1 sums across rows">
+        <defs>
+          <marker id="m48-down" viewBox="0 0 10 10" refX="5" refY="9" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-1)"/></marker>
+          <marker id="m48-right" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-2)"/></marker>
+        </defs>
+        <g font-size="14" text-anchor="middle" fill="var(--fg)">
+          <g stroke="var(--border-strong)" fill="var(--bg-sunk)">
+            <rect x="40" y="40" width="40" height="30"/><rect x="80" y="40" width="40" height="30"/><rect x="120" y="40" width="40" height="30"/>
+            <rect x="40" y="70" width="40" height="30"/><rect x="80" y="70" width="40" height="30"/><rect x="120" y="70" width="40" height="30"/>
+          </g>
+          <text x="60" y="60">1</text><text x="100" y="60">2</text><text x="140" y="60">3</text>
+          <text x="60" y="90">4</text><text x="100" y="90">5</text><text x="140" y="90">6</text>
+          <g stroke="var(--viz-1)" stroke-width="2.5"><line x1="60" y1="30" x2="60" y2="118" marker-end="url(#m48-down)"/><line x1="100" y1="30" x2="100" y2="118" marker-end="url(#m48-down)"/><line x1="140" y1="30" x2="140" y2="118" marker-end="url(#m48-down)"/></g>
+          <g fill="var(--viz-1)" font-weight="bold"><text x="60" y="142">5</text><text x="100" y="142">7</text><text x="140" y="142">9</text></g>
+          <text x="100" y="170" font-size="12">a.sum(axis=0) → shape (3,)</text>
+          <text x="100" y="22" font-size="12" fill="var(--fg-muted)">axis 0 runs down</text>
+        </g>
+        <g font-size="14" text-anchor="middle" fill="var(--fg)" transform="translate(230,0)">
+          <g stroke="var(--border-strong)" fill="var(--bg-sunk)">
+            <rect x="20" y="40" width="40" height="30"/><rect x="60" y="40" width="40" height="30"/><rect x="100" y="40" width="40" height="30"/>
+            <rect x="20" y="70" width="40" height="30"/><rect x="60" y="70" width="40" height="30"/><rect x="100" y="70" width="40" height="30"/>
+          </g>
+          <text x="40" y="60">1</text><text x="80" y="60">2</text><text x="120" y="60">3</text>
+          <text x="40" y="90">4</text><text x="80" y="90">5</text><text x="120" y="90">6</text>
+          <g stroke="var(--viz-2)" stroke-width="2.5"><line x1="10" y1="50" x2="152" y2="50" marker-end="url(#m48-right)"/><line x1="10" y1="80" x2="152" y2="80" marker-end="url(#m48-right)"/></g>
+          <g fill="var(--viz-2)" font-weight="bold"><text x="175" y="60">6</text><text x="175" y="90">15</text></g>
+          <text x="90" y="140" font-size="12">a.sum(axis=1) → shape (2,)</text>
+          <text x="80" y="22" font-size="12" fill="var(--fg-muted)">axis 1 runs across</text>
+        </g>
+      </svg>
+      <figcaption>The axis you name is the one that gets collapsed. For shape (2, 3): axis=0 leaves (3,), axis=1 leaves (2,).</figcaption>
+    </figure>
+    <div class="runnable" data-title="reshape and axis">
+<textarea>
+import numpy as np
+
+a = np.arange(1, 7)
+print(a, a.shape)
+m = a.reshape(2, 3)
+print(m)
+print("reshape(3, -1):\n", a.reshape(3, -1))
+print("sum all:", m.sum(), " axis=0:", m.sum(axis=0), " axis=1:", m.sum(axis=1))
+print("keepdims:", m.sum(axis=1, keepdims=True).shape)
+print("mean of each column:", m.mean(axis=0))
+
+images = np.arange(2 * 3 * 4).reshape(2, 3, 4)    # 2 images, 3 rows, 4 cols
+print("per-image max:", images.max(axis=(1, 2)))
+print("flatten:", m.ravel(), "  transpose shape:", m.T.shape)
+print("add a new axis:", a[:, np.newaxis].shape, a[np.newaxis, :].shape)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: which axis disappears?" data-predict>
+<textarea>
+import numpy as np
+x = np.ones((4, 5, 6))
+print(x.sum(axis=1).shape)
+print(x.mean(axis=(0, 2)).shape)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>axis=k</code> is the dimension that vanishes. <code>keepdims=True</code> keeps it
+      as size 1, which is handy for broadcasting the result back.</p>
+  </section>
+
+  <section class="lesson-section" id="indexing">
+    <h2>Indexing: basic, slicing, boolean masks, fancy</h2>
+    <p>NumPy indexing extends list indexing to many dimensions, separated by commas inside one pair of brackets:
+      <code>m[i, j]</code> rather than <code>m[i][j]</code>.</p>
+    <ul>
+      <li><strong>Basic</strong>: <code>m[1, 2]</code> is one element; <code>m[1]</code> (or <code>m[1, :]</code>) is
+        row 1; <code>m[:, 2]</code> is column 2; negative indices count from the end.</li>
+      <li><strong>Slicing</strong>: <code>start:stop:step</code> in each dimension, e.g. <code>m[::2, 1:]</code>.
+        Slices return <em>views</em> (next section).</li>
+      <li><strong>Boolean mask</strong>: an array of <code>True</code>/<code>False</code> with the same shape selects the
+        elements where it is <code>True</code>: <code>a[a &gt; 0]</code>. Combine conditions with <code>&amp;</code>,
+        <code>|</code>, <code>~</code>, and parentheses (not <code>and</code>/<code>or</code>).</li>
+      <li><strong>Fancy (integer-array) indexing</strong>: a list or array of indices picks those positions, in that
+        order, possibly repeated: <code>a[[3, 0, 0]]</code>.</li>
+    </ul>
+    <div class="runnable" data-title="All four kinds of indexing">
+<textarea>
+import numpy as np
+
+m = np.arange(1, 13).reshape(3, 4)
+print(m)
+print("m[1, 2]   =", m[1, 2])
+print("row 1     =", m[1])
+print("column 2  =", m[:, 2])
+print("m[::2, 1:]=\n", m[::2, 1:])
+
+temps = np.array([12.5, 18.0, 25.3, 31.1, 9.8, 22.4])
+hot = temps > 20
+print("mask:", hot)
+print("hot days:", temps[hot], " count:", hot.sum())
+print("mild:", temps[(temps > 10) & (temps < 25)])
+temps[temps < 10] = 10           # assign through a mask
+print("floored:", temps)
+
+print("fancy:", temps[[5, 0, 0]])
+print("rows 0 and 2:\n", m[[0, 2]])
+print("corners:", m[[0, 0, -1, -1], [0, -1, 0, -1]])   # paired (row, col) indices
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: and vs &amp;" data-predict>
+<textarea>
+import numpy as np
+a = np.array([1, 5, 8, 12])
+print(a[(a > 2) & (a < 10)])
+try:
+    print(a[a > 2 and a < 10])
+except ValueError as e:
+    print("ValueError")
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>a &gt; 2 and a &lt; 10</code> asks Python for the truth value of a whole array,
+      which is ambiguous, so NumPy raises <code>ValueError: The truth value of an array ... is ambiguous</code>. Use
+      <code>&amp;</code> and wrap each comparison in parentheses, because <code>&amp;</code> binds tighter than
+      <code>&gt;</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>m[i, j]</code>, slices per axis, masks for "where condition", integer arrays for
+      "these positions".</p>
+  </section>
+
+  <section class="lesson-section" id="views">
+    <h2>Views, copies, and strides</h2>
+    <p>A <strong>view</strong> is a new array object that shares the same buffer as the original, with different shape or
+      strides. Basic slicing, <code>reshape</code> (when possible), <code>.T</code>, and <code>ravel</code> (when possible)
+      return views: no data is copied, so they are instant even for huge arrays, but <em>writing to a view changes the
+      original</em>. Boolean and fancy indexing always return <strong>copies</strong>, because the selected elements
+      generally can't be described by a regular stride pattern.</p>
+    <p>This is the opposite of lists, where <code>lst[1:3]</code> makes a copy. It surprises everyone once.</p>
+    <h3>Strides explained</h3>
+    <p>Strides are the byte steps along each axis. For a <code>(3, 4)</code> array of 8-byte floats in row-major order,
+      moving one column right is 8 bytes and moving one row down is 4 × 8 = 32 bytes: strides <code>(32, 8)</code>. The
+      transpose just swaps them to <code>(8, 32)</code>, which is why <code>.T</code> is free. Taking every other column,
+      <code>m[:, ::2]</code>, doubles the column stride to 16. The element at <code>[i, j]</code> lives at byte offset
+      <code>i·stride₀ + j·stride₁</code>: exactly the row-major formula from M47, generalized.</p>
+    <div class="runnable" data-title="Views share memory; copies don't">
+<textarea>
+import numpy as np
+
+m = np.arange(12, dtype=np.float64).reshape(3, 4).copy()   # .copy() so m owns its buffer
+print("strides:", m.strides, " T.strides:", m.T.strides, " m[:, ::2].strides:", m[:, ::2].strides)
+
+row = m[0]                     # a view
+row[:] = -1
+print(m)
+print("shares memory (slice):", np.shares_memory(m, m[1:, ::2]))
+print("shares memory (mask): ", np.shares_memory(m, m[m > 5]))
+print("shares memory (fancy):", np.shares_memory(m, m[[0, 2]]))
+
+safe = m[0].copy()             # explicit copy
+safe[:] = 99
+print("after editing the copy, m[0] =", m[0])
+print("view.base is m:", m[1:].base is m, "  C-contiguous:", m.flags["C_CONTIGUOUS"], m.T.flags["C_CONTIGUOUS"])
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: did the original change?" data-predict>
+<textarea>
+import numpy as np
+a = np.array([1, 2, 3, 4, 5])
+b = a[1:4]
+c = a[[1, 2, 3]]
+b[0] = 100
+c[1] = 200
+print(a)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>When a function receives an array and must not modify the caller's data, call
+      <code>.copy()</code> at the top. When you want speed on large data, embrace views and in-place operations
+      (<code>a *= 2</code>, <code>np.add(a, b, out=a)</code>). <code>np.shares_memory(a, b)</code> is the reliable test
+      when you're unsure.</p></aside>
+    <p><strong>Remember:</strong> slices and transposes are views (shared, free); masks and fancy indexing are copies.
+      Strides say how to walk the buffer.</p>
+  </section>
+
+  <section class="lesson-section" id="vectorization">
+    <h2>Vectorization, ufuncs, and aggregation</h2>
+    <p><strong>Vectorization</strong> means expressing a computation on whole arrays instead of writing a Python loop
+      over elements. The loop still happens, but inside compiled code. NumPy's element-wise functions are called
+      <strong>ufuncs</strong> (universal functions): arithmetic operators, <code>np.sqrt</code>, <code>np.exp</code>,
+      <code>np.log</code>, <code>np.sin</code>, <code>np.maximum</code>, comparisons, and many more. They work on any
+      shape and return an array of the same shape.</p>
+    <p><strong>Aggregations</strong> (reductions) collapse values: <code>sum</code>, <code>mean</code>,
+      <code>std</code>, <code>min</code>, <code>max</code>, <code>argmin</code>, <code>argmax</code>, <code>any</code>,
+      <code>all</code>, all with an optional <code>axis</code>. NaN-aware versions (<code>np.nanmean</code>,
+      <code>np.nansum</code>) skip missing values.</p>
+    <div class="runnable" data-title="Loop vs vectorized: same answer, very different speed">
+<textarea>
+import math
+import time
+import numpy as np
+
+x = np.linspace(0, 10, 1_000_000)
+xs = x.tolist()
+
+t0 = time.perf_counter()
+loop = [math.sin(v) * math.exp(-v / 5) for v in xs]
+t_loop = time.perf_counter() - t0
+
+t0 = time.perf_counter()
+vec = np.sin(x) * np.exp(-x / 5)
+t_vec = time.perf_counter() - t0
+
+print(f"loop {t_loop:.3f}s  vectorized {t_vec:.4f}s  speedup ~{t_loop / t_vec:.0f}x")
+print("same result:", np.allclose(loop, vec))
+
+scores = np.array([[71, 88, 93], [64, 79, 85], [90, 95, 98], [55, 60, 72]])   # 4 students x 3 tests
+print("class mean per test:", scores.mean(axis=0).round(1))
+print("best student index:", scores.sum(axis=1).argmax())
+print("any score below 60?", (scores < 60).any(), "  all passed test 3?", (scores[:, 2] >= 60).all())
+print("nanmean ignores NaN:", np.nanmean(np.array([1.0, np.nan, 3.0])))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Plot a vectorized function">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.linspace(0, 4 * np.pi, 400)
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(x, np.sin(x), label="sin x")
+ax.plot(x, np.sin(x) * np.exp(-x / 5), label="damped: sin x · e^(-x/5)")
+ax.fill_between(x, 0, np.sin(x), where=np.sin(x) > 0, alpha=0.15)
+ax.legend(); ax.grid(alpha=0.3); ax.set_xlabel("x")
+fig.tight_layout()
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> write the formula once for the whole array. If you find yourself writing
+      <code>for i in range(len(a))</code> over NumPy data, look for a ufunc, a reduction, or broadcasting.</p>
+  </section>
+
+  <section class="lesson-section" id="broadcasting">
+    <h2>Broadcasting, step by step</h2>
+    <p><strong>Broadcasting</strong> is how NumPy combines arrays of different shapes without copying data. It is why
+      <code>a * 2</code> works (the scalar "stretches" to a's shape) and why you can subtract a row of column means from
+      every row of a matrix in one expression. The rules, applied to the two shapes:</p>
+    <ol>
+      <li><strong>Align from the right.</strong> Write the shapes one above the other, right-aligned. If one has fewer
+        dimensions, pad it on the left with 1s.</li>
+      <li><strong>Compare each dimension.</strong> Two sizes are compatible if they are equal, or if one of them is 1.</li>
+      <li><strong>Stretch the 1s.</strong> A size-1 dimension is (virtually) repeated to match the other. The result
+        shape is the maximum in each position. If any pair is incompatible, NumPy raises
+        <code>ValueError: operands could not be broadcast together</code>.</li>
+    </ol>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 170" role="img" aria-label="Broadcasting a (3,1) column against a (4,) row to produce (3,4)">
+        <g font-family="var(--font-mono)" font-size="13" fill="var(--fg)">
+          <text x="10" y="24">A.shape  =     (3, 1)</text>
+          <text x="10" y="44">B.shape  =        (4,)  → pad → (1, 4)</text>
+          <text x="10" y="64">result   =     (3, 4)</text>
+        </g>
+        <g transform="translate(20,85)" font-size="12" text-anchor="middle">
+          <g stroke="var(--border-strong)"><rect x="0" y="0" width="28" height="22" fill="var(--viz-1)" fill-opacity="0.35"/><rect x="0" y="22" width="28" height="22" fill="var(--viz-1)" fill-opacity="0.35"/><rect x="0" y="44" width="28" height="22" fill="var(--viz-1)" fill-opacity="0.35"/></g>
+          <text x="14" y="15" fill="var(--fg)">0</text><text x="14" y="37" fill="var(--fg)">10</text><text x="14" y="59" fill="var(--fg)">20</text>
+          <text x="48" y="37" fill="var(--fg)" font-size="16">+</text>
+          <g stroke="var(--border-strong)" fill="var(--viz-2)" fill-opacity="0.35"><rect x="64" y="0" width="28" height="22"/><rect x="92" y="0" width="28" height="22"/><rect x="120" y="0" width="28" height="22"/><rect x="148" y="0" width="28" height="22"/></g>
+          <text x="78" y="15" fill="var(--fg)">0</text><text x="106" y="15" fill="var(--fg)">1</text><text x="134" y="15" fill="var(--fg)">2</text><text x="162" y="15" fill="var(--fg)">3</text>
+          <text x="196" y="37" fill="var(--fg)" font-size="16">=</text>
+          <g stroke="var(--border-strong)" fill="var(--viz-3)" fill-opacity="0.3">
+            <rect x="214" y="0" width="28" height="22"/><rect x="242" y="0" width="28" height="22"/><rect x="270" y="0" width="28" height="22"/><rect x="298" y="0" width="28" height="22"/>
+            <rect x="214" y="22" width="28" height="22"/><rect x="242" y="22" width="28" height="22"/><rect x="270" y="22" width="28" height="22"/><rect x="298" y="22" width="28" height="22"/>
+            <rect x="214" y="44" width="28" height="22"/><rect x="242" y="44" width="28" height="22"/><rect x="270" y="44" width="28" height="22"/><rect x="298" y="44" width="28" height="22"/>
+          </g>
+          <g fill="var(--fg)"><text x="228" y="15">0</text><text x="256" y="15">1</text><text x="284" y="15">2</text><text x="312" y="15">3</text>
+          <text x="228" y="37">10</text><text x="256" y="37">11</text><text x="284" y="37">12</text><text x="312" y="37">13</text>
+          <text x="228" y="59">20</text><text x="256" y="59">21</text><text x="284" y="59">22</text><text x="312" y="59">23</text></g>
+          <text x="370" y="20" fill="var(--fg-muted)" font-size="11">column stretched</text>
+          <text x="370" y="36" fill="var(--fg-muted)" font-size="11">across 4 columns,</text>
+          <text x="370" y="52" fill="var(--fg-muted)" font-size="11">row stretched</text>
+          <text x="370" y="68" fill="var(--fg-muted)" font-size="11">down 3 rows</text>
+        </g>
+      </svg>
+      <figcaption>A column (3, 1) plus a row (4,) makes a (3, 4) table: every pairwise sum, with no loops and no copies of the inputs.</figcaption>
+    </figure>
+    <div class="viz" data-viz="matrix" data-config='{"op": "broadcast"}'></div>
+    <div class="runnable" data-title="Broadcasting in practice">
+<textarea>
+import numpy as np
+
+col = np.array([[0], [10], [20]])     # (3, 1)
+row = np.array([0, 1, 2, 3])          # (4,)
+print(col + row)
+
+# Center each column of a data matrix (subtract the column means)
+X = np.array([[1.0, 200.0], [2.0, 220.0], [3.0, 240.0]])
+centered = X - X.mean(axis=0)          # (3, 2) - (2,) -> (3, 2)
+print(centered)
+
+# Divide each row by its own sum: needs keepdims (or [:, None])
+row_sums = X.sum(axis=1, keepdims=True)   # (3, 1)
+print((X / row_sums).round(4))
+
+# Multiplication table, 1..9
+n = np.arange(1, 10)
+print(n[:, None] * n[None, :])
+
+try:
+    np.ones((3, 2)) + np.ones(3)
+except ValueError as e:
+    print("ValueError:", e)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: the broadcast shape" data-predict>
+<textarea>
+import numpy as np
+a = np.zeros((5, 1, 3))
+b = np.zeros((4, 1))
+print((a + b).shape)
+</textarea>
+    </div>
+    <aside class="callout think"><p>Why does <code>np.ones((3, 2)) + np.ones(3)</code> fail? Right-align:
+      <code>(3, 2)</code> vs <code>(3,)</code>. The last dimensions are 2 and 3: unequal and neither is 1. To add a
+      length-3 vector to each <em>column</em>, make it a column: <code>v[:, None]</code>, shape <code>(3, 1)</code>.</p></aside>
+    <p><strong>Remember:</strong> right-align, equal-or-1, stretch the 1s. Use <code>[:, None]</code> or
+      <code>keepdims=True</code> to turn a per-row result into a column that broadcasts back.</p>
+  </section>
+
+  <section class="lesson-section" id="toolbox">
+    <h2>The everyday toolbox: @, where, clip, cumsum, sort, unique</h2>
+    <p>A handful of functions show up in nearly every NumPy program:</p>
+    <ul>
+      <li><code>A @ B</code> (or <code>np.matmul</code>): matrix multiplication, exactly the "rows dot columns" product
+        from M47, handed to an optimized BLAS library. On 1-D arrays, <code>v @ w</code> is the dot product. Don't confuse it
+        with <code>A * B</code>, which is element-wise.</li>
+      <li><code>np.where(cond, x, y)</code>: element-wise "if cond then x else y". With one argument it returns the
+        indices where <code>cond</code> is true.</li>
+      <li><code>np.clip(a, lo, hi)</code>: limit values to a range.</li>
+      <li><code>np.cumsum</code>, <code>np.cumprod</code>, <code>np.diff</code>: running totals and differences (each
+        undoes the other, up to the first element).</li>
+      <li><code>np.sort</code> returns a sorted copy (<code>a.sort()</code> sorts in place); <code>np.argsort</code>
+        returns the <em>indices</em> that would sort, so you can reorder another array by this one.</li>
+      <li><code>np.unique(a, return_counts=True)</code>: distinct values (sorted) and how often each occurs.</li>
+    </ul>
+    <div class="runnable" data-title="Toolbox tour">
+<textarea>
+import numpy as np
+
+A = np.array([[1, 2], [3, 4]])
+B = np.array([[5, 6], [7, 8]])
+print("A @ B =\n", A @ B)
+print("A * B =\n", A * B, "  (element-wise!)")
+v = np.array([3.0, 2.0]); w = np.array([1.0, 3.0])
+print("v @ w =", v @ w, "  A @ v =", A @ v)
+
+t = np.array([-5, 3, 12, -1, 7])
+print("where:", np.where(t > 0, t, 0), "  indices:", np.where(t > 0)[0])
+print("clip:", np.clip(t, 0, 10))
+
+deposits = np.array([100, -20, 50, -70, 30])
+balance = np.cumsum(deposits)
+print("balance:", balance, "  diff:", np.diff(balance))
+
+names = np.array(["ana", "bo", "cy", "dee"])
+height = np.array([172, 160, 185, 168])
+order = np.argsort(height)[::-1]            # tallest first
+print("tallest first:", names[order], height[order])
+
+votes = np.array(["red", "blue", "red", "green", "red", "blue"])
+values, counts = np.unique(votes, return_counts=True)
+print(dict(zip(values.tolist(), counts.tolist())))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: argsort" data-predict>
+<textarea>
+import numpy as np
+print(np.argsort(np.array([30, 10, 20])))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>@</code> is matrix product, <code>*</code> is element-wise. <code>argsort</code>
+      gives positions, which you then use for fancy indexing.</p>
+  </section>
+
+  <section class="lesson-section" id="random-io">
+    <h2>Random generators, seeding, and saving arrays</h2>
+    <h3>Random numbers the modern way</h3>
+    <p>Create a <strong>Generator</strong> with <code>rng = np.random.default_rng(seed)</code> and call methods on it:
+      <code>rng.random(n)</code> (uniform in [0, 1)), <code>rng.integers(lo, hi, size)</code>,
+      <code>rng.normal(mean, sd, size)</code>, <code>rng.choice(a, size, replace=False)</code>,
+      <code>rng.permutation(a)</code>, <code>rng.shuffle(a)</code>. A <strong>seed</strong> makes the sequence
+      reproducible: the same seed gives the same numbers, which you need for tests, debugging, and reproducible science.
+      Pass the generator into functions instead of using global state. The older <code>np.random.seed()</code> /
+      <code>np.random.rand()</code> API uses one hidden global generator; avoid it in new code.</p>
+    <h3>Saving and loading</h3>
+    <p><code>np.save("a.npy", a)</code> writes one array in NumPy's binary format (dtype and shape included, exact
+      values, fast). <code>np.savez("data.npz", x=x, y=y)</code> bundles several named arrays
+      (<code>savez_compressed</code> zips them). <code>np.load</code> reads both. For human-readable text, there's
+      <code>np.savetxt</code>/<code>np.loadtxt</code>, which is slower and can lose precision.</p>
+    <div class="runnable" data-title="Reproducible randomness and .npy/.npz round trips">
+<textarea>
+import tempfile
+from pathlib import Path
+import numpy as np
+
+def simulate(rng, n):
+    return rng.normal(loc=170, scale=8, size=n).round(1)
+
+print(simulate(np.random.default_rng(7), 5))
+print(simulate(np.random.default_rng(7), 5), "(same seed, same numbers)")
+print(simulate(np.random.default_rng(8), 5), "(different seed)")
+
+rng = np.random.default_rng(0)
+deck = rng.permutation(10)
+print("shuffled:", deck, " sample:", rng.choice(deck, size=3, replace=False))
+
+with tempfile.TemporaryDirectory() as tmp:
+    folder = Path(tmp)
+    a = rng.random((3, 4))
+    np.save(folder / "a.npy", a)
+    np.savez_compressed(folder / "bundle.npz", features=a, labels=np.array([0, 1, 1]))
+    back = np.load(folder / "a.npy")
+    with np.load(folder / "bundle.npz") as bundle:
+        print("npz contains:", bundle.files, bundle["labels"])
+    print("exact round trip:", np.array_equal(a, back), back.dtype, back.shape)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> one <code>default_rng(seed)</code> per program (or test), passed around explicitly;
+      <code>.npy</code>/<code>.npz</code> for exact, fast storage.</p>
+  </section>
+
+  <section class="lesson-section" id="pitfalls">
+    <h2>Performance and common pitfalls</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Growing arrays in a loop</h4><p><code>np.append</code> copies the whole array every time:
+        O(n²). Collect into a list and convert once, or preallocate with <code>np.empty(n)</code>.</p></div>
+      <div class="card"><h4>Element-wise Python loops</h4><p>Indexing <code>a[i]</code> in a loop creates a NumPy scalar
+        object each time, often <em>slower</em> than a plain list. Vectorize.</p></div>
+      <div class="card"><h4>Unintended views</h4><p>Modifying a slice modifies the source. Copy when ownership
+        matters.</p></div>
+      <div class="card"><h4>Silent integer overflow</h4><p>Especially <code>uint8</code> images: convert to a wider type
+        before arithmetic.</p></div>
+      <div class="card"><h4>Float equality</h4><p><code>0.1 + 0.2 == 0.3</code> is <code>False</code>. Use
+        <code>np.isclose</code> / <code>np.allclose</code>.</p></div>
+      <div class="card"><h4>Shape (n,) vs (n, 1)</h4><p>A 1-D array is neither a row nor a column. Mixing
+        <code>(n,)</code> and <code>(n, 1)</code> broadcasts to <code>(n, n)</code>, a classic silent bug.</p></div>
+    </div>
+    <div class="runnable" data-title="Pitfalls you can see">
+<textarea>
+import time
+import numpy as np
+
+n = 20_000
+t0 = time.perf_counter()
+a = np.array([])
+for i in range(n):
+    a = np.append(a, i)
+t_append = time.perf_counter() - t0
+
+t0 = time.perf_counter()
+items = []
+for i in range(n):
+    items.append(i)
+b = np.array(items, dtype=float)
+t_list = time.perf_counter() - t0
+print(f"np.append loop {t_append:.3f}s   list then array {t_list:.4f}s")
+
+y = np.array([1.0, 2.0, 3.0])          # shape (3,)
+y_hat = np.array([[1.1], [1.9], [3.2]]) # shape (3, 1) by accident
+err = y - y_hat
+print("expected shape (3,), got", err.shape, "<- silent bug")
+print("fix:", (y - y_hat.ravel()).round(2))
+
+print("0.1 + 0.2 == 0.3:", 0.1 + 0.2 == 0.3, "  isclose:", np.isclose(0.1 + 0.2, 0.3))
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Locally, NumPy from conda-forge links an optimized BLAS (OpenBLAS or Accelerate) and
+      uses all your cores for <code>@</code>. <code>pixi run python -c "import numpy; numpy.show_config()"</code> shows
+      which one you have.</p></aside>
+    <p><strong>Remember:</strong> preallocate or build lists then convert; check shapes when results look "too big";
+      compare floats with tolerance.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Use NumPy and no Python loops over elements unless the exercise allows it.</p>
+
+    <div class="exercise" data-id="m48-e1" data-title="checkerboard and normalize_rows">
+      <div class="exercise-prompt">
+        <p>Write <code>checkerboard(n)</code> returning an <code>n × n</code> integer array with <code>0</code> at
+          <code>[0, 0]</code> and alternating 0/1 (like a chessboard). Then write <code>normalize_rows(X)</code>
+          returning a float array where each row of <code>X</code> is divided by that row's sum (so each row sums to 1).
+          Do not modify <code>X</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def checkerboard(n):
+    ...
+
+def normalize_rows(X):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_checkerboard_values():
+    expected = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
+    assert np.array_equal(checkerboard(3), expected), f"checkerboard(3) should be\n{expected}"
+
+def test_checkerboard_shape_dtype():
+    c = checkerboard(8)
+    assert c.shape == (8, 8), "shape should be (8, 8)"
+    assert np.issubdtype(c.dtype, np.integer), "dtype should be an integer type"
+    assert c.sum() == 32, "an 8x8 board has 32 ones"
+
+def test_normalize_rows():
+    X = np.array([[1, 3], [2, 2], [5, 0]])
+    out = normalize_rows(X)
+    assert np.allclose(out, [[0.25, 0.75], [0.5, 0.5], [1.0, 0.0]]), "each row divided by its sum"
+    assert np.allclose(out.sum(axis=1), 1), "every row should sum to 1"
+
+def test_normalize_does_not_mutate():
+    X = np.array([[1.0, 1.0], [2.0, 6.0]])
+    normalize_rows(X)
+    assert np.array_equal(X, [[1.0, 1.0], [2.0, 6.0]]), "X must not be modified"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For the board, <code>(i + j) % 2</code> where <code>i</code> is a
+        column of row indices and <code>j</code> a row of column indices: broadcasting builds the grid. For rows,
+        <code>X.sum(axis=1, keepdims=True)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def checkerboard(n):
+    i = np.arange(n)
+    return (i[:, None] + i[None, :]) % 2
+
+def normalize_rows(X):
+    X = np.asarray(X, dtype=float)
+    return X / X.sum(axis=1, keepdims=True)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m48-e2" data-title="Standardize columns (z-scores)">
+      <div class="exercise-prompt">
+        <p>Write <code>zscore(X)</code> that standardizes each <strong>column</strong> of a 2-D array: subtract the
+          column mean and divide by the column standard deviation (population std, <code>ddof=0</code>). Columns whose
+          std is 0 should become all zeros instead of NaN. Return a new float array.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def zscore(X):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_means_and_stds():
+    rng = np.random.default_rng(1)
+    X = rng.normal(50, 10, size=(200, 3))
+    Z = zscore(X)
+    assert Z.shape == X.shape, "shape must be unchanged"
+    assert np.allclose(Z.mean(axis=0), 0), "each column mean should be 0"
+    assert np.allclose(Z.std(axis=0), 1), "each column std should be 1"
+
+def test_known_values():
+    X = np.array([[1.0, 10.0], [3.0, 30.0]])
+    assert np.allclose(zscore(X), [[-1, -1], [1, 1]]), "two values per column become -1 and 1"
+
+def test_constant_column():
+    X = np.array([[1.0, 5.0], [2.0, 5.0], [3.0, 5.0]])
+    Z = zscore(X)
+    assert not np.isnan(Z).any(), "constant columns must not produce NaN"
+    assert np.allclose(Z[:, 1], 0), "a constant column standardizes to zeros"
+
+def test_int_input():
+    Z = zscore(np.array([[1, 2], [3, 4]]))
+    assert np.issubdtype(Z.dtype, np.floating), "result should be float"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>mu = X.mean(axis=0)</code> and <code>sd = X.std(axis=0)</code>
+        both have shape <code>(cols,)</code> and broadcast against <code>X</code>. Replace zero stds with 1 using
+        <code>np.where</code> before dividing.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def zscore(X):
+    X = np.asarray(X, dtype=float)
+    mu = X.mean(axis=0)
+    sd = X.std(axis=0)
+    sd = np.where(sd == 0, 1.0, sd)
+    return (X - mu) / sd</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m48-e3" data-title="one_hot and top_k with fancy indexing">
+      <div class="exercise-prompt">
+        <p>Write <code>one_hot(labels, n_classes)</code>: given an integer array of class labels, return an
+          <code>(len(labels), n_classes)</code> integer array with a single 1 per row at the label's column. Then write
+          <code>top_k(scores, k)</code> returning the <strong>indices</strong> of the <code>k</code> largest scores,
+          largest first.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def one_hot(labels, n_classes):
+    ...
+
+def top_k(scores, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_one_hot():
+    out = one_hot(np.array([2, 0, 1, 2]), 3)
+    expected = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    assert np.array_equal(out, expected), f"expected\n{expected}\ngot\n{out}"
+
+def test_one_hot_rows_sum_to_one():
+    out = one_hot(np.array([4, 4, 0]), 6)
+    assert out.shape == (3, 6), "shape should be (n_samples, n_classes)"
+    assert np.array_equal(out.sum(axis=1), [1, 1, 1]), "each row has exactly one 1"
+
+def test_top_k():
+    scores = np.array([0.1, 0.9, 0.4, 0.75, 0.2])
+    assert list(top_k(scores, 3)) == [1, 3, 2], "indices of the top 3, largest first"
+
+def test_top_k_one():
+    assert list(top_k(np.array([5, 1, 7]), 1)) == [2], "top_k(..., 1) is the argmax"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>np.zeros((n, n_classes), dtype=int)</code> and set
+        <code>out[np.arange(n), labels] = 1</code>. For top-k, <code>np.argsort(scores)[::-1][:k]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def one_hot(labels, n_classes):
+    labels = np.asarray(labels)
+    out = np.zeros((labels.size, n_classes), dtype=int)
+    out[np.arange(labels.size), labels] = 1
+    return out
+
+def top_k(scores, k):
+    return np.argsort(scores)[::-1][:k]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m48-e4" data-title="Pairwise distances by broadcasting">
+      <div class="exercise-prompt">
+        <p>Write <code>pairwise_distances(A, B)</code>: <code>A</code> has shape <code>(m, d)</code> and <code>B</code>
+          has shape <code>(n, d)</code>. Return the <code>(m, n)</code> array whose <code>[i, j]</code> entry is the
+          Euclidean distance between <code>A[i]</code> and <code>B[j]</code>. No Python loops. Then write
+          <code>nearest(A, B)</code> returning, for each row of <code>A</code>, the index of the closest row of
+          <code>B</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def pairwise_distances(A, B):
+    ...
+
+def nearest(A, B):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_small():
+    A = np.array([[0.0, 0.0], [1.0, 1.0]])
+    B = np.array([[3.0, 4.0], [0.0, 0.0], [1.0, 0.0]])
+    D = pairwise_distances(A, B)
+    assert D.shape == (2, 3), f"shape should be (2, 3), got {D.shape}"
+    assert np.allclose(D[0], [5.0, 0.0, 1.0]), "distances from the origin"
+    assert np.isclose(D[1, 0], np.sqrt(13)), "distance from (1,1) to (3,4) is sqrt(13)"
+
+def test_matches_loop():
+    rng = np.random.default_rng(3)
+    A, B = rng.random((5, 4)), rng.random((7, 4))
+    expected = np.array([[np.linalg.norm(a - b) for b in B] for a in A])
+    assert np.allclose(pairwise_distances(A, B), expected), "must match the double loop"
+
+def test_nearest():
+    A = np.array([[0.1, 0.0], [2.9, 4.1]])
+    B = np.array([[3.0, 4.0], [0.0, 0.0]])
+    assert list(nearest(A, B)) == [1, 0], "closest row of B for each row of A"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>A[:, None, :]</code> has shape <code>(m, 1, d)</code> and
+        <code>B[None, :, :]</code> has shape <code>(1, n, d)</code>. Their difference is <code>(m, n, d)</code>; square,
+        sum over the last axis, square root.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def pairwise_distances(A, B):
+    diff = A[:, None, :] - B[None, :, :]
+    return np.sqrt((diff ** 2).sum(axis=-1))
+
+def nearest(A, B):
+    return pairwise_distances(A, B).argmin(axis=1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m48-e5" data-title="Moving average with cumsum">
+      <div class="exercise-prompt">
+        <p>Write <code>moving_average(x, w)</code> returning the averages of every window of <code>w</code> consecutive
+          values (the result has <code>len(x) - w + 1</code> elements). Use <code>np.cumsum</code> so the work is
+          O(n) regardless of <code>w</code>. Raise <code>ValueError</code> if <code>w</code> is less than 1 or greater than
+          <code>len(x)</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def moving_average(x, w):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_basic():
+    assert np.allclose(moving_average(np.array([1, 2, 3, 4, 5]), 2), [1.5, 2.5, 3.5, 4.5]), "window 2"
+    assert np.allclose(moving_average(np.array([1, 2, 3, 4, 5]), 3), [2, 3, 4]), "window 3"
+
+def test_full_and_one():
+    x = np.array([4.0, 8.0, 6.0])
+    assert np.allclose(moving_average(x, 3), [6.0]), "a window of len(x) gives one mean"
+    assert np.allclose(moving_average(x, 1), x), "a window of 1 returns x"
+
+def test_matches_naive():
+    rng = np.random.default_rng(5)
+    x = rng.random(50)
+    naive = np.array([x[i:i + 7].mean() for i in range(len(x) - 6)])
+    assert np.allclose(moving_average(x, 7), naive), "must match the slow version"
+
+def test_bad_window():
+    for bad in (0, 6):
+        try:
+            moving_average(np.arange(5), bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"w={bad} should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Prepend a 0: <code>c = np.concatenate(([0.0], np.cumsum(x)))</code>.
+        Then the sum of <code>x[i:i+w]</code> is <code>c[i + w] - c[i]</code>, so all window sums are
+        <code>c[w:] - c[:-w]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def moving_average(x, w):
+    x = np.asarray(x, dtype=float)
+    if w &lt; 1 or w &gt; x.size:
+        raise ValueError(f"window must be in 1..{x.size}, got {w}")
+    c = np.concatenate(([0.0], np.cumsum(x)))
+    return (c[w:] - c[:-w]) / w</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: image manipulation with plain arrays</h2>
+    <p>A grayscale image is just a 2-D array of brightness values; a color image is a 3-D array of shape
+      <code>(height, width, 3)</code> holding red, green, and blue. Everything you learned applies: slicing flips and crops,
+      broadcasting weights channels, and a blur is a <em>convolution</em>, where each output pixel is the average of a
+      small neighborhood. The cell below builds a synthetic picture so it runs offline, then processes it.</p>
+    <div class="runnable" data-title="Grayscale, flip, and blur an image">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+h, w = 120, 160
+yy, xx = np.mgrid[0:h, 0:w]                       # row and column index grids
+img = np.zeros((h, w, 3))
+img[..., 0] = xx / w                              # red increases to the right
+img[..., 2] = yy / h                              # blue increases downward
+sun = (xx - 110) ** 2 + (yy - 40) ** 2 < 22 ** 2  # boolean mask of a disc
+img[sun] = [1.0, 0.85, 0.1]
+img[90:, :, 1] = 0.6                              # green ground strip
+
+gray = img @ np.array([0.299, 0.587, 0.114])      # (h, w, 3) @ (3,) -> (h, w)
+flipped = img[:, ::-1]                            # a view: mirror left-right
+
+def box_blur(a, k=7):
+    pad = k // 2
+    p = np.pad(a, pad, mode="edge")
+    out = np.zeros_like(a)
+    for dy in range(k):                           # k*k shifted views, not h*w pixels
+        for dx in range(k):
+            out += p[dy:dy + a.shape[0], dx:dx + a.shape[1]]
+    return out / (k * k)
+
+blurred = box_blur(gray, 9)
+fig, axes = plt.subplots(1, 4, figsize=(12, 3))
+for ax, im, title in zip(axes, [img, flipped, gray, blurred], ["original", "flipped", "grayscale", "box blur 9×9"]):
+    ax.imshow(im, cmap=None if im.ndim == 3 else "gray")
+    ax.set_title(title); ax.axis("off")
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">imgtools: a tiny NumPy image library</span></div>
+      <div class="widget-body">
+        <p>Build <code>imgtools.py</code> that works on any image array, plus <code>demo.py</code> that loads a real photo
+          and saves a comparison figure.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init imgtools &amp;&amp; cd imgtools
+pixi add python=3.14 numpy matplotlib pytest
+pixi run python demo.py photo.png      # writes compare.png
+pixi run pytest -q</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li><code>to_float(img)</code> converts <code>uint8</code> (0–255) to <code>float64</code> in [0, 1] and leaves
+            float images alone; <code>to_uint8</code> clips and converts back.</li>
+          <li><code>grayscale(img)</code> uses the weights <code>0.299, 0.587, 0.114</code> with <code>@</code>.</li>
+          <li><code>flip(img, axis)</code>, <code>crop(img, top, left, height, width)</code>, and <code>rotate90(img)</code>
+            (hint: transpose plus a flip) using views where possible.</li>
+          <li><code>convolve(gray, kernel)</code> applies any odd-sized 2-D kernel with edge padding, looping only over
+            kernel offsets. Provide <code>box_kernel(k)</code> and a sharpen kernel
+            <code>[[0, -1, 0], [-1, 5, -1], [0, -1, 0]]</code>.</li>
+          <li><code>brighten(img, amount)</code> must not overflow on <code>uint8</code> input.</li>
+          <li><code>demo.py</code> reads an image with <code>matplotlib.pyplot.imread</code> and saves a 2 × 3 grid with
+            <code>imshow</code>.</li>
+        </ul>
+        <ul class="checklist" data-id="m48-mini">
+          <li><code>grayscale</code> returns shape <code>(h, w)</code> for an <code>(h, w, 3)</code> input</li>
+          <li>A test shows <code>flip</code> returns a view (<code>np.shares_memory</code>) and <code>crop</code> has the right shape</li>
+          <li>Convolving with a 1 × 1 kernel <code>[[1]]</code> returns the input unchanged (tested)</li>
+          <li>A box blur preserves the mean brightness of a constant image (tested)</li>
+          <li><code>brighten</code> on a <code>uint8</code> pixel of 250 by 20 gives 255, not 14 (tested)</li>
+          <li><code>demo.py</code> writes <code>compare.png</code>; <code>pixi run pytest</code> passes</li>
+        </ul>
+        <h3>Stretch goals</h3>
+        <ul>
+          <li>Edge detection with Sobel kernels: combine horizontal and vertical gradients with
+            <code>np.hypot</code>.</li>
+          <li>A histogram equalizer using <code>np.unique</code> or <code>np.bincount</code> and <code>cumsum</code>.</li>
+          <li>Compare your <code>convolve</code> with <code>scipy.signal.convolve2d</code> from <a href="m50-scipy.html">M50</a>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m48-quiz">
+<script type="application/json">
+{"title": "NumPy fundamentals quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which properties does an ndarray have that a Python list does not?", "options": ["Every element has the same dtype", "Values are stored contiguously as raw numbers", "It can grow with <code>append</code> in amortized O(1)", "It carries a shape and strides"], "answer": [0, 1, 3],
+   "explanation": "<p>An ndarray is a fixed-size, homogeneous, contiguous buffer described by shape and strides. Lists grow cheaply; arrays don't (<code>np.append</code> copies).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nprint(np.linspace(0, 1, 3))", "answer": "[0.  0.5 1. ]",
+   "explanation": "<p><code>linspace(start, stop, num)</code> gives <code>num</code> evenly spaced values including both ends.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\na = np.array([250], dtype=np.uint8)\nprint(a + 10)", "answer": "[4]",
+   "explanation": "<p>uint8 holds 0 to 255. 260 wraps modulo 256 to 4. Convert with <code>astype</code> before arithmetic that may overflow.</p>"},
+  {"type": "single", "prompt": "<code>m</code> has shape (4, 3). What is the shape of <code>m.sum(axis=0)</code>?", "options": ["(4,)", "(3,)", "(4, 1)", "()"], "answer": 1,
+   "explanation": "<p>The named axis disappears. Removing axis 0 (size 4) leaves (3,): one sum per column.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nprint(np.arange(12).reshape(3, -1).shape)", "answer": "(3, 4)",
+   "explanation": "<p><code>-1</code> means \"whatever makes the total work\": 12 / 3 = 4.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\na = np.array([1, 2, 3, 4])\nb = a[:2]\nb[0] = 9\nprint(a[0])", "answer": "9",
+   "explanation": "<p>Basic slicing returns a view sharing the same buffer, so writing through <code>b</code> changes <code>a</code>.</p>"},
+  {"type": "multi", "prompt": "Which of these return copies (not views) of <code>a</code>?", "options": ["<code>a[1:5]</code>", "<code>a[a &gt; 0]</code>", "<code>a[[0, 2, 4]]</code>", "<code>a.T</code>", "<code>a.copy()</code>"], "answer": [1, 2, 4],
+   "explanation": "<p>Boolean masks and integer-array (fancy) indexing always copy. Slices and transposes are views.</p>"},
+  {"type": "single", "prompt": "A C-ordered float64 array has shape (5, 10). What are its strides?", "options": ["(8, 80)", "(80, 8)", "(10, 1)", "(5, 10)"], "answer": 1,
+   "explanation": "<p>Moving one column is 8 bytes; moving one row skips 10 elements = 80 bytes.</p>"},
+  {"type": "single", "prompt": "What shape does <code>np.ones((3, 1)) + np.ones((1, 4))</code> have?", "options": ["(3, 4)", "(3, 1)", "(1, 4)", "It raises ValueError"], "answer": 0,
+   "explanation": "<p>Right-align (3, 1) and (1, 4). Each pair has a 1, so both stretch: (3, 4).</p>"},
+  {"type": "single", "prompt": "Which pair of shapes can NOT be broadcast together?", "options": ["(5, 3) and (3,)", "(5, 3) and (5, 1)", "(5, 3) and (5,)", "(2, 1, 3) and (4, 3)"], "answer": 2,
+   "explanation": "<p>Right-align (5, 3) with (5,): the last dimensions are 3 and 5, unequal and neither is 1. Reshape to (5, 1) to broadcast along columns.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nA = np.array([[1, 2], [3, 4]])\nprint((A @ A)[0, 1])", "answer": "10",
+   "explanation": "<p>Row 0 of A dotted with column 1 of A: 1·2 + 2·4 = 10. (Element-wise <code>A * A</code> would give 4 there.)</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nprint(np.where(np.array([3, -1, 0, 5]) > 0, 1, -1))", "answer": "[ 1 -1 -1  1]",
+   "explanation": "<p><code>np.where(cond, x, y)</code> picks x where the condition is true, otherwise y. 0 is not &gt; 0.</p>"},
+  {"type": "single", "prompt": "Why is <code>np.random.default_rng(42)</code> preferred over <code>np.random.seed(42)</code>?", "options": ["It produces better random numbers only on Windows", "It returns an explicit Generator you can pass around, instead of mutating hidden global state", "It is the only way to get normal distributions", "Seeds are not allowed with the old API"], "answer": 1,
+   "explanation": "<p>An explicit Generator keeps randomness local and reproducible: tests and libraries don't interfere with each other through a shared global seed.</p>"},
+  {"type": "text", "prompt": "Which NumPy function returns the indices that would sort an array?", "answer": ["argsort", "np.argsort", "numpy.argsort"],
+   "explanation": "<p><code>np.argsort</code> returns positions; index another array with them to reorder it consistently.</p>"},
+  {"type": "single", "prompt": "Building an array by calling <code>np.append</code> inside a loop of n iterations costs:", "options": ["O(n) amortized like list.append", "O(n²), because each call copies the whole array", "O(log n)", "O(1)"], "answer": 1,
+   "explanation": "<p>Arrays have fixed size; <code>np.append</code> allocates a new array and copies everything every time. Append to a list and convert once.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>An ndarray is a homogeneous, contiguous buffer plus dtype, shape, and strides; operators are element-wise.</li>
+      <li>Create with <code>array</code>, <code>zeros</code>, <code>ones</code>, <code>arange</code>, <code>linspace</code>,
+        <code>eye</code>, and <code>default_rng(seed)</code>.</li>
+      <li>Fixed-width integers wrap on overflow; choose dtypes deliberately and <code>astype</code> before risky math.</li>
+      <li><code>axis=k</code> is the dimension that disappears; <code>keepdims</code> keeps it for broadcasting.</li>
+      <li>Slices and transposes are views; masks and fancy indexing copy. <code>np.shares_memory</code> tells you.</li>
+      <li>Broadcasting: right-align shapes, sizes must be equal or 1, the 1s stretch.</li>
+      <li>Vectorize with ufuncs and reductions; avoid Python loops over elements and <code>np.append</code> in loops.</li>
+    </ul>
+    <div class="flashcards" data-title="NumPy fundamentals">
+<script type="application/json">
+[{"front": "Three things an ndarray stores besides data", "back": "dtype, shape, strides."},
+ {"front": "<code>arange</code> vs <code>linspace</code>", "back": "<code>arange(start, stop, step)</code> excludes stop; <code>linspace(start, stop, num)</code> includes it. Use linspace for floats."},
+ {"front": "What does <code>axis=0</code> mean in <code>sum</code>?", "back": "Collapse axis 0 (go down the rows): one result per column."},
+ {"front": "View or copy: <code>a[2:8]</code>", "back": "View: shares memory with <code>a</code>."},
+ {"front": "View or copy: <code>a[a &gt; 0]</code>", "back": "Copy: boolean indexing always copies."},
+ {"front": "Strides of a C-order (3, 4) float64 array", "back": "(32, 8): 4 × 8 bytes per row, 8 bytes per column."},
+ {"front": "Broadcasting rules", "back": "Right-align shapes; each dimension must be equal or 1; size-1 dimensions stretch."},
+ {"front": "Turn shape (n,) into a column", "back": "<code>a[:, None]</code> or <code>a.reshape(-1, 1)</code> → (n, 1)."},
+ {"front": "<code>A @ B</code> vs <code>A * B</code>", "back": "Matrix product vs element-wise product."},
+ {"front": "Combine boolean conditions", "back": "<code>(a &gt; 0) &amp; (a &lt; 5)</code>, with parentheses; not <code>and</code>."},
+ {"front": "Reproducible random numbers", "back": "<code>rng = np.random.default_rng(seed)</code>, then <code>rng.normal(...)</code>, etc."},
+ {"front": "Save several arrays in one file", "back": "<code>np.savez(\"f.npz\", x=x, y=y)</code>; read with <code>np.load</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://numpy.org/doc/stable/user/absolute_beginners.html">NumPy: the absolute basics for beginners</a></li>
+      <li><a href="https://numpy.org/doc/stable/user/basics.broadcasting.html">NumPy user guide: broadcasting</a></li>
+      <li><a href="https://numpy.org/doc/stable/user/basics.indexing.html">NumPy user guide: indexing on ndarrays</a> (views vs copies)</li>
+      <li><a href="https://numpy.org/doc/stable/reference/random/generator.html">Random Generator reference</a></li>
+      <li>Next: <a href="m49-linear-algebra.html">M49 · Linear Algebra with NumPy &amp; SciPy</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

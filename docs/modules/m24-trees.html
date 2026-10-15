@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M24 · Trees &amp; Binary Search Trees · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m24">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 24</p>
+    <h1>Trees &amp; Binary Search Trees</h1>
+    <p class="lede">Lists and hash tables are flat. Most interesting data is not: folders contain folders, HTML
+      elements contain elements, and a sorted index must answer "everything between A and F" quickly. Trees are the
+      structure behind all of these, and the binary search tree is the gateway to the balanced trees that power
+      databases.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m19-complexity.html">M19</a>,
+      <a href="m21-linked-lists.html">M21</a>, <a href="m22-stacks-queues.html">M22</a></span></div>
+    <ul class="objectives">
+      <li>Use tree vocabulary precisely: root, leaf, depth, height, balanced, complete, full</li>
+      <li>Represent trees with node objects, arrays, and dicts, and pick the right one</li>
+      <li>Write pre-, in-, post-order traversals recursively and with an explicit stack, and level order with a queue</li>
+      <li>Implement BST search, insert, and all three delete cases, and explain when they degrade to O(n)</li>
+      <li>Explain AVL rotations and why databases use B-trees instead of binary trees</li>
+      <li>Solve the classic tree problems: height, balance check, BST validation, lowest common ancestor, serialization</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="vocabulary">
+    <h2>What a tree is, and the words for it</h2>
+    <p>A <strong>tree</strong> is a collection of <strong>nodes</strong> connected by <strong>edges</strong> such that
+      there is exactly one path between any two nodes. One node is the <strong>root</strong>; every other node has
+      exactly one <strong>parent</strong>. Nodes with the same parent are <strong>siblings</strong>, and a node with
+      no children is a <strong>leaf</strong> (the others are <strong>internal</strong> nodes). Because each node has
+      one parent, a tree can never contain a cycle; that single fact is what makes recursion on trees so natural.
+      Every child is itself the root of a smaller tree, its <strong>subtree</strong>.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 600 260" width="600" role="img" aria-label="A labelled binary tree showing root, internal nodes, leaves, depth and height">
+        <g stroke="var(--fg-muted)" stroke-width="1.6">
+          <line x1="300" y1="40" x2="180" y2="100"/><line x1="300" y1="40" x2="420" y2="100"/>
+          <line x1="180" y1="100" x2="110" y2="165"/><line x1="180" y1="100" x2="250" y2="165"/>
+          <line x1="420" y1="100" x2="490" y2="165"/><line x1="250" y1="165" x2="215" y2="225"/>
+        </g>
+        <g stroke-width="2">
+          <circle cx="300" cy="40" r="18" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <circle cx="180" cy="100" r="18" fill="var(--bg-elev)" stroke="var(--viz-1)"/>
+          <circle cx="420" cy="100" r="18" fill="var(--bg-elev)" stroke="var(--viz-1)"/>
+          <circle cx="110" cy="165" r="18" fill="var(--ok-soft)" stroke="var(--ok)"/>
+          <circle cx="250" cy="165" r="18" fill="var(--bg-elev)" stroke="var(--viz-1)"/>
+          <circle cx="490" cy="165" r="18" fill="var(--ok-soft)" stroke="var(--ok)"/>
+          <circle cx="215" cy="225" r="18" fill="var(--ok-soft)" stroke="var(--ok)"/>
+        </g>
+        <g font-size="14" text-anchor="middle" class="mono">
+          <text x="300" y="45">8</text><text x="180" y="105">3</text><text x="420" y="105">10</text>
+          <text x="110" y="170">1</text><text x="250" y="170">6</text><text x="490" y="170">14</text><text x="215" y="230">4</text>
+        </g>
+        <g font-size="12" fill="var(--fg-muted)">
+          <text x="330" y="30">root (depth 0)</text>
+          <text x="450" y="95">internal, depth 1</text>
+          <text x="515" y="170">leaf</text>
+          <text x="20" y="240">depth 3 →</text>
+          <text x="22" y="45">height of tree = 3</text>
+          <text x="22" y="62">(edges on longest root→leaf path)</text>
+        </g>
+      </svg>
+      <figcaption>The <strong>depth</strong> of a node counts edges up to the root. The <strong>height</strong> of a
+        node counts edges down to its deepest leaf; the tree's height is the root's height.</figcaption>
+    </figure>
+    <table>
+      <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>Binary tree</td><td>Every node has at most two children, called <em>left</em> and <em>right</em> (order matters).</td></tr>
+        <tr><td>Full</td><td>Every node has 0 or 2 children, never exactly 1.</td></tr>
+        <tr><td>Complete</td><td>Every level is full except possibly the last, which is filled left to right. Heaps (M25) are complete.</td></tr>
+        <tr><td>Perfect</td><td>All internal nodes have 2 children and all leaves share one depth: 2<sup>h+1</sup> − 1 nodes.</td></tr>
+        <tr><td>Balanced (height-balanced)</td><td>For every node, the heights of its two subtrees differ by at most 1. Height is then O(log n).</td></tr>
+        <tr><td>Degenerate</td><td>Every node has one child: the tree is a linked list in disguise, height n − 1.</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout note" data-title="Height conventions"><p>Some books count <em>nodes</em> rather than edges,
+      making a single node height 1. This course counts edges, so a single node has height 0 and an empty tree has
+      height −1. Whatever convention you use, state it; off-by-one bugs in tree code usually start here.</p></aside>
+    <aside class="callout think"><p>A perfect binary tree of height h has 2<sup>h+1</sup> − 1 nodes. So how tall must
+      a binary tree holding one million keys be, at minimum? (Answer: about 19, because 2<sup>20</sup> ≈ 10<sup>6</sup>.)
+      That logarithm is the entire reason we care about trees.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="representations">
+    <h2>Representing trees in Python</h2>
+    <p>Python has no built-in tree type, so you choose a representation. The most flexible is a <strong>node
+      class</strong> with references to children, exactly like the linked-list nodes from <a href="m21-linked-lists.html">M21</a>
+      but with two "next" pointers. A dataclass with <code>slots=True</code> keeps each node small.</p>
+    <div class="runnable" data-title="A node class and a small tree">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Node:
+    value: int
+    left: "Node | None" = None
+    right: "Node | None" = None
+
+#        8
+#      /   \
+#     3     10
+#    / \      \
+#   1   6      14
+root = Node(8, Node(3, Node(1), Node(6)), Node(10, None, Node(14)))
+
+print(root.left.right.value)      # 6
+print(root.right.left)            # None: no left child
+print(root)
+</textarea>
+    </div>
+    <p>Other representations trade flexibility for compactness:</p>
+    <div class="tabs">
+      <div class="tab" data-label="Array (implicit)"><p>Store a <em>complete</em> tree level by level in a list. The
+        children of index <code>i</code> are at <code>2i + 1</code> and <code>2i + 2</code>; the parent is at
+        <code>(i - 1) // 2</code>. No pointers at all. Perfect for heaps, wasteful for sparse trees.</p>
+        <pre><code class="language-python">tree = [8, 3, 10, 1, 6, None, 14]
+left_of_3 = tree[2 * 1 + 1]   # 1</code></pre></div>
+      <div class="tab" data-label="Nested tuples"><p>Immutable and easy to print: <code>(value, left, right)</code>.
+        Good for small fixed trees and tests.</p>
+        <pre><code class="language-python">tree = (8, (3, (1, None, None), (6, None, None)), (10, None, (14, None, None)))</code></pre></div>
+      <div class="tab" data-label="Dict of children"><p>For n-ary trees with named nodes (org charts, file systems):
+        map each node to a list of children, plus a parent map if you need to walk upward.</p>
+        <pre><code class="language-python">children = {"ceo": ["cto", "cfo"], "cto": ["dev1", "dev2"], "cfo": []}
+parent = {c: p for p, kids in children.items() for c in kids}</code></pre></div>
+    </div>
+    <p>What to remember: node objects for trees that change shape (BSTs, AVL trees); arrays for complete trees
+      (heaps); dicts for named n-ary hierarchies.</p>
+  </section>
+
+  <section class="lesson-section" id="traversals">
+    <h2>Traversals: visiting every node</h2>
+    <p>A <strong>traversal</strong> visits every node exactly once. Depth-first traversals differ only in
+      <em>when</em> they process the current node relative to its subtrees:</p>
+    <ul>
+      <li><strong>Pre-order</strong> (node, left, right): the node comes first. Use it to copy or serialize a tree,
+        because a parent is written before its children.</li>
+      <li><strong>In-order</strong> (left, node, right): in a binary search tree this yields keys in sorted order.</li>
+      <li><strong>Post-order</strong> (left, right, node): children come first. Use it whenever a node's answer depends
+        on its children's answers: heights, sizes, deleting a directory tree.</li>
+    </ul>
+    <div class="runnable" data-title="Three recursive traversals as generators">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Node:
+    value: int
+    left: "Node | None" = None
+    right: "Node | None" = None
+
+root = Node(8, Node(3, Node(1), Node(6, Node(4))), Node(10, None, Node(14)))
+
+def preorder(node):
+    if node:
+        yield node.value
+        yield from preorder(node.left)
+        yield from preorder(node.right)
+
+def inorder(node):
+    if node:
+        yield from inorder(node.left)
+        yield node.value
+        yield from inorder(node.right)
+
+def postorder(node):
+    if node:
+        yield from postorder(node.left)
+        yield from postorder(node.right)
+        yield node.value
+
+print("pre ", list(preorder(root)))
+print("in  ", list(inorder(root)))
+print("post", list(postorder(root)))
+</textarea>
+    </div>
+    <p>Step through a small traversal and watch the call stack grow to the tree's height, then shrink. The
+      <em>frames</em> panel is the recursion's implicit stack.</p>
+    <div class="tracer" data-title="In-order traversal, frame by frame">
+<textarea>
+class Node:
+    def __init__(self, value, left=None, right=None):
+        self.value, self.left, self.right = value, left, right
+
+def inorder(node, out):
+    if node is None:
+        return
+    inorder(node.left, out)
+    out.append(node.value)
+    inorder(node.right, out)
+
+root = Node(2, Node(1), Node(3))
+result = []
+inorder(root, result)
+</textarea>
+    </div>
+    <h3>Iterative versions with an explicit stack</h3>
+    <p>Recursion depth equals tree height. On a degenerate tree with 5,000 nodes, Python's default recursion limit
+      (about 1,000) is exceeded and you get <code>RecursionError</code>. Replacing the implicit call stack with an
+      explicit list removes that limit, and the technique (simulate the call stack yourself) works for any
+      recursive algorithm.</p>
+    <div class="runnable" data-title="Iterative pre-order and in-order">
+<textarea>
+class Node:
+    def __init__(self, value, left=None, right=None):
+        self.value, self.left, self.right = value, left, right
+
+root = Node(8, Node(3, Node(1), Node(6, Node(4))), Node(10, None, Node(14)))
+
+def preorder_iter(root):
+    out, stack = [], [root] if root else []
+    while stack:
+        node = stack.pop()
+        out.append(node.value)
+        if node.right:            # push right first so left pops first
+            stack.append(node.right)
+        if node.left:
+            stack.append(node.left)
+    return out
+
+def inorder_iter(root):
+    out, stack, node = [], [], root
+    while stack or node:
+        while node:               # run as far left as possible
+            stack.append(node)
+            node = node.left
+        node = stack.pop()        # leftmost unvisited node
+        out.append(node.value)
+        node = node.right         # then its right subtree
+    return out
+
+print(preorder_iter(root))
+print(inorder_iter(root))
+
+# A degenerate tree 5000 deep: recursion would fail, iteration is fine.
+deep = None
+for v in range(5000, 0, -1):
+    deep = Node(v, None, deep)
+print(len(inorder_iter(deep)))
+</textarea>
+    </div>
+    <h3>Level order with a queue</h3>
+    <p><strong>Level-order</strong> (breadth-first) traversal visits the root, then all depth-1 nodes, then depth 2,
+      and so on. Swap the stack for a FIFO queue: <code>collections.deque</code> from <a href="m22-stacks-queues.html">M22</a>.
+      Processing one level at a time (by remembering the queue's length) gives you the levels as separate lists.</p>
+    <div class="runnable" data-title="Predict: level order by levels" data-predict>
+<textarea>
+from collections import deque
+
+class Node:
+    def __init__(self, value, left=None, right=None):
+        self.value, self.left, self.right = value, left, right
+
+root = Node(8, Node(3, Node(1), Node(6)), Node(10, None, Node(14)))
+
+def levels(root):
+    out, queue = [], deque([root])
+    while queue:
+        level = []
+        for _ in range(len(queue)):
+            node = queue.popleft()
+            level.append(node.value)
+            for child in (node.left, node.right):
+                if child:
+                    queue.append(child)
+        out.append(level)
+    return out
+
+print(levels(root))
+</textarea>
+    </div>
+    <p>What to remember: pre-order for copying, in-order for sorted output, post-order when children answer first,
+      level order for "by depth" questions. Recursion uses O(h) stack; iteration avoids the recursion limit.</p>
+  </section>
+
+  <section class="lesson-section" id="bst">
+    <h2>Binary search trees: search and insert</h2>
+    <p>A <strong>binary search tree</strong> (BST) is a binary tree with an ordering invariant, the <strong>BST
+      property</strong>: for every node, all keys in its left subtree are smaller and all keys in its right subtree
+      are larger. Not just the children: the <em>entire</em> subtree. That invariant turns the tree into a
+      decision procedure, the tree-shaped cousin of binary search: at each node, one comparison discards a whole
+      subtree.</p>
+    <ul>
+      <li><strong>Search</strong>: start at the root; go left if the key is smaller, right if larger; stop when equal
+        or when you fall off the tree.</li>
+      <li><strong>Insert</strong>: search for the key; where the search falls off, attach a new leaf. New keys are always
+        inserted as leaves.</li>
+      <li><strong>Min / max</strong>: keep going left (or right) until you cannot.</li>
+    </ul>
+    <p>Each operation follows one root-to-leaf path, so it costs O(h). Insert values in the visualizer below, search for
+      one, and run the traversals: in-order always comes out sorted.</p>
+    <div class="viz" data-viz="bst" data-config='{"values": [50, 30, 70, 20, 40, 60, 80, 35]}'></div>
+    <div class="runnable" data-title="A minimal BST with search and insert">
+<textarea>
+class Node:
+    __slots__ = ("key", "left", "right")
+    def __init__(self, key):
+        self.key, self.left, self.right = key, None, None
+
+class BST:
+    def __init__(self):
+        self.root = None
+        self.size = 0
+
+    def insert(self, key):
+        if self.root is None:
+            self.root = Node(key); self.size += 1; return
+        node = self.root
+        while True:
+            if key == node.key:
+                return                       # no duplicates in this version
+            side = "left" if key < node.key else "right"
+            child = getattr(node, side)
+            if child is None:
+                setattr(node, side, Node(key)); self.size += 1; return
+            node = child
+
+    def __contains__(self, key):
+        node, steps = self.root, 0
+        while node:
+            steps += 1
+            if key == node.key:
+                print(f"found {key} in {steps} comparisons")
+                return True
+            node = node.left if key < node.key else node.right
+        print(f"{key} missing after {steps} comparisons")
+        return False
+
+t = BST()
+for k in [50, 30, 70, 20, 40, 60, 80, 35]:
+    t.insert(k)
+print(35 in t)
+print(65 in t)
+print("size", t.size)
+</textarea>
+    </div>
+    <aside class="callout warn" data-title="Duplicates"><p>Decide how to handle equal keys and document it. Options:
+      reject them (a set), replace the value (a map, which is what the mini-project does), or keep a count in the
+      node. Sending equal keys "always right" works but makes deletion and balance subtle.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="delete">
+    <h2>Deleting from a BST: the three cases</h2>
+    <p>Deletion is the operation people get wrong, because removing a node must leave the BST property intact. Find
+      the node first, then:</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 200" width="640" role="img" aria-label="Three BST deletion cases">
+        <g font-size="13" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="105" y="20">1. Leaf: just remove it</text>
+          <text x="320" y="20">2. One child: splice it out</text>
+          <text x="535" y="20">3. Two children: use the successor</text>
+        </g>
+        <g stroke="var(--fg-muted)" stroke-width="1.5">
+          <line x1="105" y1="55" x2="65" y2="105"/><line x1="105" y1="55" x2="145" y2="105"/>
+          <line x1="320" y1="55" x2="280" y2="105"/><line x1="280" y1="105" x2="250" y2="155"/>
+          <line x1="535" y1="55" x2="490" y2="105"/><line x1="535" y1="55" x2="580" y2="105"/><line x1="580" y1="105" x2="555" y2="155"/>
+        </g>
+        <g stroke-width="2" fill="var(--bg-elev)" stroke="var(--viz-1)">
+          <circle cx="105" cy="55" r="16"/><circle cx="65" cy="105" r="16"/>
+          <circle cx="145" cy="105" r="16" fill="var(--bad-soft)" stroke="var(--bad)"/>
+          <circle cx="320" cy="55" r="16"/><circle cx="280" cy="105" r="16" fill="var(--bad-soft)" stroke="var(--bad)"/><circle cx="250" cy="155" r="16"/>
+          <circle cx="535" cy="55" r="16" fill="var(--bad-soft)" stroke="var(--bad)"/><circle cx="490" cy="105" r="16"/>
+          <circle cx="580" cy="105" r="16"/><circle cx="555" cy="155" r="16" fill="var(--ok-soft)" stroke="var(--ok)"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="105" y="60">5</text><text x="65" y="110">3</text><text x="145" y="110">8</text>
+          <text x="320" y="60">9</text><text x="280" y="110">4</text><text x="250" y="160">2</text>
+          <text x="535" y="60">5</text><text x="490" y="110">3</text><text x="580" y="110">8</text><text x="555" y="160">6</text>
+        </g>
+        <g font-size="12" fill="var(--fg-muted)">
+          <text x="40" y="190">delete 8: parent.right = None</text>
+          <text x="235" y="190">delete 4: 9.left = 2</text>
+          <text x="440" y="190">delete 5: copy 6 up, delete old 6</text>
+        </g>
+      </svg>
+      <figcaption>Red: the node to delete. Green: the in-order successor (smallest key in the right subtree).</figcaption>
+    </figure>
+    <ol>
+      <li><strong>Leaf</strong>: replace the parent's reference with <code>None</code>.</li>
+      <li><strong>One child</strong>: replace the node with its only child. The child's whole subtree was already on
+        the correct side of the parent, so the property holds.</li>
+      <li><strong>Two children</strong>: find the <strong>in-order successor</strong> (go right once, then left as far as
+        possible). It is the next larger key, so it can sit where the deleted node was: larger than everything on the
+        left, smaller than everything else on the right. Copy its key up, then delete the successor from the right
+        subtree; it has no left child, so that deletion is case 1 or 2. (The in-order predecessor works symmetrically.)</li>
+    </ol>
+    <p>A recursive formulation is the cleanest: <code>delete(node, key)</code> returns the new root of the subtree,
+      and each caller reattaches whatever comes back.</p>
+    <div class="runnable" data-title="Recursive delete that returns the new subtree root">
+<textarea>
+class Node:
+    __slots__ = ("key", "left", "right")
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def insert(node, key):
+    if node is None:
+        return Node(key)
+    if key < node.key:
+        node.left = insert(node.left, key)
+    elif key > node.key:
+        node.right = insert(node.right, key)
+    return node
+
+def delete(node, key):
+    if node is None:
+        return None                              # key not found
+    if key < node.key:
+        node.left = delete(node.left, key)
+    elif key > node.key:
+        node.right = delete(node.right, key)
+    else:
+        if node.left is None:                    # cases 1 and 2
+            return node.right
+        if node.right is None:
+            return node.left
+        succ = node.right                        # case 3
+        while succ.left:
+            succ = succ.left
+        node.key = succ.key
+        node.right = delete(node.right, succ.key)
+    return node
+
+def inorder(n):
+    return inorder(n.left) + [n.key] + inorder(n.right) if n else []
+
+root = None
+for k in [50, 30, 70, 20, 40, 60, 80]:
+    root = insert(root, k)
+for k in [20, 30, 50]:
+    root = delete(root, k)
+    print(f"after deleting {k}: {inorder(root)}  root={root.key}")
+</textarea>
+    </div>
+    <aside class="callout danger" data-title="The classic bug"><p>Forgetting to <em>assign</em> the result:
+      writing <code>delete(node.left, key)</code> instead of <code>node.left = delete(node.left, key)</code>. The
+      recursive call computes the new subtree and then the caller throws it away. If deleting a leaf "does nothing",
+      look for this first.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="balance">
+    <h2>Degenerate trees and balancing</h2>
+    <p>Every BST operation is O(h). The catch: h depends on insertion order. Insert 1, 2, 3, …, n into an empty BST
+      and every new key goes to the right of the previous one. The "tree" is a linked list with height n − 1, and
+      search is O(n). Sorted or nearly sorted input is common in practice (timestamps, auto-increment ids), so this is
+      not a theoretical worry.</p>
+    <div class="runnable" data-title="Measure height for random vs sorted insertion">
+<textarea>
+import random
+
+class Node:
+    __slots__ = ("key", "left", "right")
+    def __init__(self, key):
+        self.key, self.left, self.right = key, None, None
+
+def insert(root, key):
+    if root is None:
+        return Node(key)
+    node = root
+    while True:
+        side = "left" if key < node.key else "right"
+        child = getattr(node, side)
+        if child is None:
+            setattr(node, side, Node(key))
+            return root
+        node = child
+
+def height(root):
+    # iterative: level-order counting levels
+    if root is None:
+        return -1
+    level, h = [root], -1
+    while level:
+        h += 1
+        level = [c for n in level for c in (n.left, n.right) if c]
+    return h
+
+n = 2000
+keys = list(range(n))
+random.seed(1)
+shuffled = random.sample(keys, n)
+r1 = r2 = None
+for k in shuffled: r1 = insert(r1, k)
+for k in keys:     r2 = insert(r2, k)
+print("random order height:", height(r1), "(log2 n ≈ 11)")
+print("sorted order height:", height(r2))
+</textarea>
+    </div>
+    <p>Random insertion gives expected height about 2.99 log₂ n, which is fine. Adversarial or sorted input does not.
+      <strong>Self-balancing</strong> trees fix this by restructuring after each insert or delete so the height stays
+      O(log n) no matter the order.</p>
+    <h3>AVL trees and rotations</h3>
+    <p>An <strong>AVL tree</strong> (Adelson-Velsky and Landis, 1962) stores each node's height and maintains the
+      <strong>balance factor</strong> <code>height(left) − height(right)</code> in {−1, 0, 1}. After an insert, walk
+      back up the path; at the first node whose balance factor becomes ±2, apply a <strong>rotation</strong>: a local
+      pointer rearrangement that preserves the in-order sequence (so the BST property survives) while shortening
+      the heavy side.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 600 190" width="600" role="img" aria-label="Right rotation around y">
+        <g stroke="var(--fg-muted)" stroke-width="1.5">
+          <line x1="140" y1="40" x2="95" y2="90"/><line x1="140" y1="40" x2="185" y2="90"/>
+          <line x1="95" y1="90" x2="60" y2="140"/><line x1="95" y1="90" x2="130" y2="140"/>
+          <line x1="460" y1="40" x2="415" y2="90"/><line x1="460" y1="40" x2="505" y2="90"/>
+          <line x1="505" y1="90" x2="470" y2="140"/><line x1="505" y1="90" x2="540" y2="140"/>
+        </g>
+        <g stroke-width="2" fill="var(--bg-elev)">
+          <circle cx="140" cy="40" r="16" stroke="var(--viz-2)"/><circle cx="95" cy="90" r="16" stroke="var(--viz-1)"/>
+          <circle cx="460" cy="40" r="16" stroke="var(--viz-1)"/><circle cx="505" cy="90" r="16" stroke="var(--viz-2)"/>
+        </g>
+        <g fill="var(--bg-sunk)" stroke="var(--border-strong)">
+          <rect x="45" y="140" width="30" height="30"/><rect x="115" y="140" width="30" height="30"/><rect x="170" y="90" width="30" height="30"/>
+          <rect x="400" y="90" width="30" height="30"/><rect x="455" y="140" width="30" height="30"/><rect x="525" y="140" width="30" height="30"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="140" y="45">y</text><text x="95" y="95">x</text><text x="460" y="45">x</text><text x="505" y="95">y</text>
+          <text x="60" y="160">A</text><text x="130" y="160">B</text><text x="185" y="110">C</text>
+          <text x="415" y="110">A</text><text x="470" y="160">B</text><text x="540" y="160">C</text>
+        </g>
+        <g font-size="13" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="300" y="80">rotate right at y →</text><text x="300" y="100">← rotate left at x</text>
+          <text x="140" y="188">in-order: A x B y C</text><text x="470" y="188">in-order: A x B y C</text>
+        </g>
+      </svg>
+      <figcaption>A rotation moves x up and y down; subtree B changes parent. The in-order sequence is unchanged,
+        so it is still a valid BST.</figcaption>
+    </figure>
+    <table>
+      <thead><tr><th>Imbalance at node z</th><th>Shape</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Left-Left</td><td>z's left child is left-heavy</td><td>rotate right at z</td></tr>
+        <tr><td>Right-Right</td><td>z's right child is right-heavy</td><td>rotate left at z</td></tr>
+        <tr><td>Left-Right</td><td>z's left child is right-heavy</td><td>rotate left at the child, then right at z</td></tr>
+        <tr><td>Right-Left</td><td>z's right child is left-heavy</td><td>rotate right at the child, then left at z</td></tr>
+      </tbody>
+    </table>
+    <p>Insert 10, 20, 30, 40, 50 in the AVL-mode visualizer below and watch it rotate where a plain BST would grow a
+      chain. Then try the same keys in the plain BST above.</p>
+    <div class="viz" data-viz="bst" data-config='{"values": [10, 20, 30], "avl": true}'></div>
+    <div class="runnable" data-title="Rotations in code">
+<textarea>
+class Node:
+    __slots__ = ("key", "left", "right", "height")
+    def __init__(self, key):
+        self.key, self.left, self.right, self.height = key, None, None, 0
+
+def h(n): return n.height if n else -1
+def update(n): n.height = 1 + max(h(n.left), h(n.right))
+def balance(n): return h(n.left) - h(n.right)
+
+def rotate_right(y):
+    x = y.left
+    y.left, x.right = x.right, y        # B moves from x to y
+    update(y); update(x)
+    return x
+
+def rotate_left(x):
+    y = x.right
+    x.right, y.left = y.left, x
+    update(x); update(y)
+    return y
+
+def insert(n, key):
+    if n is None:
+        return Node(key)
+    if key < n.key: n.left = insert(n.left, key)
+    else:           n.right = insert(n.right, key)
+    update(n)
+    b = balance(n)
+    if b > 1:
+        if key > n.left.key: n.left = rotate_left(n.left)       # Left-Right
+        return rotate_right(n)
+    if b < -1:
+        if key < n.right.key: n.right = rotate_right(n.right)   # Right-Left
+        return rotate_left(n)
+    return n
+
+root = None
+for k in range(1, 1024):          # sorted input: worst case for a plain BST
+    root = insert(root, k)
+print("AVL height for 1023 sorted keys:", root.height)   # 9 = log2(1024) - 1
+</textarea>
+    </div>
+    <h3>Red-black trees and B-trees</h3>
+    <div class="two-col">
+      <div class="card"><h4>Red-black trees</h4><p>Each node is red or black; no red node has a red child, and every
+        root-to-leaf path has the same number of black nodes. That guarantees height ≤ 2 log₂(n + 1). Red-black trees
+        are a little less strictly balanced than AVL trees but need fewer rotations on insert and delete, so they are
+        the usual choice for library ordered maps: Java's <code>TreeMap</code>, C++'s <code>std::map</code>, and the
+        Linux kernel's scheduler.</p></div>
+      <div class="card"><h4>B-trees</h4><p>A node holds many sorted keys (often hundreds) and has one more child than
+        keys. The tree is very wide and very shallow: with 500 keys per node, three levels index 125 million rows.
+        Databases (PostgreSQL, SQLite, MySQL InnoDB) and file systems use B-trees and B+ trees because each node is
+        sized to one disk page, so a lookup costs about three or four page reads instead of the ~27 a binary tree would
+        need.</p></div>
+    </div>
+    <aside class="callout pro"><p>The deciding cost in a database is not comparisons but <em>I/O</em>: reading a page from
+      disk or SSD takes far longer than comparing hundreds of keys in memory. B-trees minimize the number of page reads,
+      and B+ trees additionally link the leaves so range scans (<code>WHERE created_at BETWEEN …</code>) are a sequential
+      walk. You will see this again in the SQL modules.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="costs">
+    <h2>Operation costs and Python's toolbox</h2>
+    <table>
+      <thead><tr><th>Operation</th><th>BST average (random keys)</th><th>BST worst (degenerate)</th><th>AVL / red-black</th><th>Sorted list + <code>bisect</code></th></tr></thead>
+      <tbody>
+        <tr><td>search</td><td>O(log n)</td><td>O(n)</td><td>O(log n)</td><td>O(log n)</td></tr>
+        <tr><td>insert</td><td>O(log n)</td><td>O(n)</td><td>O(log n)</td><td>O(n) (shifting)</td></tr>
+        <tr><td>delete</td><td>O(log n)</td><td>O(n)</td><td>O(log n)</td><td>O(n)</td></tr>
+        <tr><td>min / max</td><td>O(log n)</td><td>O(n)</td><td>O(log n)</td><td>O(1)</td></tr>
+        <tr><td>in-order iteration</td><td>O(n)</td><td>O(n)</td><td>O(n)</td><td>O(n)</td></tr>
+        <tr><td>range query (k results)</td><td>O(log n + k)</td><td>O(n)</td><td>O(log n + k)</td><td>O(log n + k)</td></tr>
+        <tr><td>space</td><td colspan="3">O(n) nodes, each with two pointers (plus height or color)</td><td>O(n), compact</td></tr>
+      </tbody>
+    </table>
+    <p>Python's standard library has <strong>no</strong> balanced tree. In practice you reach for:</p>
+    <ul>
+      <li><code>dict</code> / <code>set</code> when you only need exact lookups (O(1), from <a href="m23-hash-tables.html">M23</a>).</li>
+      <li>A sorted <code>list</code> with <code>bisect.insort</code> and <code>bisect_left</code> when reads dominate:
+        O(log n) search, and the O(n) insert is a fast <code>memmove</code> in C.</li>
+      <li><code>heapq</code> when you only need the minimum (next module).</li>
+      <li>The third-party <code>sortedcontainers</code> package (<code>SortedDict</code>, <code>SortedList</code>) for a
+        real ordered map. Add it with <code>pixi add sortedcontainers</code>.</li>
+    </ul>
+    <div class="runnable" data-title="bisect as a poor man's ordered set">
+<textarea>
+import bisect
+
+keys = []
+for k in [50, 30, 70, 20, 40, 60, 80]:
+    bisect.insort(keys, k)
+print(keys)
+
+def range_query(sorted_keys, lo, hi):
+    """All keys in [lo, hi)."""
+    i = bisect.bisect_left(sorted_keys, lo)
+    j = bisect.bisect_left(sorted_keys, hi)
+    return sorted_keys[i:j]
+
+print(range_query(keys, 30, 65))
+print("floor of 55:", keys[bisect.bisect_right(keys, 55) - 1])
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="problems">
+    <h2>Classic tree problems</h2>
+    <p>Almost every tree problem is solved by one question: <em>what does each node need from its children, and what
+      does it return to its parent?</em> Answer that and the recursion writes itself (usually post-order).</p>
+    <div class="card-grid">
+      <div class="card"><h4>Height</h4><p>Return −1 for <code>None</code>, else <code>1 + max(left, right)</code>.</p></div>
+      <div class="card"><h4>Is balanced</h4><p>Return the height, or a sentinel (−2) as soon as any subtree is
+        unbalanced. One pass, O(n), instead of the O(n log n)–O(n²) "compute heights at every node" version.</p></div>
+      <div class="card"><h4>Validate BST</h4><p>Pass down an allowed <code>(low, high)</code> range. Checking only
+        <code>left.key &lt; node.key &lt; right.key</code> is the famous wrong answer.</p></div>
+      <div class="card"><h4>Lowest common ancestor</h4><p>In a BST: walk from the root; the first node whose key lies
+        between the two targets is the LCA. In a general tree: post-order, returning which targets were found.</p></div>
+    </div>
+    <div class="runnable" data-title="Predict: the 'local check' trap" data-predict>
+<textarea>
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+#      10
+#     /  \
+#    5    15
+#        /  \
+#       6    20      <- 6 is less than 10 but sits in 10's right subtree!
+root = Node(10, Node(5), Node(15, Node(6), Node(20)))
+
+def locally_ok(n):
+    if n is None:
+        return True
+    if n.left and n.left.key >= n.key: return False
+    if n.right and n.right.key <= n.key: return False
+    return locally_ok(n.left) and locally_ok(n.right)
+
+def valid(n, lo=float("-inf"), hi=float("inf")):
+    if n is None:
+        return True
+    if not lo < n.key < hi:
+        return False
+    return valid(n.left, lo, n.key) and valid(n.right, n.key, hi)
+
+print(locally_ok(root), valid(root))
+</textarea>
+    </div>
+    <h3>Serialization</h3>
+    <p>To save a tree to a file or send it over a network, flatten it to a string. Pre-order with explicit markers for
+      missing children (<code>#</code>) is unambiguous: the parent comes first, so rebuilding is a single recursive pass
+      that consumes tokens from an iterator.</p>
+    <div class="runnable" data-title="Serialize and deserialize with pre-order">
+<textarea>
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+    def __repr__(self):
+        return f"Node({self.key}, {self.left}, {self.right})"
+
+def serialize(n):
+    if n is None:
+        return "#"
+    return f"{n.key},{serialize(n.left)},{serialize(n.right)}"
+
+def deserialize(text):
+    tokens = iter(text.split(","))
+    def build():
+        tok = next(tokens)
+        if tok == "#":
+            return None
+        node = Node(int(tok))
+        node.left = build()
+        node.right = build()
+        return node
+    return build()
+
+tree = Node(2, Node(1), Node(3, None, Node(4)))
+s = serialize(tree)
+print(s)
+print(deserialize(s))
+print(serialize(deserialize(s)) == s)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="nary">
+    <h2>N-ary trees: file systems and Python's own syntax tree</h2>
+    <p>Trees with any number of children are everywhere. A directory is a node whose children are files and
+      directories; the HTML of this page is a tree of elements (the DOM); JSON is a tree of dicts and lists. Store
+      children in a list (or a dict keyed by name), and the traversals generalize directly: pre-order visits a node then
+      each child; post-order visits each child then the node.</p>
+    <div class="runnable" data-title="Directory sizes with post-order traversal">
+<textarea>
+# A file system as nested dicts: dicts are directories, ints are file sizes in bytes.
+fs = {
+    "src": {"app.py": 1200, "utils.py": 800, "core": {"engine.py": 5400, "__init__.py": 0}},
+    "tests": {"test_app.py": 950},
+    "README.md": 300,
+}
+
+def total_size(node):
+    if isinstance(node, int):
+        return node
+    return sum(total_size(child) for child in node.values())   # children first: post-order
+
+def show(node, name=".", depth=0):
+    size = total_size(node)
+    print(f"{'  ' * depth}{name}{'/' if isinstance(node, dict) else ''}  ({size} B)")
+    if isinstance(node, dict):
+        for child_name, child in sorted(node.items()):
+            show(child, child_name, depth + 1)                    # node first: pre-order
+
+show(fs)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>For real directories use <code>pathlib.Path.walk()</code> (top-down by default,
+      <code>top_down=False</code> for post-order), or <code>Path.rglob("*")</code>. Run it locally with
+      <code>pixi run python</code>; the browser sandbox has only a tiny virtual file system.</p></aside>
+    <p>Python itself parses your source into an <strong>abstract syntax tree</strong> before compiling it. The
+      <code>ast</code> module exposes that tree; linters such as ruff and type checkers such as mypy are, at heart, tree
+      walkers.</p>
+    <div class="runnable" data-title="A peek at the ast module">
+<textarea>
+import ast
+
+tree = ast.parse("total = price * qty + tax")
+print(ast.dump(tree.body[0], indent=2))
+
+# Walk the tree and count node types (ast.walk is a breadth-first traversal).
+from collections import Counter
+print(Counter(type(n).__name__ for n in ast.walk(tree)))
+
+class NameCollector(ast.NodeVisitor):
+    def __init__(self):
+        self.names = []
+    def visit_Name(self, node):
+        self.names.append(node.id)
+        self.generic_visit(node)
+
+v = NameCollector()
+v.visit(tree)
+print(v.names)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise defines a small <code>Node</code> class for you. Tests build trees and check your function.</p>
+
+    <div class="exercise" data-id="m24-e1" data-title="Height and size">
+      <div class="exercise-prompt"><p>Write <code>height(node)</code> (edges on the longest root-to-leaf path; −1 for
+        an empty tree, 0 for a single node) and <code>size(node)</code> (number of nodes).</p></div>
+<textarea class="starter">
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def height(node):
+    ...
+
+def size(node):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_empty():
+    assert height(None) == -1, "an empty tree has height -1"
+    assert size(None) == 0, "an empty tree has size 0"
+
+def test_single():
+    assert height(Node(1)) == 0, "a single node has height 0"
+    assert size(Node(1)) == 1
+
+def test_shape():
+    t = Node(8, Node(3, Node(1), Node(6, Node(4))), Node(10, None, Node(14)))
+    assert height(t) == 3, "longest path is 8-3-6-4: three edges"
+    assert size(t) == 7, "seven nodes"
+
+def test_chain():
+    t = Node(1, None, Node(2, None, Node(3)))
+    assert height(t) == 2, "a 3-node chain has height 2"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Post-order: compute both children's answers, then combine. The base
+        case for <code>None</code> carries the convention.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def height(node):
+    if node is None:
+        return -1
+    return 1 + max(height(node.left), height(node.right))
+
+def size(node):
+    if node is None:
+        return 0
+    return 1 + size(node.left) + size(node.right)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m24-e2" data-title="Iterative in-order and level order">
+      <div class="exercise-prompt"><p>Without recursion, write <code>inorder(root)</code> returning keys in in-order
+        using an explicit stack, and <code>level_order(root)</code> returning a list of lists (one per depth) using
+        <code>collections.deque</code>. Both return <code>[]</code> for an empty tree. A test uses a 3,000-node chain, so
+        recursion will fail.</p></div>
+<textarea class="starter">
+from collections import deque
+
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def inorder(root):
+    ...
+
+def level_order(root):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _tree():
+    return Node(8, Node(3, Node(1), Node(6, Node(4))), Node(10, None, Node(14)))
+
+def test_inorder():
+    assert inorder(_tree()) == [1, 3, 4, 6, 8, 10, 14], "in-order of a BST is sorted"
+    assert inorder(None) == []
+
+def test_levels():
+    assert level_order(_tree()) == [[8], [3, 10], [1, 6, 14], [4]], "group keys by depth, left to right"
+    assert level_order(None) == []
+
+def test_deep_chain():
+    root = None
+    for k in range(3000, 0, -1):
+        root = Node(k, None, root)
+    assert inorder(root) == list(range(1, 3001)), "must work on a 3000-deep tree (no recursion)"
+    assert len(level_order(root)) == 3000
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In-order: push nodes while going left; pop one, record it, then
+        move to its right child. Level order: <code>for _ in range(len(queue))</code> processes exactly one level.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import deque
+
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def inorder(root):
+    out, stack, node = [], [], root
+    while stack or node:
+        while node:
+            stack.append(node)
+            node = node.left
+        node = stack.pop()
+        out.append(node.key)
+        node = node.right
+    return out
+
+def level_order(root):
+    if root is None:
+        return []
+    out, queue = [], deque([root])
+    while queue:
+        level = []
+        for _ in range(len(queue)):
+            node = queue.popleft()
+            level.append(node.key)
+            if node.left:
+                queue.append(node.left)
+            if node.right:
+                queue.append(node.right)
+        out.append(level)
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m24-e3" data-title="A BST set with delete">
+      <div class="exercise-prompt"><p>Complete class <code>BSTSet</code> with <code>add(key)</code> (ignore duplicates),
+        <code>__contains__</code>, <code>remove(key)</code> (raise <code>KeyError</code> if missing; handle all three
+        cases), <code>__len__</code>, and <code>__iter__</code> (sorted order).</p></div>
+<textarea class="starter">
+class Node:
+    __slots__ = ("key", "left", "right")
+    def __init__(self, key):
+        self.key, self.left, self.right = key, None, None
+
+class BSTSet:
+    def __init__(self):
+        self.root = None
+        self._size = 0
+
+    def add(self, key):
+        ...
+
+    def __contains__(self, key):
+        ...
+
+    def remove(self, key):
+        ...
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _make(keys):
+    s = BSTSet()
+    for k in keys:
+        s.add(k)
+    return s
+
+def test_add_contains_len():
+    s = _make([50, 30, 70, 30, 20])
+    assert len(s) == 4, "duplicates are ignored"
+    assert 30 in s and 20 in s and 99 not in s
+
+def test_iter_sorted():
+    assert list(_make([5, 2, 8, 1, 9, 3])) == [1, 2, 3, 5, 8, 9], "iteration is in-order"
+
+def test_remove_leaf_one_child_two_children():
+    s = _make([50, 30, 70, 20, 40, 60, 80, 35])
+    s.remove(20)   # leaf
+    s.remove(40)   # one child (35)
+    s.remove(50)   # two children, root
+    assert list(s) == [30, 35, 60, 70, 80], f"got {list(s)}"
+    assert len(s) == 5
+    assert 50 not in s
+
+def test_remove_missing_raises():
+    s = _make([1, 2])
+    try:
+        s.remove(3)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("removing a missing key should raise KeyError")
+    assert len(s) == 2, "a failed remove must not change the size"
+
+def test_remove_everything():
+    import random
+    keys = random.Random(7).sample(range(200), 100)
+    s = _make(keys)
+    for k in keys:
+        s.remove(k)
+    assert len(s) == 0 and list(s) == [] and s.root is None
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write a recursive helper <code>_remove(node, key)</code> that
+        returns the new subtree root, and assign its result. Raise <code>KeyError</code> when you reach
+        <code>None</code>; decrement the size only after a successful removal.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    __slots__ = ("key", "left", "right")
+    def __init__(self, key):
+        self.key, self.left, self.right = key, None, None
+
+class BSTSet:
+    def __init__(self):
+        self.root = None
+        self._size = 0
+
+    def add(self, key):
+        if self.root is None:
+            self.root = Node(key)
+            self._size += 1
+            return
+        node = self.root
+        while True:
+            if key == node.key:
+                return
+            if key &lt; node.key:
+                if node.left is None:
+                    node.left = Node(key)
+                    self._size += 1
+                    return
+                node = node.left
+            else:
+                if node.right is None:
+                    node.right = Node(key)
+                    self._size += 1
+                    return
+                node = node.right
+
+    def __contains__(self, key):
+        node = self.root
+        while node:
+            if key == node.key:
+                return True
+            node = node.left if key &lt; node.key else node.right
+        return False
+
+    def remove(self, key):
+        self.root = self._remove(self.root, key)
+        self._size -= 1
+
+    def _remove(self, node, key):
+        if node is None:
+            raise KeyError(key)
+        if key &lt; node.key:
+            node.left = self._remove(node.left, key)
+        elif key &gt; node.key:
+            node.right = self._remove(node.right, key)
+        else:
+            if node.left is None:
+                return node.right
+            if node.right is None:
+                return node.left
+            succ = node.right
+            while succ.left:
+                succ = succ.left
+            node.key = succ.key
+            node.right = self._remove(node.right, succ.key)
+        return node
+
+    def __len__(self):
+        return self._size
+
+    def __iter__(self):
+        stack, node = [], self.root
+        while stack or node:
+            while node:
+                stack.append(node)
+                node = node.left
+            node = stack.pop()
+            yield node.key
+            node = node.right</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m24-e4" data-title="Validate a BST and check balance">
+      <div class="exercise-prompt"><p>Write <code>is_bst(root)</code> (strictly increasing in-order; the whole-subtree
+        property, not just parent/child) and <code>is_balanced(root)</code> (every node's subtree heights differ by at
+        most 1) in a single O(n) pass each.</p></div>
+<textarea class="starter">
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def is_bst(root):
+    ...
+
+def is_balanced(root):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_valid_bst():
+    assert is_bst(Node(8, Node(3, Node(1), Node(6)), Node(10, None, Node(14)))) is True
+    assert is_bst(None) is True, "the empty tree is a BST"
+
+def test_deep_violation():
+    bad = Node(10, Node(5), Node(15, Node(6), Node(20)))
+    assert is_bst(bad) is False, "6 is in 10's right subtree, so this is not a BST"
+
+def test_duplicates_not_allowed():
+    assert is_bst(Node(5, Node(5))) is False, "keys must be strictly increasing"
+
+def test_balanced():
+    assert is_balanced(None) is True
+    assert is_balanced(Node(1, Node(2), Node(3, Node(4)))) is True
+    assert is_balanced(Node(1, Node(2, Node(3)))) is False, "left side is 2 taller than the empty right side"
+
+def test_subtree_unbalanced_but_root_heights_equal():
+    left = Node(2, Node(3, Node(4)), None)
+    right = Node(5, Node(6, Node(7)), None)
+    assert is_balanced(Node(1, left, right)) is False, "check every node, not just the root"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For <code>is_bst</code>, pass bounds down: left children get
+        <code>(lo, node.key)</code>, right children <code>(node.key, hi)</code>. For balance, return the height or −2 as a
+        "not balanced" sentinel, and stop as soon as you see it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def is_bst(root, lo=float("-inf"), hi=float("inf")):
+    if root is None:
+        return True
+    if not lo &lt; root.key &lt; hi:
+        return False
+    return is_bst(root.left, lo, root.key) and is_bst(root.right, root.key, hi)
+
+def is_balanced(root):
+    def check(node):
+        if node is None:
+            return -1
+        left = check(node.left)
+        if left == -2:
+            return -2
+        right = check(node.right)
+        if right == -2 or abs(left - right) &gt; 1:
+            return -2
+        return 1 + max(left, right)
+    return check(root) != -2</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m24-e5" data-title="Lowest common ancestor and serialization">
+      <div class="exercise-prompt"><p>Write <code>lca_bst(root, a, b)</code> returning the key of the lowest common
+        ancestor of keys <code>a</code> and <code>b</code> in a BST (both are present; a node is its own ancestor). Then
+        write <code>serialize(root)</code> and <code>deserialize(text)</code> so that
+        <code>serialize(deserialize(serialize(t))) == serialize(t)</code> for any binary tree of ints.</p></div>
+<textarea class="starter">
+class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def lca_bst(root, a, b):
+    ...
+
+def serialize(root):
+    ...
+
+def deserialize(text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _bst():
+    return Node(20, Node(8, Node(4), Node(12, Node(10), Node(14))), Node(22))
+
+def test_lca():
+    t = _bst()
+    assert lca_bst(t, 10, 14) == 12, "10 and 14 split at 12"
+    assert lca_bst(t, 4, 14) == 8
+    assert lca_bst(t, 10, 22) == 20, "split at the root"
+    assert lca_bst(t, 8, 14) == 8, "a node is its own ancestor"
+
+def _same(x, y):
+    if x is None or y is None:
+        return x is y
+    return x.key == y.key and _same(x.left, y.left) and _same(x.right, y.right)
+
+def test_roundtrip_shapes():
+    for t in [None, Node(1), _bst(), Node(1, None, Node(2, Node(-3), None))]:
+        s = serialize(t)
+        assert isinstance(s, str), "serialize returns a string"
+        back = deserialize(s)
+        assert _same(t, back), f"round trip changed the tree for {s!r}"
+        assert serialize(back) == s
+
+def test_shape_is_preserved():
+    assert serialize(Node(1, Node(2))) != serialize(Node(1, None, Node(2))), "left and right children must differ"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>LCA: if both keys are smaller than the node, go left; if both are
+        larger, go right; otherwise you are at the split point. Serialization: pre-order with <code>#</code> for
+        <code>None</code>, then rebuild by consuming an iterator of tokens.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Node:
+    def __init__(self, key, left=None, right=None):
+        self.key, self.left, self.right = key, left, right
+
+def lca_bst(root, a, b):
+    node = root
+    while node:
+        if a &lt; node.key and b &lt; node.key:
+            node = node.left
+        elif a &gt; node.key and b &gt; node.key:
+            node = node.right
+        else:
+            return node.key
+    return None
+
+def serialize(root):
+    out = []
+    def walk(node):
+        if node is None:
+            out.append("#")
+            return
+        out.append(str(node.key))
+        walk(node.left)
+        walk(node.right)
+    walk(root)
+    return ",".join(out)
+
+def deserialize(text):
+    tokens = iter(text.split(","))
+    def build():
+        tok = next(tokens)
+        if tok == "#":
+            return None
+        node = Node(int(tok))
+        node.left = build()
+        node.right = build()
+        return node
+    return build()</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a BST-backed sorted map</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">TreeMap with range queries</span></div>
+      <div class="widget-body">
+        <p>Build <code>TreeMap</code>, an ordered mapping like Java's <code>TreeMap</code> or
+          <code>sortedcontainers.SortedDict</code>, in <code>treemap.py</code>. Set it up with Pixi:</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init treemap &amp;&amp; cd treemap
+pixi add python=3.14 pytest
+pixi run python -m pytest -q</code></pre>
+        <p>Spec:</p>
+        <ul>
+          <li><code>tm[key] = value</code>, <code>tm[key]</code> (raises <code>KeyError</code>), <code>del tm[key]</code>,
+            <code>key in tm</code>, <code>len(tm)</code>, and iteration over keys in sorted order. Subclass
+            <code>collections.abc.MutableMapping</code> and you get <code>get</code>, <code>items</code>,
+            <code>pop</code>, and <code>update</code> for free.</li>
+          <li><code>min_key()</code>, <code>max_key()</code>, <code>floor(key)</code> (largest key ≤ key) and
+            <code>ceiling(key)</code> (smallest key ≥ key), returning <code>None</code> when none exists.</li>
+          <li><code>range(lo, hi)</code>: yield <code>(key, value)</code> for <code>lo &lt;= key &lt; hi</code> in order,
+            visiting only the O(log n + k) nodes that matter (prune subtrees that lie entirely outside the range).</li>
+        </ul>
+        <ul class="checklist" data-id="m24-mini">
+          <li><code>TreeMap</code> passes a property test: after 1,000 random set/delete operations, it agrees with a plain <code>dict</code> plus <code>sorted()</code></li>
+          <li>Deleting a key with two children uses the in-order successor and moves the value along with the key</li>
+          <li><code>floor</code> and <code>ceiling</code> are O(h) and handle keys below the minimum and above the maximum</li>
+          <li><code>range</code> prunes: a counter shows it visits far fewer than n nodes for a narrow range</li>
+          <li>Type hints throughout (<code>class TreeMap[K, V](MutableMapping[K, V])</code>) and Google-style docstrings</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add AVL balancing and assert the height stays ≤ 1.44 log₂(n + 2) on sorted
+          inserts; add <code>rank(key)</code> (number of keys smaller than key) by storing subtree sizes; benchmark
+          against <code>bisect</code> on a sorted list with <code>timeit</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m24-quiz">
+<script type="application/json">
+{"title": "Trees and BSTs quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Using this course's convention, what is the height of a tree with a single node?", "options": ["-1", "0", "1", "Undefined"], "answer": 1, "explanation": "<p>Height counts <em>edges</em> on the longest downward path. One node has no edges, so height 0; the empty tree is -1.</p>"},
+  {"type": "single", "prompt": "Which traversal of a binary search tree yields the keys in sorted order?", "options": ["Pre-order", "In-order", "Post-order", "Level order"], "answer": 1, "explanation": "<p>In-order visits the left subtree (all smaller keys), then the node, then the right subtree (all larger keys), which is ascending order by induction.</p>"},
+  {"type": "single", "prompt": "You need each directory's total size, which depends on its contents. Which traversal fits?", "options": ["Pre-order", "In-order", "Post-order", "None; use a hash table"], "answer": 2, "explanation": "<p>Post-order processes children before the parent, so each directory's children have already reported their sizes.</p>"},
+  {"type": "output", "prompt": "Keys 1, 2, 3, 4, 5 are inserted in that order into an empty (unbalanced) BST. What is its height?", "code": "# insert 1, 2, 3, 4, 5 into a plain BST\n# print(height(root))", "answer": "4", "explanation": "<p>Each key is larger than all previous ones and goes to the right: a chain of 5 nodes with 4 edges. Sorted input produces a degenerate tree.</p>"},
+  {"type": "single", "prompt": "When deleting a node with two children, which key replaces it?", "options": ["Its left child", "Its right child", "The in-order successor (minimum of the right subtree) or predecessor", "The root"], "answer": 2, "explanation": "<p>The successor is the next larger key: bigger than everything in the left subtree and smaller than everything else in the right subtree, so the BST property is preserved.</p>"},
+  {"type": "multi", "prompt": "Which statements about the BST property are true?", "options": ["Every key in the left subtree is smaller than the node", "It is enough that left child &lt; node &lt; right child at each node", "It makes search follow a single root-to-leaf path", "It guarantees O(log n) height"], "answer": [0, 2], "explanation": "<p>The property is about entire subtrees, which is why the local check is a classic bug. It makes search O(h) but says nothing about h; balance is a separate invariant.</p>"},
+  {"type": "single", "prompt": "What does a rotation preserve?", "options": ["The height of every node", "The in-order sequence of keys", "The root", "The number of leaves"], "answer": 1, "explanation": "<p>A rotation rearranges three pointers so the in-order order is unchanged; therefore the result is still a valid BST, just shaped differently.</p>"},
+  {"type": "single", "prompt": "An AVL node's left child is right-heavy and the node's balance factor is +2. What fixes it?", "options": ["Rotate right at the node", "Rotate left at the node", "Rotate left at the child, then right at the node", "Recolor the nodes"], "answer": 2, "explanation": "<p>That is the Left-Right case: a single right rotation would just move the imbalance. First rotate the child left to make it Left-Left, then rotate right.</p>"},
+  {"type": "single", "prompt": "Why do databases index with B-trees rather than binary search trees?", "options": ["B-trees use less memory per key", "Binary trees cannot be stored on disk", "Wide nodes sized to a disk page make the tree shallow, minimizing slow page reads", "B-trees do not need comparisons"], "answer": 2, "explanation": "<p>With hundreds of keys per node, three or four levels index hundreds of millions of rows. Each level is one page read, and page reads dominate the cost.</p>"},
+  {"type": "text", "prompt": "Which standard-library module parses Python source code into a syntax tree you can walk?", "answer": ["ast"], "explanation": "<p><code>ast.parse</code> returns a tree of node objects; <code>ast.walk</code> and <code>ast.NodeVisitor</code> traverse it. Linters and formatters are built on this idea.</p>"},
+  {"type": "single", "prompt": "Why convert a recursive traversal to an explicit stack in Python?", "options": ["It changes the time complexity from O(n log n) to O(n)", "Deep (degenerate) trees can exceed the recursion limit, raising RecursionError", "Python does not support recursion on objects", "It sorts the output"], "answer": 1, "explanation": "<p>Recursion depth equals tree height; CPython's default limit is about 1000 frames. An explicit list can grow to millions of entries.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import bisect\nkeys = [10, 20, 30, 40]\ni = bisect.bisect_left(keys, 15)\nj = bisect.bisect_left(keys, 40)\nprint(keys[i:j])", "answer": "[20, 30]", "explanation": "<p><code>bisect_left(keys, 15)</code> is 1 and <code>bisect_left(keys, 40)</code> is 3, so the slice is the half-open range [15, 40).</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A tree has one root and exactly one path between any two nodes; every child roots a subtree, so recursion fits naturally.</li>
+      <li>Depth counts edges up; height counts edges down. Balanced trees have height O(log n).</li>
+      <li>Pre-order copies, in-order sorts (in a BST), post-order aggregates, level order groups by depth. Explicit stacks and queues replace recursion.</li>
+      <li>The BST property is about whole subtrees. Search, insert, and delete cost O(h); deletion has three cases, and the two-child case uses the in-order successor.</li>
+      <li>Sorted input makes a BST degenerate (O(n)). AVL and red-black trees rebalance with rotations to keep O(log n); B-trees go wide to minimize disk reads.</li>
+      <li>Python has no built-in balanced tree: use <code>dict</code>, <code>bisect</code> on a sorted list, <code>heapq</code>, or <code>sortedcontainers</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="Trees and BSTs">
+<script type="application/json">
+[{"front": "Depth vs height of a node", "back": "Depth: edges from the root down to the node. Height: edges from the node down to its deepest leaf."},
+ {"front": "Complete binary tree", "back": "All levels full except possibly the last, which fills left to right. Can be stored in an array."},
+ {"front": "Height-balanced", "back": "At every node the two subtree heights differ by at most 1, which forces height O(log n)."},
+ {"front": "Pre-, in-, post-order", "back": "Node-left-right (copy/serialize), left-node-right (sorted in a BST), left-right-node (aggregate children first)."},
+ {"front": "Level-order traversal uses…", "back": "A FIFO queue (collections.deque). Process len(queue) nodes per round to get one level at a time."},
+ {"front": "BST property", "back": "All keys in the left subtree are smaller, and all keys in the right subtree larger, than the node."},
+ {"front": "Delete with two children", "back": "Replace the key with the in-order successor (leftmost node of the right subtree), then delete the successor."},
+ {"front": "Why sorted inserts hurt a BST", "back": "Each key goes right of the previous: a chain of height n-1, so operations become O(n)."},
+ {"front": "AVL Left-Right case", "back": "Rotate left at the left child, then rotate right at the unbalanced node."},
+ {"front": "Why B-trees in databases", "back": "Many keys per node (one disk page) make the tree shallow; lookups need 3-4 page reads."},
+ {"front": "Validate BST correctly", "back": "Pass (low, high) bounds down the recursion; a local parent/child check misses deep violations."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/bisect.html">bisect: array bisection algorithm</a></li>
+      <li><a href="https://docs.python.org/3/library/ast.html">ast: abstract syntax trees</a></li>
+      <li><a href="https://docs.python.org/3/library/pathlib.html#pathlib.Path.walk">pathlib.Path.walk</a></li>
+      <li><a href="https://grantjenks.com/docs/sortedcontainers/">sortedcontainers documentation</a> (and its essay on why it is not a tree)</li>
+      <li><a href="https://www.sqlite.org/fileformat2.html#b_tree_pages">SQLite file format: B-tree pages</a></li>
+      <li>Next: <a href="m25-heaps.html">M25 Heaps &amp; Priority Queues</a>, a tree that lives in an array.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

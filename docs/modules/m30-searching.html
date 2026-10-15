@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M30 · Searching &amp; Array Techniques · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m30">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 30</p>
+    <h1>Searching &amp; Array Techniques</h1>
+    <p class="lede">Binary search is ten lines long and famously easy to get wrong. This module teaches it properly,
+      with invariants that make off-by-one errors impossible, and then adds the handful of array techniques (two
+      pointers, sliding windows, prefix sums) that turn many O(n²) brute-force solutions into O(n) ones.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m29-sorting.html">M29</a>,
+      <a href="m19-complexity.html">M19</a>, <a href="m23-hash-tables.html">M23</a></span></div>
+    <ul class="objectives">
+      <li>Write binary search from a clear invariant, including lower bound and upper bound variants</li>
+      <li>Use <code>bisect_left</code>, <code>bisect_right</code>, <code>insort</code>, and the <code>key=</code> argument</li>
+      <li>Apply "binary search on the answer" to optimization problems with a monotone feasibility test</li>
+      <li>Solve pair, deduplication, and three-sum problems with two pointers</li>
+      <li>Use fixed and variable sliding windows for subarray and substring problems</li>
+      <li>Answer range queries with prefix sums and apply range updates with difference arrays</li>
+      <li>Choose between hashing and sorting for a search problem</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="linear-search">
+    <h2>Linear search: the baseline</h2>
+    <p>Looking for your keys, you check every pocket one by one. That is <strong>linear search</strong>: examine each
+      item until you find the target or run out. It needs no preparation and works on any iterable, sorted or not.</p>
+    <pre><code class="language-python">def linear_search(items: list[int], target: int) -&gt; int:
+    for i, item in enumerate(items):
+        if item == target:
+            return i
+    return -1</code></pre>
+    <p><strong>Invariant:</strong> before checking index i, the target is not in <code>items[:i]</code>.
+      <strong>Cost:</strong> best O(1) (first item), worst and average O(n), O(1) space. Python's <code>x in list</code>,
+      <code>list.index</code>, and <code>list.count</code> are linear searches written in C. For one-off searches on
+      small or unsorted data, linear search is the right answer: sorting first would cost O(n log n).</p>
+    <div class="runnable" data-title="Linear search in Python's built-ins">
+<textarea>
+fruits = ["fig", "apple", "kiwi", "plum", "apple"]
+print("kiwi" in fruits)                 # linear scan
+print(fruits.index("apple"))            # first match only
+print(next((i for i, f in enumerate(fruits) if f.startswith("p")), -1))   # first match by predicate
+try:
+    fruits.index("mango")
+except ValueError as err:
+    print("ValueError:", err)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> linear search is O(n) and needs nothing; anything faster needs structure: order
+      (binary search) or hashing (sets and dicts).</p>
+  </section>
+
+  <section class="lesson-section" id="binary-search">
+    <h2>Binary search in depth</h2>
+    <p><strong>Intuition:</strong> guessing a number between 1 and 100 when told "higher" or "lower." The smart first
+      guess is 50, which eliminates half the possibilities. Then 25 or 75. Each guess halves the range, so 7 guesses
+      always suffice (2⁷ = 128 ≥ 100). Looking up a word in a paper dictionary works the same way. The requirement is
+      that the data is <strong>sorted</strong>, so one comparison tells you which half to discard.</p>
+    <div class="viz" data-viz="binary-search" data-config='{"array": [2, 5, 8, 12, 16, 23, 38, 56, 72, 91, 99, 104, 120, 133, 150], "target": 72}'></div>
+    <h3>Write it from an invariant</h3>
+    <p>Most binary-search bugs come from fuzzy thinking about what <code>lo</code> and <code>hi</code> mean. Pick a
+      meaning, write it down as an invariant, and every line follows. We use the <strong>half-open interval</strong>
+      convention <code>[lo, hi)</code>, matching Python's <code>range</code> and slices:</p>
+    <aside class="callout note" data-title="Invariant"><p>If the target is in the list, it is in <code>a[lo:hi]</code>.
+      Everything in <code>a[:lo]</code> is less than the target and everything in <code>a[hi:]</code> is greater.</p></aside>
+    <pre data-label="Pseudo-code"><code class="language-python">lo, hi = 0, n                    # the whole list is still possible
+while lo &lt; hi:                   # the interval [lo, hi) is non-empty
+    mid = (lo + hi) // 2         # lo &lt;= mid &lt; hi
+    if a[mid] &lt; target: lo = mid + 1     # target is right of mid
+    elif a[mid] &gt; target: hi = mid       # target is left of mid (hi is exclusive)
+    else: return mid
+return -1                         # interval empty: not present</code></pre>
+    <div class="runnable" data-title="Binary search, instrumented">
+<textarea>
+def binary_search(a, target):
+    lo, hi = 0, len(a)
+    steps = 0
+    while lo < hi:
+        steps += 1
+        mid = (lo + hi) // 2
+        print(f"  step {steps}: lo={lo} hi={hi} mid={mid} a[mid]={a[mid]}")
+        if a[mid] < target:
+            lo = mid + 1
+        elif a[mid] > target:
+            hi = mid
+        else:
+            return mid
+    return -1
+
+data = list(range(0, 200, 3))      # 67 sorted numbers
+print("found at", binary_search(data, 99))
+print("found at", binary_search(data, 100))
+</textarea>
+    </div>
+    <p><strong>Termination:</strong> every iteration shrinks <code>hi - lo</code> because <code>lo &lt;= mid &lt; hi</code>,
+      so <code>mid + 1 &gt; lo</code> and <code>mid &lt; hi</code>. <strong>Complexity:</strong> O(log n) time (each step
+      halves the interval: a billion items need at most 30 steps), O(1) space. Best case O(1).</p>
+    <h3>The off-by-one traps</h3>
+    <div class="card-grid">
+      <div class="card"><h4>Mixing conventions</h4><p>Using <code>hi = len(a) - 1</code> (closed interval) with
+        <code>while lo &lt; hi</code> skips the last candidate. Closed intervals need <code>while lo &lt;= hi</code> and
+        <code>hi = mid - 1</code>.</p></div>
+      <div class="card"><h4>Infinite loops</h4><p><code>lo = mid</code> instead of <code>lo = mid + 1</code> loops
+        forever when <code>hi = lo + 1</code>, because <code>mid == lo</code>.</p></div>
+      <div class="card"><h4>Overflow</h4><p>In C or Java, <code>(lo + hi) / 2</code> overflows for huge arrays; they
+        write <code>lo + (hi - lo) / 2</code>. Python integers never overflow, but you will see the idiom.</p></div>
+      <div class="card"><h4>Unsorted input</h4><p>Binary search on unsorted data silently returns wrong answers. It
+        does not check, and checking would cost O(n).</p></div>
+    </div>
+    <div class="runnable" data-title="Predict: closed interval with the wrong loop test" data-predict>
+<textarea>
+def buggy(a, target):
+    lo, hi = 0, len(a) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if a[mid] < target:
+            lo = mid + 1
+        elif a[mid] > target:
+            hi = mid - 1
+        else:
+            return mid
+    return -1
+
+print(buggy([1, 3, 5, 7], 7), buggy([1, 3, 5, 7], 5))
+</textarea>
+    </div>
+    <h3>Lower bound and upper bound</h3>
+    <p>"Is it there?" is less useful than "<em>where would it go?</em>" The <strong>lower bound</strong> is the first
+      index whose item is <code>&gt;= target</code>; the <strong>upper bound</strong> is the first index whose item is
+      <code>&gt; target</code>. Equal items occupy exactly <code>a[lower:upper]</code>, so
+      <code>upper - lower</code> counts occurrences, and both indexes are where you would insert to keep the list
+      sorted.</p>
+    <pre><code class="language-python">def lower_bound(a: list[int], target: int) -&gt; int:
+    lo, hi = 0, len(a)            # invariant: a[:lo] &lt; target &lt;= a[hi:]
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if a[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo                     # lo == hi: the boundary</code></pre>
+    <p>This form never "finds" anything mid-loop; it just narrows down to the boundary between "too small" and "big
+      enough." That is the most important idea in this module: binary search finds the <strong>boundary of a
+      monotone predicate</strong>. Here the predicate is <code>a[i] &gt;= target</code>: false, false, ..., false, true,
+      ..., true. Change <code>&lt;</code> to <code>&lt;=</code> and you get the upper bound.</p>
+    <p><strong>Remember:</strong> choose half-open <code>[lo, hi)</code>, write the invariant, use
+      <code>lo = mid + 1</code> / <code>hi = mid</code>, and think "boundary of a true/false predicate."</p>
+  </section>
+
+  <section class="lesson-section" id="bisect">
+    <h2>The <code>bisect</code> module</h2>
+    <p>The standard library ships tested, C-accelerated binary search. You should use it instead of hand-writing the
+      loop in production code.</p>
+    <table>
+      <thead><tr><th>Function</th><th>Returns</th><th>Equivalent to</th></tr></thead>
+      <tbody>
+        <tr><td><code>bisect_left(a, x)</code></td><td>first index i with <code>a[i] &gt;= x</code></td><td>lower bound</td></tr>
+        <tr><td><code>bisect_right(a, x)</code> / <code>bisect(a, x)</code></td><td>first index i with <code>a[i] &gt; x</code></td><td>upper bound</td></tr>
+        <tr><td><code>insort_left(a, x)</code> / <code>insort(a, x)</code></td><td>inserts x, keeping a sorted</td><td>bisect + <code>list.insert</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="bisect in action">
+<textarea>
+from bisect import bisect_left, bisect_right, insort
+
+scores = [10, 20, 20, 20, 35, 50]
+print(bisect_left(scores, 20), bisect_right(scores, 20))   # 1 4
+print("count of 20:", bisect_right(scores, 20) - bisect_left(scores, 20))
+
+def contains(a, x):
+    i = bisect_left(a, x)
+    return i < len(a) and a[i] == x
+
+print(contains(scores, 35), contains(scores, 36))
+
+# Grade lookup: map a score to a letter using breakpoints
+breakpoints, grades = [60, 70, 80, 90], "FDCBA"
+print([grades[bisect_right(breakpoints, s)] for s in [33, 60, 77, 89, 90, 100]])
+
+insort(scores, 25)
+print(scores)
+</textarea>
+    </div>
+    <h3>The <code>key=</code> argument (Python 3.10+)</h3>
+    <p>All bisect functions accept <code>key=</code>. It is applied to the <em>list items</em>, not to the value you
+      search for, so pass the already-extracted key as <code>x</code>. For <code>insort</code>, the key is applied to
+      the new item too, so pass the whole record.</p>
+    <div class="runnable" data-title="Searching records by a field">
+<textarea>
+from bisect import bisect_left, insort
+from operator import itemgetter
+
+events = [(3, "boot"), (8, "login"), (15, "upload"), (21, "logout")]   # sorted by time
+i = bisect_left(events, 10, key=itemgetter(0))      # x is a time, not a tuple
+print("first event at or after t=10:", events[i])
+
+insort(events, (12, "click"), key=itemgetter(0))    # the key is applied to the new record
+print(events)
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>insort</code> finds the spot in O(log n) but <code>list.insert</code> shifts
+      elements, so each insertion is O(n). For many insertions interleaved with searches, use a balanced tree, a heap,
+      or the third-party <code>sortedcontainers</code> package (<code>pixi add sortedcontainers</code>).</p></aside>
+    <p><strong>Remember:</strong> <code>bisect_left</code> is lower bound, <code>bisect_right</code> is upper bound;
+      <code>key=</code> applies to list items only (and to the inserted item in <code>insort</code>).</p>
+  </section>
+
+  <section class="lesson-section" id="search-on-answer">
+    <h2>Binary search on the answer</h2>
+    <p>Binary search works on any <strong>monotone</strong> yes/no question over a range of numbers, not just on arrays.
+      If "can we do it with capacity c?" is false for small c and true for every c past some threshold, the smallest
+      feasible c is a boundary, and you can find it in O(log range) feasibility checks.</p>
+    <h3>Minimum ship capacity</h3>
+    <p>Packages with weights <code>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]</code> must ship in order within 5 days. Each day the
+      ship carries consecutive packages up to its capacity. What is the smallest capacity that works? A capacity below
+      the heaviest package can never work; the total weight always works. In between, more capacity never hurts:
+      monotone.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">lo = max(weights); hi = sum(weights)      # answer is in [lo, hi]
+while lo &lt; hi:
+    mid = (lo + hi) // 2
+    if feasible(mid): hi = mid           # mid works; maybe smaller works too
+    else:             lo = mid + 1       # mid fails; need more
+return lo</code></pre>
+    <div class="runnable" data-title="Search the answer space">
+<textarea>
+def days_needed(weights, capacity):
+    days, load = 1, 0
+    for w in weights:
+        if load + w > capacity:
+            days, load = days + 1, 0
+        load += w
+    return days
+
+def min_capacity(weights, days):
+    lo, hi = max(weights), sum(weights)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if days_needed(weights, mid) <= days:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+weights = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+print(min_capacity(weights, 5))      # 15
+print([days_needed(weights, c) for c in range(10, 21)])   # monotone non-increasing
+</textarea>
+    </div>
+    <h3>Integer square root</h3>
+    <p>The predicate "<code>m * m &lt;= n</code>" is true then false as m grows, so the largest m where it holds is
+      ⌊√n⌋. This works for integers far too big for floating point, where <code>int(n ** 0.5)</code> is wrong.</p>
+    <div class="runnable" data-title="isqrt by binary search">
+<textarea>
+import math
+
+def isqrt(n):
+    lo, hi = 0, n + 1             # invariant: lo*lo <= n < hi*hi
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if mid * mid <= n:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+big = 10 ** 40 + 12345
+print(isqrt(big) == math.isqrt(big))
+print(int(big ** 0.5) == math.isqrt(big), "<- float sqrt loses precision")
+</textarea>
+    </div>
+    <p><strong>Complexity:</strong> O(log(hi − lo)) checks times the cost of one check. For shipping that is
+      O(n log(sum)). <strong>When to use:</strong> "find the minimum X such that ..." or "maximum X such that ..." where
+      checking a given X is easy and feasibility is monotone in X.</p>
+  </section>
+
+  <section class="lesson-section" id="two-pointers">
+    <h2>Two pointers</h2>
+    <p><strong>Intuition:</strong> two people walk toward each other from opposite ends of a sorted bookshelf, looking
+      for two books whose prices add up to a gift card's value. If the pair is too expensive, the person on the right
+      steps left (cheaper); too cheap, the person on the left steps right. Each step rules out a whole row of pairs, so
+      the walk takes O(n) instead of checking all O(n²) pairs.</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "two-sum-sorted", "array": [1, 3, 4, 6, 8, 11, 14, 17], "target": 20}'></div>
+    <div class="runnable" data-title="Pair with a given sum in a sorted list">
+<textarea>
+def pair_sum(a, target):
+    i, j = 0, len(a) - 1
+    while i < j:
+        s = a[i] + a[j]
+        if s == target:
+            return i, j
+        if s < target:
+            i += 1          # a[i] cannot pair with anything: even a[j], the largest left, was too small
+        else:
+            j -= 1          # a[j] cannot pair with anything: even a[i], the smallest left, was too big
+    return None
+
+print(pair_sum([1, 3, 4, 6, 8, 11, 14, 17], 20))
+print(pair_sum([1, 2, 4], 100))
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> no valid pair uses an index outside <code>[i, j]</code>. The comments explain why
+      each move preserves it. <strong>Cost:</strong> O(n) time, O(1) space (after an O(n log n) sort, if needed).</p>
+    <h3>Same-direction pointers: dedupe in place</h3>
+    <p>A <em>slow</em> pointer marks where the next kept item goes; a <em>fast</em> pointer scans. This is how you
+      compact a sorted array without extra memory.</p>
+    <div class="runnable" data-title="Remove duplicates from a sorted list in place">
+<textarea>
+def dedupe_sorted(a):
+    if not a:
+        return 0
+    write = 1                         # a[:write] holds the distinct values seen so far
+    for read in range(1, len(a)):
+        if a[read] != a[write - 1]:
+            a[write] = a[read]
+            write += 1
+    del a[write:]
+    return write
+
+xs = [1, 1, 2, 3, 3, 3, 7, 9, 9]
+print(dedupe_sorted(xs), xs)
+</textarea>
+    </div>
+    <h3>Three-sum</h3>
+    <p>Find all unique triples summing to zero. Sort, fix the first element, then run the two-pointer pair search on the
+      rest. O(n²) instead of O(n³), with duplicates skipped by stepping past equal values.</p>
+    <pre><code class="language-python">def three_sum(nums: list[int]) -&gt; list[tuple[int, int, int]]:
+    nums = sorted(nums)
+    out = []
+    for k in range(len(nums) - 2):
+        if k and nums[k] == nums[k - 1]:
+            continue                       # same first element: same triples
+        i, j = k + 1, len(nums) - 1
+        while i &lt; j:
+            s = nums[k] + nums[i] + nums[j]
+            if s &lt; 0:
+                i += 1
+            elif s &gt; 0:
+                j -= 1
+            else:
+                out.append((nums[k], nums[i], nums[j]))
+                i += 1
+                while i &lt; j and nums[i] == nums[i - 1]:
+                    i += 1
+    return out</code></pre>
+    <p><strong>Remember:</strong> opposite-end pointers on sorted data exploit order to discard many pairs per step;
+      slow/fast pointers compact or partition in place.</p>
+  </section>
+
+  <section class="lesson-section" id="sliding-window">
+    <h2>Sliding windows</h2>
+    <p><strong>Intuition:</strong> a train window shows a fixed stretch of countryside; as the train moves, one tree
+      enters on the right and one leaves on the left. You do not re-look at the whole view, you just update for what
+      entered and what left. A <strong>sliding window</strong> keeps a running summary of a contiguous subarray and
+      updates it in O(1) per step.</p>
+    <h3>Fixed-size window</h3>
+    <p>Maximum sum of any k consecutive items: compute the first window's sum, then slide: add the entering item,
+      subtract the leaving one. O(n) instead of O(n·k).</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "sliding-window", "array": [2, 1, 5, 1, 3, 2, 9, 4, 1], "k": 3}'></div>
+    <div class="runnable" data-title="Fixed window: max sum of k consecutive items">
+<textarea>
+def max_window_sum(a, k):
+    window = sum(a[:k])
+    best = window
+    for right in range(k, len(a)):
+        window += a[right] - a[right - k]    # one in, one out
+        best = max(best, window)
+    return best
+
+print(max_window_sum([2, 1, 5, 1, 3, 2, 9, 4, 1], 3))
+
+# Moving averages are fixed windows too
+temps = [20, 22, 21, 25, 27, 26, 24]
+k = 3
+print([round(sum(temps[i:i + k]) / k, 1) for i in range(len(temps) - k + 1)])
+</textarea>
+    </div>
+    <h3>Variable-size window</h3>
+    <p>For "longest/shortest subarray such that ...", grow the window by moving <code>right</code>; whenever the window
+      breaks the rule, shrink it by moving <code>left</code> until it is valid again. Each index enters once and leaves
+      once, so the total work is O(n) even though there is a loop inside a loop.</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "longest-substring", "text": "abcabcbb"}'></div>
+    <div class="runnable" data-title="Longest substring without repeating characters">
+<textarea>
+def longest_unique(s):
+    last_seen = {}
+    left = best = 0
+    best_span = (0, 0)
+    for right, ch in enumerate(s):
+        if ch in last_seen and last_seen[ch] >= left:
+            left = last_seen[ch] + 1          # jump past the earlier copy
+        last_seen[ch] = right
+        if right - left + 1 > best:
+            best, best_span = right - left + 1, (left, right + 1)
+    return best, s[slice(*best_span)]
+
+for text in ["abcabcbb", "bbbbb", "pwwkew", "dvdf"]:
+    print(text, longest_unique(text))
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> <code>s[left:right + 1]</code> has no repeated characters, and no valid window ending
+      at <code>right</code> starts before <code>left</code>. <strong>When to use:</strong> contiguous subarrays or
+      substrings where a window that is valid stays valid when shrunk (or when grown). It does not work for sums with
+      negative numbers, where shrinking can make a sum bigger; use prefix sums there.</p>
+    <p><strong>Remember:</strong> fixed windows add one and drop one; variable windows expand right and shrink left;
+      each index moves forward at most once per pointer.</p>
+  </section>
+
+  <section class="lesson-section" id="prefix-sums">
+    <h2>Prefix sums and difference arrays</h2>
+    <p><strong>Intuition:</strong> a car's odometer. To know how far you drove between Tuesday and Friday, you do not add
+      up every trip; you subtract Tuesday's odometer reading from Friday's. A <strong>prefix sum</strong> array stores
+      the running total, <code>P[i] = a[0] + ... + a[i-1]</code> with <code>P[0] = 0</code>, and then any range sum is
+      one subtraction: <code>sum(a[i:j]) == P[j] - P[i]</code>.</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "prefix-sum", "array": [3, 1, 4, 1, 5, 9, 2, 6], "queries": [[2, 5], [0, 7], [3, 4]]}'></div>
+    <div class="runnable" data-title="O(1) range sums after O(n) setup">
+<textarea>
+from itertools import accumulate
+
+a = [3, 1, 4, 1, 5, 9, 2, 6]
+P = [0, *accumulate(a)]          # P[i] = sum(a[:i])
+print(P)
+
+def range_sum(i, j):              # sum of a[i:j]
+    return P[j] - P[i]
+
+print(range_sum(2, 6), sum(a[2:6]))
+
+# Count subarrays summing to k (works with negatives, unlike sliding windows)
+from collections import Counter
+def count_subarrays(nums, k):
+    seen, running, count = Counter({0: 1}), 0, 0
+    for x in nums:
+        running += x
+        count += seen[running - k]     # earlier prefixes that leave exactly k
+        seen[running] += 1
+    return count
+
+print(count_subarrays([1, -1, 2, 3, -2, 2], 3))
+</textarea>
+    </div>
+    <h3>Difference arrays: the reverse trick</h3>
+    <p>Suppose you must apply many range updates ("add 5 to every seat from row 10 to 40") and read the final array
+      once. A <strong>difference array</strong> <code>D</code> records only the changes at the boundaries: add v at
+      <code>D[i]</code> and subtract v at <code>D[j]</code>. Taking the prefix sum of <code>D</code> at the end
+      reconstructs every value. Each update is O(1); the final pass is O(n).</p>
+    <div class="runnable" data-title="Range updates with a difference array">
+<textarea>
+from itertools import accumulate
+
+def apply_updates(n, updates):
+    diff = [0] * (n + 1)
+    for start, stop, value in updates:     # add value to a[start:stop]
+        diff[start] += value
+        diff[stop] -= value
+    return list(accumulate(diff[:n]))
+
+# Hotel bookings: how many rooms are occupied each night?
+bookings = [(0, 3, 1), (1, 5, 2), (4, 6, 1)]
+print(apply_updates(7, bookings))
+</textarea>
+    </div>
+    <p><strong>Complexity:</strong> prefix sums O(n) build, O(1) per query, O(n) space. Difference arrays O(1) per
+      update, O(n) to materialize. If you need updates and queries interleaved, a Fenwick tree
+      (<a href="m27-advanced-structures.html">M27</a>) does both in O(log n). Two-dimensional prefix sums work the same
+      way for rectangle sums in images and grids.</p>
+    <p><strong>Remember:</strong> prefix sums turn range queries into subtraction; difference arrays turn range updates
+      into two point updates; they are inverses of each other.</p>
+  </section>
+
+  <section class="lesson-section" id="hashing-vs-sorting">
+    <h2>Hashing versus sorting</h2>
+    <p>Many search problems can be solved two ways. "Does any pair sum to t?" can sort then use two pointers
+      (O(n log n), O(1) extra space), or scan once with a set of seen values (O(n) expected, O(n) space).</p>
+    <div class="tabs">
+      <div class="tab" data-label="Hashing"><pre><code class="language-python">def has_pair_hash(nums: list[int], t: int) -&gt; bool:
+    seen: set[int] = set()
+    for x in nums:
+        if t - x in seen:
+            return True
+        seen.add(x)
+    return False</code></pre></div>
+      <div class="tab" data-label="Sorting"><pre><code class="language-python">def has_pair_sort(nums: list[int], t: int) -&gt; bool:
+    a = sorted(nums)
+    i, j = 0, len(a) - 1
+    while i &lt; j:
+        s = a[i] + a[j]
+        if s == t:
+            return True
+        i, j = (i + 1, j) if s &lt; t else (i, j - 1)
+    return False</code></pre></div>
+    </div>
+    <table>
+      <thead><tr><th>Need</th><th>Prefer</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Exact membership, many lookups</td><td>set / dict</td><td>O(1) expected per lookup</td></tr>
+        <tr><td>Range queries ("all between a and b"), nearest value, k-th smallest</td><td>sorted list + bisect</td><td>hashing destroys order</td></tr>
+        <tr><td>Low memory, data already sorted</td><td>two pointers / binary search</td><td>O(1) extra space</td></tr>
+        <tr><td>Unhashable or only comparable keys</td><td>sorting</td><td>needs only <code>&lt;</code></td></tr>
+        <tr><td>Grouping or counting</td><td>dict / Counter</td><td>one pass</td></tr>
+        <tr><td>Deterministic worst case</td><td>sorting</td><td>hash tables have adversarial worst cases</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Measure both on the same data">
+<textarea>
+import random, timeit
+
+nums = random.sample(range(10_000_000), 200_000)
+t = -1   # impossible target: both must scan everything
+
+def has_pair_hash(nums, t):
+    seen = set()
+    for x in nums:
+        if t - x in seen:
+            return True
+        seen.add(x)
+    return False
+
+def has_pair_sort(nums, t):
+    a = sorted(nums)
+    i, j = 0, len(a) - 1
+    while i < j:
+        s = a[i] + a[j]
+        if s == t:
+            return True
+        if s < t:
+            i += 1
+        else:
+            j -= 1
+    return False
+
+for fn in (has_pair_hash, has_pair_sort):
+    print(fn.__name__, round(min(timeit.repeat(lambda: fn(nums, t), number=1, repeat=3)), 3), "s")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> hash for exact lookups, sort for order-dependent questions; when both work, measure.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m30-e1" data-title="Write lower_bound by hand">
+      <div class="exercise-prompt">
+        <p>Write <code>lower_bound(a, x)</code> returning the first index <code>i</code> such that
+          <code>a[i] &gt;= x</code> in the sorted list <code>a</code>, or <code>len(a)</code> if there is none. Use a
+          binary search loop; do not import <code>bisect</code>.</p>
+      </div>
+<textarea class="starter">
+def lower_bound(a, x):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import bisect, random
+
+def test_examples():
+    a = [1, 3, 3, 3, 7, 9]
+    assert lower_bound(a, 3) == 1, "first 3 is at index 1"
+    assert lower_bound(a, 4) == 4, "4 would go before 7"
+    assert lower_bound(a, 0) == 0, "smaller than everything"
+    assert lower_bound(a, 10) == 6, "larger than everything gives len(a)"
+
+def test_empty():
+    assert lower_bound([], 5) == 0, "empty list gives 0"
+
+def test_matches_bisect():
+    for _ in range(200):
+        a = sorted(random.randint(0, 30) for _ in range(random.randint(0, 25)))
+        x = random.randint(-2, 32)
+        assert lower_bound(a, x) == bisect.bisect_left(a, x), f"wrong for a={a}, x={x}"
+
+def test_no_bisect():
+    assert "bisect" not in lower_bound.__code__.co_names, "write the loop yourself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Invariant: <code>a[:lo] &lt; x &lt;= a[hi:]</code>. If
+        <code>a[mid] &lt; x</code>, set <code>lo = mid + 1</code>; otherwise <code>hi = mid</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def lower_bound(a, x):
+    lo, hi = 0, len(a)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if a[mid] &lt; x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m30-e2" data-title="First and last position with bisect">
+      <div class="exercise-prompt">
+        <p>Write <code>find_range(a, x)</code> returning a tuple <code>(first, last)</code> of the first and last indexes
+          where <code>x</code> occurs in the sorted list <code>a</code>, or <code>(-1, -1)</code> if it does not occur.
+          Use <code>bisect_left</code> and <code>bisect_right</code> so it runs in O(log n).</p>
+      </div>
+<textarea class="starter">
+from bisect import bisect_left, bisect_right
+
+def find_range(a, x):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    a = [5, 7, 7, 8, 8, 8, 10]
+    assert find_range(a, 8) == (3, 5), "8 occupies indexes 3..5"
+    assert find_range(a, 7) == (1, 2), "7 occupies indexes 1..2"
+    assert find_range(a, 5) == (0, 0), "single occurrence at the start"
+    assert find_range(a, 6) == (-1, -1), "6 is absent"
+    assert find_range(a, 11) == (-1, -1), "beyond the end"
+
+def test_empty():
+    assert find_range([], 1) == (-1, -1), "empty list"
+
+def test_all_same():
+    assert find_range([2] * 1000, 2) == (0, 999), "every item matches"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>lo = bisect_left(a, x)</code>; if <code>lo == len(a)</code>
+        or <code>a[lo] != x</code>, it is absent. Otherwise the last index is <code>bisect_right(a, x) - 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from bisect import bisect_left, bisect_right
+
+def find_range(a, x):
+    lo = bisect_left(a, x)
+    if lo == len(a) or a[lo] != x:
+        return (-1, -1)
+    return (lo, bisect_right(a, x) - 1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m30-e3" data-title="Binary search on the answer: Koko's bananas">
+      <div class="exercise-prompt">
+        <p>Koko has piles of bananas and <code>h</code> hours. Each hour she picks one pile and eats up to
+          <code>k</code> bananas from it (if the pile has fewer, she finishes it and waits for the next hour). Write
+          <code>min_speed(piles, h)</code> returning the smallest integer <code>k</code> that lets her finish within
+          <code>h</code> hours. Assume <code>len(piles) &lt;= h</code>. It must handle piles up to 10⁹ quickly.</p>
+      </div>
+<textarea class="starter">
+def min_speed(piles, h):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def hours(piles, k):
+    return sum((p + k - 1) // k for p in piles)
+
+def test_examples():
+    assert min_speed([3, 6, 7, 11], 8) == 4, "speed 4 finishes in 8 hours"
+    assert min_speed([30, 11, 23, 4, 20], 5) == 30, "one pile per hour needs the max pile"
+    assert min_speed([30, 11, 23, 4, 20], 6) == 23, "six hours allows 23"
+
+def test_minimal():
+    import random
+    for _ in range(50):
+        piles = [random.randint(1, 100) for _ in range(random.randint(1, 8))]
+        h = random.randint(len(piles), 40)
+        k = min_speed(piles, h)
+        assert hours(piles, k) <= h, f"speed {k} is too slow for {piles}, h={h}"
+        assert k == 1 or hours(piles, k - 1) > h, f"speed {k} is not the minimum for {piles}, h={h}"
+
+def test_huge_piles_fast():
+    import time
+    start = time.perf_counter()
+    assert min_speed([10 ** 9] * 10, 10 ** 4) == 10 ** 6, "10 piles of 1e9 in 1e4 hours"
+    assert time.perf_counter() - start < 1, "use binary search over k"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Hours needed at speed k is <code>sum(ceil(p / k))</code>, which is
+        non-increasing in k. Search k in <code>[1, max(piles)]</code> for the first speed where hours ≤ h. Integer
+        ceiling: <code>(p + k - 1) // k</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def min_speed(piles, h):
+    lo, hi = 1, max(piles)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        needed = sum((p + mid - 1) // mid for p in piles)
+        if needed &lt;= h:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m30-e4" data-title="Three-sum with two pointers">
+      <div class="exercise-prompt">
+        <p>Write <code>three_sum(nums)</code> returning a list of all <strong>unique</strong> triples
+          <code>(a, b, c)</code> with <code>a &lt;= b &lt;= c</code> and <code>a + b + c == 0</code>, sorted ascending.
+          Aim for O(n²): sort, then two pointers for each first element.</p>
+      </div>
+<textarea class="starter">
+def three_sum(nums):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from itertools import combinations
+
+def brute(nums):
+    return sorted({tuple(sorted(c)) for c in combinations(nums, 3) if sum(c) == 0})
+
+def test_example():
+    got = three_sum([-1, 0, 1, 2, -1, -4])
+    assert got == [(-1, -1, 2), (-1, 0, 1)], f"got {got}"
+
+def test_duplicates():
+    assert three_sum([0, 0, 0, 0]) == [(0, 0, 0)], "only one (0, 0, 0)"
+    assert three_sum([1, 2, 3]) == [], "no solution"
+
+def test_random_against_brute():
+    import random
+    for _ in range(40):
+        nums = [random.randint(-6, 6) for _ in range(random.randint(0, 14))]
+        assert three_sum(nums) == brute(nums), f"wrong for {nums}"
+
+def test_speed():
+    import random, time
+    nums = [random.randint(-10 ** 5, 10 ** 5) for _ in range(1500)]
+    start = time.perf_counter()
+    three_sum(nums)
+    assert time.perf_counter() - start < 3, "too slow: use sorting and two pointers"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>After sorting, skip a first element equal to the previous one.
+        When you find a triple, advance <code>i</code> past all equal values to avoid duplicates.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def three_sum(nums):
+    nums = sorted(nums)
+    out = []
+    for k in range(len(nums) - 2):
+        if k and nums[k] == nums[k - 1]:
+            continue
+        i, j = k + 1, len(nums) - 1
+        while i &lt; j:
+            s = nums[k] + nums[i] + nums[j]
+            if s &lt; 0:
+                i += 1
+            elif s &gt; 0:
+                j -= 1
+            else:
+                out.append((nums[k], nums[i], nums[j]))
+                i += 1
+                while i &lt; j and nums[i] == nums[i - 1]:
+                    i += 1
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m30-e5" data-title="Shortest subarray with sum at least target">
+      <div class="exercise-prompt">
+        <p>Write <code>min_window_len(nums, target)</code> for a list of <strong>positive</strong> integers, returning the
+          length of the shortest contiguous subarray whose sum is <code>&gt;= target</code>, or 0 if none exists. Use a
+          variable-size sliding window for O(n).</p>
+      </div>
+<textarea class="starter">
+def min_window_len(nums, target):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def brute(nums, target):
+    best = 0
+    for i in range(len(nums)):
+        s = 0
+        for j in range(i, len(nums)):
+            s += nums[j]
+            if s >= target:
+                if best == 0 or j - i + 1 < best:
+                    best = j - i + 1
+                break
+    return best
+
+def test_examples():
+    assert min_window_len([2, 3, 1, 2, 4, 3], 7) == 2, "[4, 3] is shortest"
+    assert min_window_len([1, 4, 4], 4) == 1, "a single 4"
+    assert min_window_len([1, 1, 1, 1], 11) == 0, "impossible gives 0"
+
+def test_random():
+    import random
+    for _ in range(100):
+        nums = [random.randint(1, 9) for _ in range(random.randint(0, 20))]
+        t = random.randint(1, 40)
+        assert min_window_len(nums, t) == brute(nums, t), f"wrong for {nums}, target={t}"
+
+def test_linear_time():
+    import time
+    nums = [1] * 200_000
+    start = time.perf_counter()
+    assert min_window_len(nums, 1000) == 1000, "1000 ones are needed"
+    assert time.perf_counter() - start < 2, "too slow: slide the window"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Add <code>nums[right]</code> to a running sum. While the sum is at
+        least the target, record the window length and subtract <code>nums[left]</code>, moving <code>left</code>
+        forward.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def min_window_len(nums, target):
+    best = 0
+    left = 0
+    total = 0
+    for right, x in enumerate(nums):
+        total += x
+        while total &gt;= target:
+            length = right - left + 1
+            if best == 0 or length &lt; best:
+                best = length
+            total -= nums[left]
+            left += 1
+    return best</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m30-e6" data-title="Range updates and range queries">
+      <div class="exercise-prompt">
+        <p>Write two functions. <code>apply_updates(n, updates)</code> starts from <code>n</code> zeros and, for each
+          <code>(start, stop, value)</code>, adds <code>value</code> to every index in <code>range(start, stop)</code>,
+          returning the final list; use a difference array so each update is O(1). <code>prefix_sums(a)</code> returns
+          <code>P</code> with <code>P[0] == 0</code> and <code>P[i] == sum(a[:i])</code> (length <code>len(a) + 1</code>).</p>
+      </div>
+<textarea class="starter">
+def apply_updates(n, updates):
+    ...
+
+def prefix_sums(a):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def test_updates_example():
+    assert apply_updates(7, [(0, 3, 1), (1, 5, 2), (4, 6, 1)]) == [1, 3, 3, 2, 3, 1, 0], "booking example"
+
+def test_updates_random():
+    for _ in range(50):
+        n = random.randint(1, 15)
+        ups = []
+        for _ in range(random.randint(0, 10)):
+            s = random.randint(0, n - 1)
+            ups.append((s, random.randint(s, n), random.randint(-5, 5)))
+        want = [0] * n
+        for s, e, v in ups:
+            for i in range(s, e):
+                want[i] += v
+        assert apply_updates(n, ups) == want, f"wrong for n={n}, updates={ups}"
+
+def test_prefix():
+    a = [3, 1, 4, 1, 5]
+    P = prefix_sums(a)
+    assert P == [0, 3, 4, 8, 9, 14], f"got {P}"
+    assert P[4] - P[1] == sum(a[1:4]), "range sum by subtraction"
+    assert prefix_sums([]) == [0], "empty input gives [0]"
+
+def test_many_updates_fast():
+    import time
+    ups = [(0, 100_000, 1)] * 50_000
+    start = time.perf_counter()
+    out = apply_updates(100_000, ups)
+    assert out[0] == 50_000 and out[-1] == 50_000, "every index gets 50,000"
+    assert time.perf_counter() - start < 2, "too slow: use a difference array"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use a list <code>diff</code> of length <code>n + 1</code>:
+        <code>diff[start] += value</code>, <code>diff[stop] -= value</code>. The answer is the running total of
+        <code>diff[:n]</code> (<code>itertools.accumulate</code> helps).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from itertools import accumulate
+
+def apply_updates(n, updates):
+    diff = [0] * (n + 1)
+    for start, stop, value in updates:
+        diff[start] += value
+        diff[stop] -= value
+    return list(accumulate(diff[:n]))
+
+def prefix_sums(a):
+    return [0, *accumulate(a)]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: "find my range" log search</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">logrange: slice a log by time in O(log n)</span></div>
+      <div class="widget-body">
+        <p>Production logs are append-only, so their lines are already sorted by timestamp. When an incident happened
+          "between 14:02 and 14:07," scanning a 2 GB log line by line is slow. Build a tool that binary searches the
+          timestamps to print exactly the lines in a time range.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init logrange &amp;&amp; cd logrange
+pixi add pytest
+pixi run python make_log.py app.log --lines 500000
+pixi run python logrange.py app.log --start 2026-10-14T14:02:00 --end 2026-10-14T14:07:00</code></pre>
+        <pre data-label="Core idea"><code class="language-python">from bisect import bisect_left
+from datetime import datetime
+
+def parse_ts(line: str) -&gt; datetime:
+    return datetime.fromisoformat(line.split(" ", 1)[0])
+
+def find_range(lines: list[str], start: datetime, end: datetime) -&gt; list[str]:
+    """Return lines with start &lt;= timestamp &lt; end."""
+    lo = bisect_left(lines, start, key=parse_ts)
+    hi = bisect_left(lines, end, key=parse_ts)
+    return lines[lo:hi]</code></pre>
+        <ol>
+          <li>Write <code>make_log.py</code> that generates sorted ISO-8601 timestamped lines with random levels and
+            messages.</li>
+          <li>Implement <code>find_range</code> with <code>bisect</code> and <code>key=</code>, half-open
+            <code>[start, end)</code>. Test boundaries: start before the first line, end after the last, empty ranges,
+            and many lines sharing one timestamp.</li>
+          <li>Add <code>--level ERROR</code> filtering applied only within the found range, and a <code>--count</code>
+            flag that prints only how many lines matched.</li>
+          <li>Compare with a linear scan using <code>timeit</code> and report the speedup.</li>
+          <li>Stretch: search the <em>file</em> without loading it, by seeking to byte offsets with
+            <code>f.seek()</code>, skipping to the next newline, and parsing the timestamp there (binary search over
+            byte positions).</li>
+        </ol>
+        <ul class="checklist" data-id="m30-mini">
+          <li>The generator produces a sorted log of at least 100,000 lines</li>
+          <li><code>find_range</code> uses bisect with <code>key=</code> and a half-open interval</li>
+          <li>Boundary tests pass: before start, after end, empty range, duplicate timestamps</li>
+          <li>Level filtering and <code>--count</code> work</li>
+          <li>A timing comparison shows the binary search beating a linear scan</li>
+          <li>Tests pass under <code>pixi run pytest</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> the byte-offset file search above; support multiple log files merged with
+          <code>heapq.merge</code>; build a sparse index (every 1,000th line's offset and timestamp) saved alongside the
+          log.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m30-quiz">
+<script type="application/json">
+{"title": "Searching and array techniques", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What must be true of the data for binary search to work?", "options": ["It must be stored in a dict", "It must be sorted (more generally, the predicate must be monotone)", "It must contain no duplicates", "It must have a length that is a power of two"], "answer": 1, "explanation": "<p>Binary search relies on one comparison telling you which half to discard. That needs order, or more generally a predicate that is false then true.</p>"},
+  {"type": "single", "prompt": "At most how many comparisons does binary search need on a sorted list of 1,000,000 items?", "options": ["About 20", "About 1,000", "About 500,000", "About 6"], "answer": 0, "explanation": "<p>2²⁰ ≈ 1,048,576, so about 20 halvings reduce a million candidates to one.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from bisect import bisect_left, bisect_right\na = [1, 2, 2, 2, 5]\nprint(bisect_left(a, 2), bisect_right(a, 2))", "answer": "1 4", "explanation": "<p><code>bisect_left</code> is the first index with a[i] ≥ 2 (index 1); <code>bisect_right</code> is the first with a[i] &gt; 2 (index 4). The 2s occupy a[1:4].</p>"},
+  {"type": "single", "prompt": "With the half-open convention <code>lo, hi = 0, len(a)</code> and <code>while lo &lt; hi</code>, what should happen when <code>a[mid] &gt; target</code>?", "options": ["hi = mid - 1", "hi = mid", "lo = mid", "lo = mid + 1"], "answer": 1, "explanation": "<p>hi is exclusive, and mid is ruled out, so hi = mid keeps the invariant that the target is in a[lo:hi]. hi = mid - 1 would wrongly drop index mid - 1.</p>"},
+  {"type": "single", "prompt": "Why can <code>lo = mid</code> (instead of <code>lo = mid + 1</code>) cause an infinite loop?", "options": ["Because mid can be negative", "When hi == lo + 1, mid == lo, so the interval never shrinks", "Because Python integers overflow", "It cannot"], "answer": 1, "explanation": "<p>Floor division makes mid equal lo for a two-element interval, so assigning lo = mid changes nothing.</p>"},
+  {"type": "single", "prompt": "In <code>bisect_left(records, x, key=f)</code>, the key function is applied to:", "options": ["Both x and each record", "Only the records in the list; x must already be a key", "Only x", "Neither; key is ignored"], "answer": 1, "explanation": "<p>For the bisect functions, key is applied to list items only, so you pass the key value as x. <code>insort</code> also applies key to the new item.</p>"},
+  {"type": "single", "prompt": "Binary search on the answer requires that the feasibility check be:", "options": ["O(1)", "Monotone in the candidate answer", "Recursive", "Randomized"], "answer": 1, "explanation": "<p>If feasible(c) implies feasible(c + 1), there is a single boundary to find. The check itself may cost O(n).</p>"},
+  {"type": "single", "prompt": "In the sorted two-pointer pair-sum search, if <code>a[i] + a[j] &lt; target</code>, why is it safe to move <code>i</code> right?", "options": ["Because a[i] pairs with nothing remaining: even the largest partner a[j] was too small", "Because the list has no duplicates", "Because j is always correct", "It is a heuristic, not always safe"], "answer": 0, "explanation": "<p>a[j] is the largest remaining value, so every other partner for a[i] gives an even smaller sum. Discarding a[i] cannot lose a solution.</p>"},
+  {"type": "single", "prompt": "Why is the variable sliding window O(n) even though it has a while loop inside a for loop?", "options": ["The inner loop runs at most once", "Each pointer only moves forward, so each index is added once and removed once", "Python optimizes nested loops", "It is actually O(n²)"], "answer": 1, "explanation": "<p>Amortized analysis: left and right each advance at most n times in total, so the total work is O(n).</p>"},
+  {"type": "multi", "prompt": "Which problems suit a sliding window?", "options": ["Longest substring with at most k distinct characters", "Maximum sum of k consecutive items", "Count subarrays summing to k when values can be negative", "Shortest subarray of positive numbers with sum at least t"], "answer": [0, 1, 3], "explanation": "<p>With negative values, shrinking a window can increase its sum, so validity is not monotone; use prefix sums with a hash map instead.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from itertools import accumulate\na = [2, 4, 6, 8]\nP = [0, *accumulate(a)]\nprint(P[3] - P[1])", "answer": "10", "explanation": "<p>P = [0, 2, 6, 12, 20]. P[3] - P[1] = sum(a[1:3]) = 4 + 6 = 10.</p>"},
+  {"type": "single", "prompt": "A difference array makes which operation O(1)?", "options": ["Reading one element", "Adding a value to every element of a range", "Sorting the array", "Finding the maximum"], "answer": 1, "explanation": "<p>A range update touches only its two boundaries in the difference array. Reading the final values needs one prefix-sum pass.</p>"},
+  {"type": "single", "prompt": "You need to answer \"how many readings fall between 10.5 and 20.0?\" many times on a fixed dataset. Best choice?", "options": ["A set", "A dict of counts", "Sort once, then two bisect calls per query", "Linear scan each time"], "answer": 2, "explanation": "<p>Range questions need order, which hashing destroys. Sorting costs O(n log n) once; each query is then O(log n).</p>"},
+  {"type": "text", "prompt": "Which <code>math</code> function returns the exact integer square root of a non-negative int?", "answer": ["isqrt", "math.isqrt"], "explanation": "<p><code>math.isqrt(n)</code> returns ⌊√n⌋ exactly, even for integers far beyond float precision.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Linear search is O(n) and needs no structure; binary search is O(log n) and needs order.</li>
+      <li>Write binary search from an invariant on a half-open interval; it finds the boundary of a monotone predicate.</li>
+      <li><code>bisect_left</code>/<code>bisect_right</code> are lower/upper bound; <code>key=</code> applies to list items.</li>
+      <li>Binary search on the answer solves "smallest X that works" when feasibility is monotone.</li>
+      <li>Two pointers exploit order to discard many candidates per step; slow/fast pointers compact in place.</li>
+      <li>Sliding windows update a running summary in O(1) per step; variable windows expand right and shrink left.</li>
+      <li>Prefix sums give O(1) range sums; difference arrays give O(1) range updates.</li>
+      <li>Hash for exact lookups and counting; sort for ranges, nearest values, and low memory.</li>
+    </ul>
+    <div class="flashcards" data-title="Searching essentials">
+<script type="application/json">
+[{"front": "Binary search invariant (half-open)", "back": "If present, the target is in a[lo:hi]; a[:lo] &lt; target &lt; a[hi:]."},
+ {"front": "Lower bound", "back": "First index i with a[i] &gt;= x. bisect_left."},
+ {"front": "Upper bound", "back": "First index i with a[i] &gt; x. bisect_right (alias bisect)."},
+ {"front": "Count occurrences of x in sorted a", "back": "bisect_right(a, x) - bisect_left(a, x)"},
+ {"front": "bisect key=", "back": "Applied to list items, not to x (3.10+). insort also applies it to the new item."},
+ {"front": "Binary search on the answer", "back": "Search a numeric range for the boundary of a monotone feasibility test."},
+ {"front": "Two-pointer pair sum", "back": "Sorted list; move left pointer up if the sum is too small, right pointer down if too big. O(n)."},
+ {"front": "Variable sliding window", "back": "Expand right; while invalid, shrink left. Each index enters and leaves once: O(n)."},
+ {"front": "Prefix sum identity", "back": "sum(a[i:j]) == P[j] - P[i], with P[0] = 0."},
+ {"front": "Difference array update", "back": "Add v to a[s:e] by diff[s] += v; diff[e] -= v. Prefix-sum diff to materialize."},
+ {"front": "Subarrays summing to k with negatives", "back": "Prefix sums plus a Counter of earlier prefix values."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/bisect.html">bisect: array bisection algorithm</a> in the Python docs</li>
+      <li><a href="https://docs.python.org/3/library/itertools.html#itertools.accumulate">itertools.accumulate</a></li>
+      <li>Jon Bentley, <em>Programming Pearls</em>, column 4, on writing correct binary search</li>
+      <li>Next: <a href="m31-graph-algorithms.html">M31 Graph Algorithms</a> searches through networks instead of arrays.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

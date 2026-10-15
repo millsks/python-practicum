@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M53 · Data Visualization · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m53">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 53</p>
+    <h1>Data Visualization</h1>
+    <p class="lede">A good chart answers a question at a glance; a bad one hides the answer or invents a false one. This
+      module teaches the reasoning behind charts (what to encode, which chart fits which question, how to make it
+      readable for everyone) and the matplotlib object model you need to build exactly the chart you designed.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m51-pandas.html">M51 pandas</a>,
+      <a href="m48-numpy.html">M48 NumPy</a></span></div>
+    <ul class="objectives">
+      <li>Describe a chart in terms of data, marks, and encodings (the grammar of graphics)</li>
+      <li>Choose an appropriate chart for comparison, trend, distribution, relationship, and composition questions</li>
+      <li>Explain matplotlib's Figure/Axes/Artist model and use the object-oriented API instead of implicit pyplot state</li>
+      <li>Build line, bar, scatter, histogram, and box plots, multi-panel layouts, and annotations</li>
+      <li>Use color deliberately and accessibly (colorblind-safe palettes, redundant encodings)</li>
+      <li>Plot directly from pandas, save publication-quality files, and redesign a cluttered chart to tell a clear story</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="grammar">
+    <h2>The grammar of a chart</h2>
+    <p>Every statistical chart can be described with a few ingredients. This way of thinking, called the
+      <strong>grammar of graphics</strong> (Leland Wilkinson; popularized by R's ggplot2), turns "make a chart" into
+      a set of explicit decisions:</p>
+    <ul>
+      <li><strong>Data</strong>: a tidy table, one row per observation.</li>
+      <li><strong>Marks</strong> (geometries): what is drawn for each observation: points, lines, bars, areas.</li>
+      <li><strong>Encodings</strong> (aesthetic mappings): which column controls which visual property of a mark:
+        x position, y position, color, size, shape, opacity.</li>
+      <li><strong>Scales</strong>: how data values map to visual values (linear or log axis, which colors).</li>
+      <li><strong>Facets</strong>: small multiples, the same chart repeated for each subgroup.</li>
+      <li><strong>Guides and annotations</strong>: axes, legends, titles, and labels that let a reader decode it.</li>
+    </ul>
+    <p>Not all encodings are equally accurate. Research on graphical perception (Cleveland and McGill, 1984) ranks how
+      precisely people compare values: <strong>position on a common scale</strong> is best, then length, then angle
+      and area, with color saturation and hue last. That ranking explains much of the conventional advice: bar charts
+      (length from a common baseline) beat pie charts (angles), and color is better for <em>categories</em> than for
+      precise <em>quantities</em>.</p>
+    <aside class="callout note"><p>The first <code>import matplotlib</code> in a browser cell downloads it, which takes
+      several seconds. Figures appear below a cell automatically when it finishes, so you do not need
+      <code>plt.show()</code>. Locally, run <code>pixi add matplotlib</code> and either call <code>plt.show()</code>
+      in a script or save files with <code>fig.savefig(...)</code>.</p></aside>
+    <div class="runnable" data-title="Data, marks, encodings: one chart, three decisions">
+<textarea>
+import matplotlib.pyplot as plt
+
+cities = ["Oslo", "Lima", "Pune", "Kyiv", "Quito"]
+temp_c = [6.0, 19.4, 25.1, 8.6, 13.9]          # data: mean annual temperature
+rain_mm = [760, 15, 760, 620, 1250]             # data: annual rainfall
+population_m = [0.7, 10.0, 7.4, 2.9, 2.8]
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.scatter(                     # mark: a point per city
+    temp_c, rain_mm,            # encodings: x = temperature, y = rainfall
+    s=[p * 60 for p in population_m],   # encoding: size = population
+    color="#0072B2", alpha=0.7,
+)
+for name, x, y in zip(cities, temp_c, rain_mm):
+    ax.annotate(name, (x, y), xytext=(6, 4), textcoords="offset points")
+ax.set_xlabel("Mean temperature (°C)")
+ax.set_ylabel("Annual rainfall (mm)")
+ax.set_title("Climate of five cities (point size = population)")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> decide data, marks, and encodings on purpose. Put the most important comparison on
+      position; use color for categories, not for fine quantities.</p>
+  </section>
+
+  <section class="lesson-section" id="choosing">
+    <h2>Choosing the right chart</h2>
+    <p>Start from the <em>question</em>, not the chart type. Most questions fall into a handful of families:</p>
+    <table>
+      <thead><tr><th>Question</th><th>Good choices</th><th>Avoid</th></tr></thead>
+      <tbody>
+        <tr><td>Compare amounts across categories ("which region sells most?")</td><td>bar chart (horizontal for long labels), sorted; dot plot</td><td>3-D bars; pie with many slices</td></tr>
+        <tr><td>Change over time ("is it growing?")</td><td>line chart; area chart for one cumulative quantity</td><td>bars for long daily series; unequal time spacing drawn as equal</td></tr>
+        <tr><td>Distribution of one variable ("what is typical? how spread?")</td><td>histogram, box plot, violin, ECDF</td><td>a bar of the mean alone (hides spread)</td></tr>
+        <tr><td>Relationship between two numeric variables</td><td>scatter plot (with transparency or hexbin for many points); add a trend line</td><td>connecting unordered points with lines</td></tr>
+        <tr><td>Part of a whole ("what share?")</td><td>stacked bar or 100% bar; pie only for 2-3 parts</td><td>pies compared side by side</td></tr>
+        <tr><td>Ranking ("top 10")</td><td>sorted horizontal bar chart</td><td>alphabetical order</td></tr>
+        <tr><td>Many groups over time</td><td>small multiples (one panel per group, shared axes)</td><td>a spaghetti chart of 12 overlapping lines</td></tr>
+        <tr><td>A matrix of values (correlations, hour by weekday)</td><td>heatmap with a sequential or diverging colormap</td><td>a rainbow (jet) colormap</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout warn"><p><strong>Bar charts must start at zero.</strong> A bar's length is the encoding, so a
+      truncated axis exaggerates differences. Line charts and scatter plots do not need a zero baseline because they
+      encode position, not length; zoom to the range that shows the variation, and say so.</p></aside>
+    <div class="runnable" data-title="The truncated-axis trick, exposed">
+<textarea>
+import matplotlib.pyplot as plt
+
+teams = ["A", "B", "C"]
+scores = [92, 94, 95]
+
+fig, (left, right) = plt.subplots(1, 2, figsize=(8, 3))
+left.bar(teams, scores, color="#999999")
+left.set_ylim(90, 96)
+left.set_title("Truncated: C looks 2.5x better than A")
+right.bar(teams, scores, color="#0072B2")
+right.set_ylim(0, 100)
+right.set_title("Honest: they are about the same")
+fig.tight_layout()
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> name the question first; then pick the chart family. Sort categories by value, start
+      bars at zero, and prefer small multiples over clutter.</p>
+  </section>
+
+  <section class="lesson-section" id="anatomy">
+    <h2>The matplotlib object model: Figure, Axes, Artists</h2>
+    <p>matplotlib draws everything with objects called <strong>Artists</strong>. Three levels matter:</p>
+    <ul>
+      <li>The <strong>Figure</strong> is the whole canvas (the image or window). It holds one or more Axes, plus
+        figure-level titles and legends.</li>
+      <li>An <strong>Axes</strong> (note the spelling: one Axes, several Axes) is one plot area with its own data
+        coordinates: an x-axis and a y-axis, a title, and the plotted marks. Almost every plotting method lives on the
+        Axes: <code>ax.plot</code>, <code>ax.bar</code>, <code>ax.set_title</code>.</li>
+      <li>Each <strong>Axis</strong> (singular) is the ruler along one edge: its ticks, tick labels, scale, and label.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 300" role="img" aria-label="Anatomy of a matplotlib figure: figure, axes, title, axis labels, ticks, tick labels, spines, legend, line, markers, grid">
+        <rect x="10" y="10" width="520" height="280" fill="var(--bg-sunk)" stroke="var(--viz-5)" stroke-width="2"/>
+        <text x="18" y="28" fill="var(--viz-5)" font-size="12" font-weight="bold">Figure</text>
+        <text x="210" y="44" fill="var(--fg)" font-size="13" font-weight="bold">Weekly sales</text>
+        <text x="350" y="44" fill="var(--fg-muted)" font-size="11">← ax.set_title</text>
+        <rect x="80" y="56" width="330" height="180" fill="var(--bg-elev)" stroke="none"/>
+        <text x="300" y="72" fill="var(--viz-1)" font-size="12" font-weight="bold">Axes</text>
+        <g stroke="var(--border)" stroke-dasharray="3 3">
+          <line x1="80" y1="96" x2="410" y2="96"/><line x1="80" y1="136" x2="410" y2="136"/><line x1="80" y1="176" x2="410" y2="176"/>
+        </g>
+        <text x="300" y="132" fill="var(--fg-faint)" font-size="10">grid</text>
+        <line x1="80" y1="56" x2="80" y2="236" stroke="var(--fg)" stroke-width="1.5"/>
+        <line x1="80" y1="236" x2="410" y2="236" stroke="var(--fg)" stroke-width="1.5"/>
+        <text x="420" y="232" fill="var(--fg-muted)" font-size="11">spines</text>
+        <polyline points="95,200 150,170 205,180 260,130 315,120 370,90" fill="none" stroke="var(--viz-2)" stroke-width="2.5"/>
+        <g fill="var(--viz-2)"><circle cx="95" cy="200" r="4"/><circle cx="150" cy="170" r="4"/><circle cx="205" cy="180" r="4"/><circle cx="260" cy="130" r="4"/><circle cx="315" cy="120" r="4"/><circle cx="370" cy="90" r="4"/></g>
+        <text x="240" y="160" fill="var(--viz-2)" font-size="11">Line2D + markers</text>
+        <rect x="96" y="66" width="96" height="36" fill="var(--bg-elev)" stroke="var(--border-strong)"/>
+        <line x1="104" y1="78" x2="124" y2="78" stroke="var(--viz-2)" stroke-width="2.5"/><text x="130" y="82" fill="var(--fg)" font-size="10">store A</text>
+        <text x="104" y="96" fill="var(--fg-muted)" font-size="10">legend</text>
+        <g stroke="var(--fg)"><line x1="95" y1="236" x2="95" y2="242"/><line x1="205" y1="236" x2="205" y2="242"/><line x1="315" y1="236" x2="315" y2="242"/>
+          <line x1="74" y1="96" x2="80" y2="96"/><line x1="74" y1="136" x2="80" y2="136"/><line x1="74" y1="176" x2="80" y2="176"/></g>
+        <g fill="var(--fg)" font-size="10" text-anchor="middle"><text x="95" y="254">1</text><text x="205" y="254">3</text><text x="315" y="254">5</text></g>
+        <g fill="var(--fg)" font-size="10" text-anchor="end"><text x="70" y="100">300</text><text x="70" y="140">200</text><text x="70" y="180">100</text></g>
+        <text x="420" y="254" fill="var(--fg-muted)" font-size="11">major ticks + tick labels</text>
+        <text x="245" y="276" fill="var(--fg)" font-size="12" text-anchor="middle">Week (ax.set_xlabel)</text>
+        <text x="30" y="150" fill="var(--fg)" font-size="12" transform="rotate(-90 30 150)" text-anchor="middle">Sales (ax.set_ylabel)</text>
+        <text x="420" y="110" fill="var(--fg-muted)" font-size="11">x-axis and y-axis</text>
+        <text x="420" y="124" fill="var(--fg-muted)" font-size="11">are Axis objects</text>
+      </svg>
+      <figcaption>A Figure contains Axes; an Axes contains two Axis rulers and the Artists you plot (lines, patches, text).</figcaption>
+    </figure>
+    <h3>Two interfaces: pyplot vs object-oriented</h3>
+    <p><code>matplotlib.pyplot</code> (imported as <code>plt</code>) offers MATLAB-style functions like
+      <code>plt.plot()</code> and <code>plt.title()</code> that act on an implicit "current" figure and axes. That is
+      quick at an interactive prompt but becomes confusing with several panels or inside functions: which axes is
+      current right now? The <strong>object-oriented (OO) API</strong> is explicit: create the objects, then call
+      methods on them.</p>
+    <div class="tabs">
+      <div class="tab" data-label="pyplot (implicit)"><pre><code class="language-python">plt.plot(weeks, sales)
+plt.title("Weekly sales")
+plt.xlabel("Week")</code></pre></div>
+      <div class="tab" data-label="Object-oriented (explicit)"><pre><code class="language-python">fig, ax = plt.subplots()
+ax.plot(weeks, sales)
+ax.set_title("Weekly sales")
+ax.set_xlabel("Week")</code></pre></div>
+    </div>
+    <p>Use <code>plt.subplots()</code> to create the figure and axes, then the OO methods for everything else.
+      Functions that draw should <em>accept an <code>ax</code></em> (or return the <code>fig</code>), which makes them
+      composable and testable.</p>
+    <div class="runnable" data-title="Inspect the objects you created">
+<textarea>
+import matplotlib.pyplot as plt
+
+weeks = [1, 2, 3, 4, 5, 6]
+store_a = [120, 150, 140, 210, 230, 280]
+store_b = [100, 105, 130, 125, 150, 160]
+
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.plot(weeks, store_a, marker="o", label="Store A")
+ax.plot(weeks, store_b, marker="s", label="Store B")
+ax.set_title("Weekly sales")
+ax.set_xlabel("Week")
+ax.set_ylabel("Sales")
+ax.grid(axis="y", alpha=0.3)
+ax.legend()
+
+print(type(fig).__name__, "holds", len(fig.axes), "Axes")
+print("title:", ax.get_title(), "| lines:", len(ax.lines))
+print("labels:", [line.get_label() for line in ax.lines])
+print("xlim:", ax.get_xlim())
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: how many Axes and lines?" data-predict>
+<textarea>
+import matplotlib.pyplot as plt
+
+fig, axs = plt.subplots(2, 3)
+axs[0, 0].plot([1, 2, 3])
+axs[0, 0].plot([3, 2, 1])
+print(axs.shape, len(fig.axes), len(axs[0, 0].lines), len(axs[1, 2].lines))
+plt.close(fig)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> Figure contains Axes; Axes holds the plot. Create both with
+      <code>plt.subplots()</code> and call methods on <code>ax</code>; inspecting those objects is also how you test
+      plotting code.</p>
+  </section>
+
+  <section class="lesson-section" id="basic-plots">
+    <h2>The five workhorse plots</h2>
+    <div class="card-grid">
+      <div class="card"><h4><code>ax.plot</code></h4><p>Lines for ordered data (time). Markers for few points;
+        <code>linestyle</code>, <code>linewidth</code>, <code>marker</code>.</p></div>
+      <div class="card"><h4><code>ax.bar</code> / <code>ax.barh</code></h4><p>Lengths for categories. Horizontal bars
+        fit long labels; sort them.</p></div>
+      <div class="card"><h4><code>ax.scatter</code></h4><p>Two numeric variables; encode a third with color or
+        size; use <code>alpha</code> for overplotting.</p></div>
+      <div class="card"><h4><code>ax.hist</code></h4><p>Counts in bins for one variable; try several
+        <code>bins</code> values because the shape can change.</p></div>
+      <div class="card"><h4><code>ax.boxplot</code></h4><p>Median, quartiles, whiskers (1.5 IQR), and outliers;
+        compact comparison of many groups.</p></div>
+    </div>
+    <div class="runnable" data-title="All five on one figure">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(5)
+days = np.arange(60)
+visits = 200 + 2 * days + rng.normal(0, 20, 60)
+regions = ["North", "East", "South", "West"]
+revenue = [420, 310, 275, 190]
+ad_spend = rng.uniform(0, 100, 80)
+signups = 5 + 0.4 * ad_spend + rng.normal(0, 6, 80)
+wait = rng.lognormal(3, 0.5, 500)
+groups = [rng.normal(m, 8, 100) for m in (50, 55, 62)]
+
+fig, axs = plt.subplots(2, 3, figsize=(11, 6), layout="constrained")
+axs[0, 0].plot(days, visits, color="#0072B2")
+axs[0, 0].set_title("Line: daily visits")
+axs[0, 1].barh(regions[::-1], revenue[::-1], color="#0072B2")
+axs[0, 1].set_title("Bar: revenue by region")
+axs[0, 2].scatter(ad_spend, signups, alpha=0.6, color="#D55E00")
+axs[0, 2].set_title("Scatter: ad spend vs signups")
+axs[1, 0].hist(wait, bins=30, color="#009E73")
+axs[1, 0].set_title("Histogram: wait time (min)")
+axs[1, 1].boxplot(groups)
+axs[1, 1].set_xticks([1, 2, 3], ["A", "B", "C"])
+axs[1, 1].set_title("Box: scores by group")
+axs[1, 2].axis("off")
+axs[1, 2].text(0.0, 0.5, "Each panel answers\na different kind\nof question.", fontsize=12)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Histograms are sensitive to bin width. Too few bins hide structure; too many show
+      noise. Try a few (<code>bins=10, 30, 60</code>) or let NumPy pick with <code>bins="auto"</code>. For comparing
+      several distributions, box plots or overlaid ECDFs (cumulative curves) are often clearer than overlapping
+      histograms.</p></aside>
+    <p><strong>Remember:</strong> line for trends, bar for categories, scatter for relationships, histogram for one
+      distribution, box plot for comparing distributions.</p>
+  </section>
+
+  <section class="lesson-section" id="layouts">
+    <h2>Subplots, layouts, and annotations</h2>
+    <p><code>plt.subplots(nrows, ncols)</code> returns a NumPy array of Axes. Key options:</p>
+    <ul>
+      <li><code>sharex=True</code> / <code>sharey=True</code>: panels share limits, which is essential for honest
+        small multiples (otherwise each panel autoscales and differences become invisible).</li>
+      <li><code>layout="constrained"</code> (or <code>fig.tight_layout()</code>): automatically spaces panels so
+        labels do not overlap.</li>
+      <li><code>plt.subplot_mosaic("AAB;CCB")</code>: named panels of different sizes from an ASCII-art layout.</li>
+    </ul>
+    <p><strong>Annotations</strong> turn a chart into an explanation. <code>ax.annotate(text, xy=point,
+      xytext=label_position, arrowprops=...)</code> points at a data value; <code>ax.axhline</code> /
+      <code>ax.axvline</code> draw reference lines; <code>ax.axvspan</code> shades a period; <code>ax.text</code>
+      places free text (in data coordinates by default, or <code>transform=ax.transAxes</code> for 0-1 axes
+      coordinates).</p>
+    <div class="runnable" data-title="Small multiples with shared axes, plus a mosaic">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(11)
+months = np.arange(1, 13)
+stores = {name: base + growth * months + rng.normal(0, 6, 12)
+          for name, base, growth in [("Oslo", 80, 4), ("Lima", 120, 1), ("Pune", 60, 7), ("Kyiv", 90, -1)]}
+
+fig, axs = plt.subplots(1, 4, figsize=(11, 2.8), sharey=True, layout="constrained")
+for ax, (name, values) in zip(axs, stores.items()):
+    ax.plot(months, values, color="#0072B2")
+    ax.set_title(name)
+    ax.set_xticks([1, 6, 12])
+axs[0].set_ylabel("Sales")
+fig.suptitle("Monthly sales: same y-scale makes growth comparable")
+
+fig2, panels = plt.subplot_mosaic("AAB;CCB", figsize=(8, 4), layout="constrained")
+panels["A"].plot(months, stores["Pune"], color="#D55E00")
+panels["A"].set_title("A: wide panel")
+panels["B"].barh(list(stores), [v.sum() for v in stores.values()], color="#999999")
+panels["B"].set_title("B: tall panel")
+panels["C"].hist(np.concatenate(list(stores.values())), bins=15, color="#009E73")
+panels["C"].set_title("C: wide panel")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Annotate the story">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+days = np.arange(1, 91)
+rng = np.random.default_rng(2)
+signups = 50 + 0.3 * days + rng.normal(0, 5, 90)
+signups[45:] += 25                       # a launch on day 46
+
+fig, ax = plt.subplots(figsize=(8, 3.5))
+ax.plot(days, signups, color="#999999", linewidth=1)
+ax.plot(days, np.convolve(signups, np.ones(7) / 7, mode="same"), color="#0072B2", linewidth=2.5, label="7-day mean")
+ax.axvline(46, color="#D55E00", linestyle="--")
+ax.axvspan(60, 70, color="#E69F00", alpha=0.15)
+peak = int(np.argmax(signups))
+ax.annotate(f"peak: {signups[peak]:.0f}", xy=(days[peak], signups[peak]), xytext=(15, 110),
+            arrowprops=dict(arrowstyle="->", color="#333333"))
+ax.text(47, 52, "new onboarding\nlaunched", color="#D55E00")
+ax.text(0.99, 0.03, "shaded: holiday campaign", transform=ax.transAxes, ha="right", fontsize=9)
+ax.set_title("Signups jumped about 25/day after the onboarding launch", loc="left")
+ax.set_xlabel("Day")
+ax.set_ylabel("Signups")
+ax.spines[["top", "right"]].set_visible(False)
+ax.legend(frameon=False)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> share axes across small multiples; use constrained layout; annotate the point you
+      want readers to notice, and write titles that state the finding.</p>
+  </section>
+
+  <section class="lesson-section" id="color">
+    <h2>Color and accessibility</h2>
+    <p>About 1 in 12 men and 1 in 200 women have some form of color vision deficiency, most often difficulty telling
+      red from green. Charts are also printed in grayscale, projected in bright rooms, and viewed on phones. Design so
+      color helps but is never the only channel:</p>
+    <ul>
+      <li><strong>Categorical (qualitative) palettes</strong> for unordered groups. The <strong>Okabe-Ito</strong>
+        palette was designed to be distinguishable with common color vision deficiencies:
+        <span style="color:#E69F00">orange #E69F00</span>, <span style="color:#56B4E9">sky blue #56B4E9</span>,
+        <span style="color:#009E73">green #009E73</span>, <span style="color:#F0E442">yellow #F0E442</span>,
+        <span style="color:#0072B2">blue #0072B2</span>, <span style="color:#D55E00">vermillion #D55E00</span>,
+        <span style="color:#CC79A7">purple #CC79A7</span>, and black. matplotlib's <code>"tab10"</code> is a
+        reasonable default too. Keep to about 6-8 categories; beyond that, group or facet.</li>
+      <li><strong>Sequential colormaps</strong> for ordered magnitudes (low to high): <code>viridis</code>,
+        <code>cividis</code>, <code>magma</code>. They are perceptually uniform (equal data steps look like equal color
+        steps) and readable in grayscale.</li>
+      <li><strong>Diverging colormaps</strong> for values around a meaningful midpoint (change from baseline,
+        correlation): <code>RdBu</code>, <code>coolwarm</code>, with the midpoint pinned at zero.</li>
+      <li><strong>Avoid rainbow maps like <code>jet</code></strong>: their brightness rises and falls, creating false
+        boundaries and hiding real ones.</li>
+      <li><strong>Redundant encoding</strong>: pair color with marker shape, line style, or direct labels, so the chart
+        still works without color.</li>
+      <li><strong>Highlight with gray</strong>: draw context in gray and the one series that matters in a strong color.</li>
+    </ul>
+    <div class="runnable" data-title="Rainbow vs perceptually uniform colormaps, in color and in grayscale">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.linspace(0, 1, 256)
+gradient = np.vstack([x, x])
+fig, axs = plt.subplots(4, 1, figsize=(7, 3), layout="constrained")
+for ax, name in zip(axs[:2], ["jet", "viridis"]):
+    ax.imshow(gradient, aspect="auto", cmap=name)
+    ax.set_title(name, fontsize=9, loc="left")
+    ax.set_axis_off()
+for ax, name in zip(axs[2:], ["jet", "viridis"]):
+    rgb = plt.get_cmap(name)(x)[:, :3]
+    lightness = rgb @ np.array([0.299, 0.587, 0.114])       # approximate perceived brightness
+    ax.imshow(np.vstack([lightness, lightness]), aspect="auto", cmap="gray", vmin=0, vmax=1)
+    ax.set_title(f"{name} printed in grayscale", fontsize=9, loc="left")
+    ax.set_axis_off()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Okabe-Ito palette with redundant marker shapes">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
+markers = ["o", "s", "^", "D"]
+rng = np.random.default_rng(4)
+
+fig, ax = plt.subplots(figsize=(6, 4))
+for i, species in enumerate(["setosa", "versicolor", "virginica", "hybrid"]):
+    x = rng.normal(i * 1.5, 0.5, 40)
+    y = rng.normal(i, 0.6, 40)
+    ax.scatter(x, y, color=OKABE_ITO[i], marker=markers[i], label=species, alpha=0.8, edgecolor="white")
+ax.legend(title="Group", frameon=False)
+ax.set_title("Color AND shape distinguish groups")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Check accessibility before publishing: view the image in grayscale, run it through a
+      color-vision-deficiency simulator, and make sure every text label meets a 4.5:1 contrast ratio against the
+      background. Direct labels at line ends are often better than a legend the eye must jump to.</p></aside>
+    <p><strong>Remember:</strong> qualitative palettes for categories, sequential for magnitude, diverging around a
+      midpoint; never rely on color alone; gray for context, color for the point.</p>
+  </section>
+
+  <section class="lesson-section" id="pandas-plot">
+    <h2>Plotting from pandas, and saving figures</h2>
+    <p>pandas objects have a <code>.plot</code> accessor that calls matplotlib for you, using the index as x and each
+      column as a series: <code>df.plot()</code> (line), <code>df.plot.bar()</code>, <code>.barh()</code>,
+      <code>.hist()</code>, <code>.box()</code>, <code>.scatter(x=, y=)</code>, <code>.area()</code>. It returns the
+      matplotlib <code>Axes</code>, and accepts <code>ax=</code> to draw into one you created, so you can mix quick
+      pandas plotting with full OO control.</p>
+    <div class="runnable" data-title="pandas .plot into your own Axes">
+<textarea>
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(8)
+idx = pd.date_range("2025-01-01", periods=120, freq="D")
+df = pd.DataFrame({
+    "web": 300 + np.cumsum(rng.normal(1, 8, 120)),
+    "app": 150 + np.cumsum(rng.normal(2, 6, 120)),
+}, index=idx)
+
+fig, (top, bottom) = plt.subplots(2, 1, figsize=(8, 5), layout="constrained")
+ax = df.rolling(7).mean().plot(ax=top, color=["#0072B2", "#E69F00"])
+ax.set_title("Daily orders (7-day mean)")
+ax.set_ylabel("Orders")
+print(type(ax).__name__, ax is top)
+
+monthly = df.resample("MS").sum()
+monthly.index = monthly.index.strftime("%b")
+monthly.plot.bar(ax=bottom, color=["#0072B2", "#E69F00"], rot=0)
+bottom.set_title("Monthly totals by channel")
+</textarea>
+    </div>
+    <h3>Saving figures</h3>
+    <p><code>fig.savefig(path)</code> picks the format from the extension. <strong>Vector</strong> formats (SVG, PDF)
+      scale without blurring and are best for print and documents; <strong>raster</strong> PNG is best for web pages,
+      dashboards, and images with many points. Useful options: <code>dpi=200</code> for crisp PNGs,
+      <code>bbox_inches="tight"</code> to trim whitespace, <code>transparent=True</code> for slides.</p>
+    <p>In scripts, servers, tests, and CI there is no screen, so use a non-interactive <strong>backend</strong> (the
+      renderer matplotlib draws with). Either call <code>matplotlib.use("Agg")</code> before importing pyplot, set the
+      environment variable <code>MPLBACKEND=Agg</code>, or skip pyplot entirely and build
+      <code>matplotlib.figure.Figure()</code> objects directly, which never touch a GUI and keep no global state.
+      Close pyplot figures you no longer need with <code>plt.close(fig)</code>; otherwise long-running programs leak
+      memory.</p>
+    <div class="runnable" data-title="Save to PNG and SVG in memory and compare">
+<textarea>
+import io
+from matplotlib.figure import Figure      # no pyplot: safe in servers and tests
+
+fig = Figure(figsize=(5, 3))
+ax = fig.subplots()
+ax.plot([1, 2, 3, 4], [3, 1, 4, 2], marker="o")
+ax.set_title("Saved without pyplot")
+
+for fmt, dpi in [("png", 100), ("png", 300), ("svg", None)]:
+    buf = io.BytesIO()
+    fig.savefig(buf, format=fmt, dpi=dpi, bbox_inches="tight")
+    print(f"{fmt:4} dpi={dpi}: {len(buf.getvalue()):>7,} bytes, starts with {buf.getvalue()[:8]!r}")
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>For a script that writes charts, a typical Pixi task is
+      <code>[tasks] charts = "python make_charts.py"</code>, run with <code>pixi run charts</code>. Export
+      <code>MPLBACKEND = "Agg"</code> in the task's <code>env</code> table if the script imports pyplot.</p></aside>
+    <p><strong>Remember:</strong> <code>df.plot(ax=ax)</code> mixes pandas convenience with OO control; save vector for
+      print and PNG for the web; use Agg or <code>Figure()</code> when there is no display.</p>
+  </section>
+
+  <section class="lesson-section" id="other-libraries">
+    <h2>Beyond matplotlib: seaborn and plotly</h2>
+    <p>matplotlib is the foundation; two higher-level libraries are worth knowing:</p>
+    <ul>
+      <li><strong>seaborn</strong> builds statistical charts from tidy DataFrames in one call, with the grammar-of-graphics
+        idea of mapping columns to <code>x</code>, <code>y</code>, <code>hue</code>, and facets (<code>col=</code>,
+        <code>row=</code>). It draws on matplotlib Axes, so everything in this module still applies. Its
+        <code>seaborn.objects</code> interface is a direct grammar-of-graphics API.</li>
+      <li><strong>plotly</strong> produces interactive HTML charts (hover, zoom, pan) for notebooks and dashboards.
+        <code>plotly.express</code> has a similar column-mapping style.</li>
+    </ul>
+    <aside class="callout pixi"><p>Both live on conda-forge: <code>pixi add seaborn plotly</code>. They are not loaded in
+      this page's browser runtime, so the examples below run locally.</p></aside>
+    <div class="runnable" data-local="seaborn is not available in this browser runtime; run with pixi run python seaborn_demo.py after pixi add seaborn" data-title="seaborn: faceted statistical plots (local)">
+<textarea>
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
+rng = np.random.default_rng(0)
+df = pd.DataFrame({
+    "spend": rng.uniform(0, 100, 300),
+    "channel": rng.choice(["search", "social", "email"], 300),
+})
+df["signups"] = 5 + 0.3 * df["spend"] + rng.normal(0, 5, 300) + df["channel"].map({"search": 5, "social": 0, "email": -3})
+
+sns.set_theme(style="whitegrid", palette="colorblind")
+grid = sns.relplot(data=df, x="spend", y="signups", hue="channel", col="channel", height=3)
+grid.savefig("signups_by_channel.png", dpi=150)
+</textarea>
+    </div>
+    <div class="runnable" data-local="plotly is not available in this browser runtime; run with pixi run python plotly_demo.py after pixi add plotly" data-title="plotly: an interactive HTML chart (local)">
+<textarea>
+import pandas as pd
+import plotly.express as px
+
+df = pd.DataFrame({"month": pd.date_range("2025-01-01", periods=12, freq="MS").repeat(2),
+                   "channel": ["web", "app"] * 12,
+                   "orders": [300 + 10 * i + (40 if i % 2 else 0) for i in range(24)]})
+fig = px.line(df, x="month", y="orders", color="channel", markers=True, title="Orders by channel")
+fig.write_html("orders.html")     # open in a browser: hover, zoom, toggle series
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> seaborn for quick statistical and faceted charts on top of matplotlib; plotly when
+      readers need interactivity.</p>
+  </section>
+
+  <section class="lesson-section" id="storytelling">
+    <h2>Storytelling: redesigning a cluttered chart</h2>
+    <p>Exploratory charts are for you; explanatory charts are for an audience. An explanatory chart has one message,
+      and every element either supports it or is removed. Edward Tufte called the ink that does not show data
+      "chart junk"; Cole Nussbaumer Knaflic's <em>Storytelling with Data</em> turns this into a process:</p>
+    <ol>
+      <li><strong>Say the message in one sentence</strong> first, and make it the title ("Online overtook in-store
+        sales in August"), not a label ("Sales by channel").</li>
+      <li><strong>Choose the chart</strong> that makes that comparison easiest.</li>
+      <li><strong>Remove clutter</strong>: heavy borders, unnecessary gridlines, legends that can be direct labels,
+        redundant tick labels, 3-D effects, decimals no one needs.</li>
+      <li><strong>Focus attention</strong>: gray for context, one accent color for what matters, annotations for the
+        key moment.</li>
+    </ol>
+    <div class="tabs">
+      <div class="tab" data-label="Before">
+        <div class="runnable" data-title="Before: default everything">
+<textarea>
+import matplotlib.pyplot as plt
+
+months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+data = {
+    "In-store": [52, 50, 51, 49, 48, 47, 45, 44, 43, 42, 41, 40],
+    "Online": [30, 31, 33, 35, 37, 40, 43, 46, 49, 51, 54, 57],
+    "Phone": [10, 10, 9, 9, 9, 8, 8, 8, 7, 7, 7, 6],
+    "Catalog": [5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 3],
+}
+fig, ax = plt.subplots(figsize=(8, 4))
+for name, values in data.items():
+    ax.plot(months, values, marker="o", label=name)
+ax.grid(True)
+ax.legend(loc="upper left")
+ax.set_title("Sales by channel")
+ax.set_ylabel("Sales (thousands)")
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="After">
+        <div class="runnable" data-title="After: one message, focused design">
+<textarea>
+import matplotlib.pyplot as plt
+
+months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+data = {
+    "In-store": [52, 50, 51, 49, 48, 47, 45, 44, 43, 42, 41, 40],
+    "Online": [30, 31, 33, 35, 37, 40, 43, 46, 49, 51, 54, 57],
+    "Phone": [10, 10, 9, 9, 9, 8, 8, 8, 7, 7, 7, 6],
+    "Catalog": [5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 3],
+}
+colors = {"Online": "#0072B2", "In-store": "#D55E00"}
+fig, ax = plt.subplots(figsize=(8, 4))
+for name, values in data.items():
+    color = colors.get(name, "#BBBBBB")
+    ax.plot(months, values, color=color, linewidth=3 if name in colors else 1.5)
+    ax.text(11.2, values[-1], name, color=color, va="center", fontweight="bold" if name in colors else "normal")
+ax.annotate("Online passes in-store\nin August", xy=(7, 46), xytext=(3.5, 56),
+            arrowprops=dict(arrowstyle="->", color="#333333"))
+ax.set_title("Online overtook in-store sales in August", loc="left", fontsize=13, fontweight="bold")
+ax.set_ylabel("Sales ($ thousands)")
+ax.set_xlim(-0.3, 12.5)
+ax.set_ylim(0, 62)
+ax.spines[["top", "right"]].set_visible(False)
+ax.tick_params(length=0)
+ax.grid(axis="y", alpha=0.25)
+</textarea>
+        </div>
+      </div>
+    </div>
+    <aside class="callout think"><p>List every change between Before and After and the reason for each. Which single
+      change contributes most to how fast you understand the message? (Many people say the title; others say the gray
+      context lines.)</p></aside>
+    <p><strong>Remember:</strong> one message per chart, stated in the title; remove what does not support it; gray for
+      context, color and annotation for the point.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each function returns a matplotlib <code>Figure</code>; the tests inspect its Axes, lines, bars, and text, which
+      is exactly how you unit-test plotting code in real projects.</p>
+
+    <div class="exercise" data-id="m53-e1" data-title="A labelled multi-line chart">
+      <div class="exercise-prompt">
+        <p>Write <code>line_chart(x, series, title)</code>. <code>series</code> is a dict of name to list of y values.
+          Create a figure with one Axes, draw one line per series (label each line with its name), set the title, set
+          the x-axis label to <code>"Week"</code> and the y-axis label to <code>"Sales"</code>, add a legend, and
+          return the figure.</p>
+      </div>
+<textarea class="starter">
+import matplotlib.pyplot as plt
+
+def line_chart(x, series, title):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+
+_fig = line_chart([1, 2, 3], {"A": [1, 2, 3], "B": [3, 2, 1], "C": [2, 2, 2]}, "Weekly sales")
+
+def test_returns_figure():
+    assert isinstance(_fig, Figure), "return the Figure object"
+    assert len(_fig.axes) == 1, "exactly one Axes"
+
+def test_lines_and_labels():
+    ax = _fig.axes[0]
+    assert len(ax.lines) == 3, f"one line per series; found {len(ax.lines)}"
+    assert [l.get_label() for l in ax.lines] == ["A", "B", "C"], "label each line with its series name"
+    assert list(ax.lines[1].get_ydata()) == [3, 2, 1], "series B has the wrong data"
+
+def test_text():
+    ax = _fig.axes[0]
+    assert ax.get_title() == "Weekly sales", "set the title"
+    assert ax.get_xlabel() == "Week" and ax.get_ylabel() == "Sales", "label both axes"
+    assert ax.get_legend() is not None, "add a legend"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>fig, ax = plt.subplots()</code>, then loop over
+        <code>series.items()</code> calling <code>ax.plot(x, ys, label=name)</code>; finish with
+        <code>ax.legend()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+def line_chart(x, series, title):
+    fig, ax = plt.subplots()
+    for name, ys in series.items():
+        ax.plot(x, ys, label=name)
+    ax.set_title(title)
+    ax.set_xlabel("Week")
+    ax.set_ylabel("Sales")
+    ax.legend()
+    return fig</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m53-e2" data-title="A sorted horizontal bar chart">
+      <div class="exercise-prompt">
+        <p>Write <code>ranked_bars(counts)</code>. <code>counts</code> maps category to a number. Draw a horizontal bar
+          chart with the <strong>largest value at the top</strong>, all bars in the single color
+          <code>"#0072B2"</code>, and the x-axis starting at 0. Label the y ticks with the category names. Return the
+          figure.</p>
+      </div>
+<textarea class="starter">
+import matplotlib.pyplot as plt
+
+def ranked_bars(counts):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from matplotlib.colors import to_hex
+
+_fig = ranked_bars({"Noise": 40, "Heat": 75, "Parking": 12, "Water": 33})
+_ax = _fig.axes[0]
+
+def test_bar_count():
+    assert len(_ax.patches) == 4, f"one bar per category; found {len(_ax.patches)}"
+
+def test_largest_on_top():
+    widths = [p.get_width() for p in _ax.patches]
+    ys = [p.get_y() for p in _ax.patches]
+    by_height = [w for _, w in sorted(zip(ys, widths))]
+    assert by_height == [12, 33, 40, 75], f"bars bottom-to-top should be ascending, got {by_height}"
+
+def test_labels_and_color():
+    labels = [t.get_text() for t in _ax.get_yticklabels()]
+    assert labels == ["Parking", "Water", "Noise", "Heat"], f"tick labels bottom-to-top were {labels}"
+    assert all(to_hex(p.get_facecolor()) == "#0072b2" for p in _ax.patches), "use the single color #0072B2"
+    assert _ax.get_xlim()[0] == 0, "bars must start at zero"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>barh</code> draws the first item at the bottom, so sort
+        ascending: <code>items = sorted(counts.items(), key=lambda kv: kv[1])</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+def ranked_bars(counts):
+    items = sorted(counts.items(), key=lambda kv: kv[1])
+    fig, ax = plt.subplots()
+    ax.barh([name for name, _ in items], [value for _, value in items], color="#0072B2")
+    ax.set_xlim(left=0)
+    return fig</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m53-e3" data-title="Small multiples">
+      <div class="exercise-prompt">
+        <p>Write <code>small_multiples(groups)</code>. <code>groups</code> maps a name to a list of numbers (exactly
+          four groups). Create a 2x2 grid of histograms <strong>sharing both axes</strong>, one group per panel in the
+          dict's order (row by row), each panel titled with its group name. Return the figure.</p>
+      </div>
+<textarea class="starter">
+import matplotlib.pyplot as plt
+
+def small_multiples(groups):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+_rng = np.random.default_rng(0)
+_groups = {"North": _rng.normal(10, 2, 200), "South": _rng.normal(14, 2, 200),
+           "East": _rng.normal(12, 3, 200), "West": _rng.normal(9, 1, 200)}
+_fig = small_multiples(_groups)
+
+def test_four_panels():
+    assert len(_fig.axes) == 4, f"expected 4 Axes, found {len(_fig.axes)}"
+
+def test_titles_in_order():
+    assert [ax.get_title() for ax in _fig.axes] == ["North", "South", "East", "West"], "one titled panel per group, row by row"
+
+def test_histograms_drawn():
+    assert all(len(ax.patches) > 0 for ax in _fig.axes), "each panel needs a histogram"
+
+def test_shared_axes():
+    a, b = _fig.axes[0], _fig.axes[3]
+    assert a.get_shared_x_axes().joined(a, b), "share the x-axis (sharex=True)"
+    assert a.get_shared_y_axes().joined(a, b), "share the y-axis (sharey=True)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>fig, axs = plt.subplots(2, 2, sharex=True,
+        sharey=True)</code>, then <code>zip(axs.flat, groups.items())</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+def small_multiples(groups):
+    fig, axs = plt.subplots(2, 2, sharex=True, sharey=True, layout="constrained")
+    for ax, (name, values) in zip(axs.flat, groups.items()):
+        ax.hist(values, bins=20, color="#0072B2")
+        ax.set_title(name)
+    return fig</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m53-e4" data-title="Annotate the peak">
+      <div class="exercise-prompt">
+        <p>Write <code>plot_with_peak(x, y)</code>: plot <code>y</code> against <code>x</code> as one line, then add an
+          annotation (<code>ax.annotate</code>) whose text is <code>"peak: &lt;value&gt;"</code> (the maximum y,
+          formatted with no decimals, e.g. <code>"peak: 42"</code>) pointing at the point <code>(x_peak, y_max)</code>
+          with an arrow. Also draw a horizontal reference line at the mean of <code>y</code> with
+          <code>ax.axhline</code>. Return the figure.</p>
+      </div>
+<textarea class="starter">
+import matplotlib.pyplot as plt
+
+def plot_with_peak(x, y):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from matplotlib.text import Annotation
+
+_x = [0, 1, 2, 3, 4, 5]
+_y = [3.0, 7.0, 41.6, 12.0, 9.0, 5.0]
+_fig = plot_with_peak(_x, _y)
+_ax = _fig.axes[0]
+
+def test_annotation():
+    notes = [t for t in _ax.texts if isinstance(t, Annotation)]
+    assert len(notes) == 1, f"expected one annotation, found {len(notes)}"
+    assert notes[0].get_text() == "peak: 42", f"text was {notes[0].get_text()!r}"
+    assert tuple(notes[0].xy) == (2, 41.6), f"the arrow should point at (2, 41.6), got {notes[0].xy}"
+    assert notes[0].arrow_patch is not None, "draw an arrow (arrowprops=...)"
+
+def test_lines():
+    assert len(_ax.lines) == 2, "one data line plus one axhline"
+    mean_line = _ax.lines[1]
+    assert abs(mean_line.get_ydata()[0] - sum(_y) / len(_y)) < 1e-9, "the reference line sits at the mean"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Find the index of the max with
+        <code>i = max(range(len(y)), key=y.__getitem__)</code>. Use
+        <code>ax.annotate(f"peak: {y[i]:.0f}", xy=(x[i], y[i]), xytext=(...), arrowprops=dict(arrowstyle="-&gt;"))</code>.
+        Draw the data line before the <code>axhline</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+def plot_with_peak(x, y):
+    fig, ax = plt.subplots()
+    ax.plot(x, y, color="#0072B2")
+    i = max(range(len(y)), key=y.__getitem__)
+    ax.axhline(sum(y) / len(y), color="#999999", linestyle="--")
+    ax.annotate(f"peak: {y[i]:.0f}", xy=(x[i], y[i]), xytext=(x[i] + 0.5, y[i] * 0.8),
+                arrowprops=dict(arrowstyle="-&gt;"))
+    return fig</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m53-e5" data-title="Colorblind-safe groups with redundant shapes">
+      <div class="exercise-prompt">
+        <p>Write <code>scatter_groups(groups)</code>. <code>groups</code> maps a group name to <code>(xs, ys)</code>.
+          Draw one <code>ax.scatter</code> per group, using colors from <code>OKABE_ITO</code> in order and markers
+          from <code>MARKERS</code> in order, labelling each with its group name, and add a legend. Return the figure.</p>
+      </div>
+<textarea class="starter">
+import matplotlib.pyplot as plt
+
+OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7"]
+MARKERS = ["o", "s", "^", "D", "v", "P"]
+
+def scatter_groups(groups):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from matplotlib.colors import to_hex
+
+_fig = scatter_groups({"a": ([1, 2], [1, 2]), "b": ([2, 3], [3, 1]), "c": ([0, 1], [2, 2])})
+_ax = _fig.axes[0]
+
+def test_one_collection_per_group():
+    assert len(_ax.collections) == 3, f"one scatter per group; found {len(_ax.collections)}"
+    assert [c.get_label() for c in _ax.collections] == ["a", "b", "c"], "label each scatter with its group"
+
+def test_colors_in_order():
+    colors = [to_hex(c.get_facecolor()[0]) for c in _ax.collections]
+    assert colors == ["#e69f00", "#56b4e9", "#009e73"], f"use OKABE_ITO in order, got {colors}"
+
+def test_shapes_differ():
+    paths = [tuple(map(tuple, c.get_paths()[0].vertices.round(3))) for c in _ax.collections]
+    assert len(set(paths)) == 3, "use a different marker shape for each group"
+    assert _ax.get_legend() is not None, "add a legend"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>for i, (name, (xs, ys)) in enumerate(groups.items()):
+        ax.scatter(xs, ys, color=OKABE_ITO[i], marker=MARKERS[i], label=name)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import matplotlib.pyplot as plt
+
+OKABE_ITO = ["#E69F00", "#56B4E9", "#009E73", "#0072B2", "#D55E00", "#CC79A7"]
+MARKERS = ["o", "s", "^", "D", "v", "P"]
+
+def scatter_groups(groups):
+    fig, ax = plt.subplots()
+    for i, (name, (xs, ys)) in enumerate(groups.items()):
+        ax.scatter(xs, ys, color=OKABE_ITO[i], marker=MARKERS[i], label=name)
+    ax.legend()
+    return fig</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a one-page visual report</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">One-page visual report</span></div>
+      <div class="widget-body">
+        <p>Pick a dataset (generate one with NumPy, or use the sales data from the M51 mini-project) and produce a
+          single-page report image (letter or A4 proportions) that a manager could read in one minute.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init visual-report &amp;&amp; cd visual-report
+pixi add python=3.14 matplotlib pandas numpy
+pixi add seaborn plotly          # optional, for the stretch goals
+pixi run python report.py        # writes report.png and report.pdf</code></pre>
+        <p><strong>Layout:</strong> use <code>plt.subplot_mosaic</code> with a title row, a row of three KPI numbers
+          (drawn with <code>ax.text</code> on axes with <code>axis("off")</code>), a large trend chart, and two smaller
+          panels (a ranking and a distribution).</p>
+        <ul class="checklist" data-id="m53-mini">
+          <li>Every chart has a title that states a finding, not just a topic</li>
+          <li>Chart types match the questions (trend = line, ranking = sorted bars, distribution = histogram/box)</li>
+          <li>Colors come from a colorblind-safe palette; context is gray; there is at most one accent color per panel</li>
+          <li>At least one annotation points at the key moment in the trend</li>
+          <li>Bars start at zero; small multiples (if any) share axes</li>
+          <li>The script uses the OO API and saves both <code>report.png</code> (dpi 200) and <code>report.pdf</code></li>
+          <li>The report still reads correctly when converted to grayscale</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> recreate one panel in seaborn and one in plotly (export HTML); write a pytest
+          test that builds the figure and asserts its titles and number of Axes; add a Pixi task
+          <code>report</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m53-quiz">
+<script type="application/json">
+{"title": "Visualization quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which encoding lets people compare quantities most accurately?", "options": ["Color hue", "Area", "Position along a common scale", "Angle"], "answer": 2, "explanation": "<p>Cleveland and McGill found position on a common scale is judged most precisely, followed by length; angle, area, and color are less precise.</p>"},
+  {"type": "single", "prompt": "You want to show how monthly revenue changed over two years. Best default?", "options": ["Pie chart", "Line chart", "Histogram", "Scatter plot of month vs category"], "answer": 1, "explanation": "<p>Change over time is a trend question; a line chart encodes the ordered time axis by position and shows direction at a glance.</p>"},
+  {"type": "single", "prompt": "Why must bar charts start at zero?", "options": ["matplotlib requires it", "A bar's length encodes the value, so a truncated baseline exaggerates differences", "It makes bars thinner", "Zero is always in the data"], "answer": 1, "explanation": "<p>Readers compare lengths. Line charts encode position, so they may zoom to the data range.</p>"},
+  {"type": "multi", "prompt": "Which statements about matplotlib objects are true?", "options": ["A Figure can contain several Axes", "An Axes is one plotting area with its own data coordinates", "Axis and Axes are the same thing", "ax.plot returns Line2D artists that are stored in ax.lines"], "answer": [0, 1, 3], "explanation": "<p>Figure contains Axes; each Axes has two Axis objects (the rulers). Plotted lines are Line2D artists in <code>ax.lines</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import matplotlib.pyplot as plt\nfig, axs = plt.subplots(3, 2)\nprint(axs.shape, len(fig.axes))", "answer": "(3, 2) 6", "explanation": "<p><code>plt.subplots(3, 2)</code> returns a 3x2 NumPy array of Axes, six in total.</p>"},
+  {"type": "single", "prompt": "Why prefer the object-oriented API over pyplot's implicit state in functions?", "options": ["It draws faster", "It is explicit about which Figure/Axes is modified, which makes code composable and testable", "pyplot is deprecated", "Only the OO API can save files"], "answer": 1, "explanation": "<p>pyplot acts on a hidden 'current' axes, which becomes ambiguous with several panels or nested functions. Passing <code>ax</code> around removes the ambiguity.</p>"},
+  {"type": "single", "prompt": "Which colormap is best for a heatmap of temperatures (low to high)?", "options": ["jet", "viridis", "a qualitative palette like tab10", "RdBu centered at the median"], "answer": 1, "explanation": "<p>Ordered magnitudes need a sequential, perceptually uniform map like viridis. Jet has misleading brightness bands; qualitative palettes have no order.</p>"},
+  {"type": "single", "prompt": "Which colormap family fits correlations from -1 to 1?", "options": ["Sequential", "Diverging, centered at 0", "Qualitative", "Grayscale only"], "answer": 1, "explanation": "<p>A diverging map shows direction and strength away from a meaningful midpoint (0).</p>"},
+  {"type": "multi", "prompt": "Which make a chart readable for people with color vision deficiency?", "options": ["Using the Okabe-Ito palette", "Encoding groups with both color and marker shape", "Distinguishing series only by red vs green", "Direct labels next to lines"], "answer": [0, 1, 3], "explanation": "<p>Colorblind-safe palettes plus redundant encodings and direct labels keep the chart decodable without relying on hue alone.</p>"},
+  {"type": "single", "prompt": "Which format is best for a chart going into a printed PDF report?", "options": ["Low-dpi PNG", "JPEG", "SVG or PDF (vector)", "GIF"], "answer": 2, "explanation": "<p>Vector formats scale without pixelation. PNG at high dpi is fine for web; JPEG blurs sharp lines and text.</p>"},
+  {"type": "single", "prompt": "A test suite running in CI crashes while importing pyplot because there is no display. What fixes it?", "options": ["Call plt.show() first", "Use the Agg backend (MPLBACKEND=Agg or matplotlib.use(\"Agg\")) or build matplotlib.figure.Figure directly", "Install a GUI toolkit in CI", "Lower the dpi"], "answer": 1, "explanation": "<p>Agg is a non-interactive raster backend that renders to memory/files without a screen.</p>"},
+  {"type": "text", "prompt": "Which keyword argument of <code>DataFrame.plot</code> draws into an Axes you already created?", "answer": ["ax", "ax="], "explanation": "<p><code>df.plot(ax=my_ax)</code> draws into your Axes and returns it, so you can keep customizing with OO methods.</p>"},
+  {"type": "single", "prompt": "For an explanatory chart, which title is best?", "options": ["Sales by channel", "Figure 3", "Online overtook in-store sales in August", "Data 2025"], "answer": 2, "explanation": "<p>A title that states the finding tells the reader what to look for; the chart then provides the evidence.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Charts are data + marks + encodings + scales + guides; position is the most accurate encoding.</li>
+      <li>Pick by question: trend = line, comparison/ranking = sorted bar, distribution = histogram/box, relationship = scatter.</li>
+      <li>Figure contains Axes; use <code>plt.subplots()</code> and OO methods; inspect artists to test plots.</li>
+      <li>Share axes for small multiples; use constrained layout; annotate the key point.</li>
+      <li>Colorblind-safe palettes, perceptually uniform colormaps, redundant encodings, gray for context.</li>
+      <li><code>df.plot(ax=ax)</code> for quick pandas plots; save vector for print, PNG for web; Agg when headless.</li>
+      <li>Explanatory charts have one message stated in the title and no clutter.</li>
+    </ul>
+    <div class="flashcards" data-title="Visualization essentials">
+<script type="application/json">
+[{"front": "Grammar of graphics", "back": "Describe a chart as data, marks, encodings (aesthetic mappings), scales, facets, and guides."},
+ {"front": "Most accurate visual encoding", "back": "Position on a common scale (then length); color and area are least precise."},
+ {"front": "Figure vs Axes vs Axis", "back": "Figure = whole canvas; Axes = one plot area; Axis = the x or y ruler of an Axes."},
+ {"front": "OO API pattern", "back": "fig, ax = plt.subplots(); ax.plot(...); ax.set_title(...); return fig"},
+ {"front": "When may the y-axis skip zero?", "back": "For position encodings (lines, points), not for bars, whose length encodes value."},
+ {"front": "Sequential vs diverging colormap", "back": "Sequential for low-to-high magnitudes (viridis); diverging around a meaningful midpoint (RdBu at 0)."},
+ {"front": "Okabe-Ito", "back": "An 8-color qualitative palette designed to be distinguishable with common color vision deficiencies."},
+ {"front": "Redundant encoding", "back": "Show a category with color plus another channel (shape, line style, direct label)."},
+ {"front": "Small multiples", "back": "The same chart repeated per group with shared axes, instead of one cluttered chart."},
+ {"front": "Agg backend", "back": "Non-interactive renderer for scripts, servers, and CI where there is no display."},
+ {"front": "Explanatory chart title", "back": "States the finding (\"Online overtook in-store in August\"), not just the topic."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://matplotlib.org/stable/users/explain/quick_start.html">matplotlib Quick start</a> and the
+        <a href="https://matplotlib.org/stable/gallery/index.html">gallery</a></li>
+      <li><a href="https://matplotlib.org/stable/users/explain/colors/colormaps.html">Choosing colormaps in matplotlib</a></li>
+      <li><a href="https://seaborn.pydata.org/tutorial.html">seaborn tutorial</a> and <a href="https://plotly.com/python/plotly-express/">plotly express</a></li>
+      <li><a href="https://clauswilke.com/dataviz/">Fundamentals of Data Visualization</a> by Claus O. Wilke (free online)</li>
+      <li>Next: <a href="m54-statistics.html">M54 Statistics &amp; Probability</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

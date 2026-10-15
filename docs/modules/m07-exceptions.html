@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M07 · Errors &amp; Exceptions · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m07">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 07</p>
+    <h1>Errors &amp; Exceptions</h1>
+    <p class="lede">Things go wrong: files are missing, users type "twelve" where you wanted 12, networks drop.
+      Exceptions are Python's way of saying "I can't continue here" and letting the right piece of code decide what
+      to do. Handling them well is the difference between a script and a program people trust.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m06-collections.html">M06 Collections</a></span></div>
+    <ul class="objectives">
+      <li>Read a traceback from the bottom up and locate the real cause of an error</li>
+      <li>Handle exceptions with <code>try</code>/<code>except</code>/<code>else</code>/<code>finally</code>, catching only what you can handle</li>
+      <li>Choose between EAFP and LBYL styles</li>
+      <li>Raise built-in and custom exceptions, and design a small exception hierarchy</li>
+      <li>Chain exceptions with <code>from</code>, add notes, and handle groups with <code>except*</code></li>
+      <li>Use Python 3.14's parenthesis-free <code>except A, B:</code> and understand the new <code>finally</code> warnings</li>
+      <li>Know when to use <code>assert</code> and <code>warnings</code>, and write error messages that help</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="kinds-of-errors">
+    <h2>Two kinds of errors</h2>
+    <p>A <strong>syntax error</strong> means Python could not even understand your code, so nothing runs. Python
+      reports it before execution starts, with a caret pointing at the problem.</p>
+    <p>An <strong>exception</strong> happens while the code is running: the code is valid Python, but an operation
+      cannot be carried out with these values. When that happens, Python creates an <em>exception object</em>
+      describing the problem and <strong>raises</strong> it. Normal execution stops, and Python looks for code that
+      will <em>handle</em> it. If nothing does, the program ends and prints a traceback.</p>
+    <div class="runnable" data-title="A tour of common exceptions">
+<textarea>
+attempts = [
+    lambda: 1 / 0,
+    lambda: int("twelve"),
+    lambda: [1, 2, 3][10],
+    lambda: {"a": 1}["b"],
+    lambda: "age: " + 30,
+    lambda: undefined_name,
+    lambda: (5).append(1),
+    lambda: open("no-such-file.txt"),
+]
+for attempt in attempts:
+    try:
+        attempt()
+    except Exception as e:
+        print(f"{type(e).__name__:18} {e}")
+</textarea>
+    </div>
+    <p>Every exception is an instance of a class, and the classes form a hierarchy. Catching a class also catches
+      all its subclasses, which is why the hierarchy matters.</p>
+    <pre class="mermaid">
+flowchart TD
+  BE[BaseException] --> SE[SystemExit]
+  BE --> KI[KeyboardInterrupt]
+  BE --> EX[Exception]
+  EX --> AE[ArithmeticError] --> ZDE[ZeroDivisionError]
+  EX --> LE[LookupError]
+  LE --> IE[IndexError]
+  LE --> KE[KeyError]
+  EX --> VE[ValueError] --> UDE[UnicodeDecodeError]
+  EX --> TE[TypeError]
+  EX --> NE[NameError] --> ULE[UnboundLocalError]
+  EX --> OE[OSError] --> FNF[FileNotFoundError]
+  EX --> ATE[AttributeError]
+  EX --> RE[RuntimeError] --> RCE[RecursionError]
+    </pre>
+    <p>Notice that <code>SystemExit</code> and <code>KeyboardInterrupt</code> (Ctrl+C) are <em>not</em> under
+      <code>Exception</code>. That is deliberate: <code>except Exception</code> should never stop a user from
+      quitting your program.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> syntax errors stop the program before it starts;
+      exceptions are raised at run time. Exceptions are objects whose classes form a hierarchy rooted at
+      <code>BaseException</code>; your code normally deals with subclasses of <code>Exception</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tracebacks">
+    <h2>Anatomy of a traceback</h2>
+    <p>A <strong>traceback</strong> is the report Python prints for an unhandled exception. It lists the chain of
+      calls that were active when the error happened, oldest first. Run this and read the output:</p>
+    <div class="runnable" data-title="Produce a traceback">
+<textarea>
+def average(values):
+    return sum(values) / len(values)
+
+def report(scores):
+    return f"Average: {average(scores):.1f}"
+
+print(report([90, 85]))
+print(report([]))
+</textarea>
+    </div>
+    <p>How to read it, every time:</p>
+    <ol>
+      <li><strong>Start at the last line.</strong> <code>ZeroDivisionError: division by zero</code> gives the
+        exception type and message. This is <em>what</em> went wrong.</li>
+      <li><strong>Read the frame just above it.</strong> The last <code>File "...", line N, in average</code> entry
+        shows the exact line that raised, often with <code>~~~^~~~</code> markers under the failing expression.</li>
+      <li><strong>Walk upwards</strong> to see <em>how</em> you got there: <code>average</code> was called by
+        <code>report</code>, which was called from the module top level. The bug is often in a caller that passed
+        bad data (here, an empty list), not in the line that raised.</li>
+    </ol>
+    <aside class="callout py314"><p>Python 3.14's REPL and tracebacks use colour to highlight the exception type,
+      file names, and the failing expression, and error messages keep getting smarter, for example suggesting a
+      close keyword when you misspell one. In Python 3.15, <code>AttributeError</code> goes further:
+      <code>[].push(1)</code> suggests <code>append</code>.</p></aside>
+    <div class="runnable" data-title="Predict: which exception?" data-predict>
+<textarea>
+inventory = {"apples": 3}
+try:
+    print(inventory["pears"])
+except Exception as e:
+    print(type(e).__name__, e)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> read the last line for <em>what</em>, the last frame for
+      <em>where</em>, and the frames above for <em>how</em>. The bug is frequently in the caller.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="try-except">
+    <h2><code>try</code>, <code>except</code>, <code>else</code>, <code>finally</code></h2>
+    <p>Put code that might fail in a <code>try</code> block, and say how to recover in an <code>except</code>
+      block. Two optional clauses complete the statement:</p>
+    <ul>
+      <li><code>else</code> runs only if the <code>try</code> block raised nothing. Put the "success" code here, so
+        the <code>try</code> block contains only the risky line and you do not accidentally catch errors from the
+        success code.</li>
+      <li><code>finally</code> runs <em>no matter what</em>: success, handled exception, unhandled exception, even a
+        <code>return</code>. Use it for cleanup such as closing a connection.</li>
+    </ul>
+    <pre class="mermaid">
+flowchart TD
+  T[try block] -->|no exception| EL[else block]
+  T -->|exception matches an except| EX[except block]
+  T -->|exception matches nothing| F2[finally block] --> UP[exception propagates to the caller]
+  EL --> F[finally block]
+  EX --> F
+  F --> NEXT[code after the try statement]
+    </pre>
+    <div class="runnable" data-title="All four clauses" data-stdin="12\nzero\n0">
+<textarea>
+def ask_divisor():
+    text = input("Divide 100 by? ")
+    try:
+        divisor = int(text)
+        result = 100 / divisor
+    except ValueError:
+        print(f"  {text!r} is not a whole number")
+    except ZeroDivisionError:
+        print("  cannot divide by zero")
+    else:
+        print(f"  100 / {divisor} = {result:.2f}")
+    finally:
+        print("  (finally always runs)")
+
+for _ in range(3):
+    ask_divisor()
+</textarea>
+    </div>
+    <p>Step through to watch the jumps. Notice how control leaves the <code>try</code> block the instant an
+      exception is raised, skipping the rest of it.</p>
+    <div class="tracer" data-title="Control flow through try/except/else/finally">
+<textarea>
+def convert(text):
+    log = []
+    try:
+        value = int(text)
+        log.append("parsed")
+    except ValueError:
+        value = None
+        log.append("failed")
+    else:
+        log.append("no error")
+    finally:
+        log.append("cleanup")
+    return value, log
+
+good = convert("42")
+bad = convert("forty-two")
+</textarea>
+    </div>
+    <p>When an exception is not handled in the current function, it <strong>propagates</strong>: the function ends
+      immediately and the exception is re-raised at the call site, then its caller, and so on up the stack. You can
+      therefore handle errors at whatever level knows how to recover.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> keep the <code>try</code> block small; put success code
+      in <code>else</code> and cleanup in <code>finally</code>. Unhandled exceptions travel up the call stack.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="catching">
+    <h2>Catch specific exceptions</h2>
+    <p>An <code>except</code> clause names the exception types it handles. Python checks clauses from top to bottom
+      and runs the <em>first</em> one that matches, so put specific classes before general ones. Use
+      <code>as name</code> to get the exception object.</p>
+    <pre><code class="language-python">try:
+    value = settings[key]
+except KeyError as e:
+    print(f"missing setting: {e}")</code></pre>
+    <p>To handle several types the same way, list them. Python 3.14 lets you drop the parentheses when you do not
+      use <code>as</code>:</p>
+    <div class="tabs">
+      <div class="tab" data-label="Python 3.14 (PEP 758)"><pre><code class="language-python">try:
+    number = int(raw)
+except ValueError, TypeError:
+    number = 0
+
+try:
+    number = int(raw)
+except (ValueError, TypeError) as e:   # with 'as', parentheses are still required
+    print(e)</code></pre></div>
+      <div class="tab" data-label="Python 3.13 and earlier"><pre><code class="language-python">try:
+    number = int(raw)
+except (ValueError, TypeError):
+    number = 0</code></pre></div>
+    </div>
+    <aside class="callout py314"><p><strong>PEP 758:</strong> <code>except ValueError, TypeError:</code> and
+      <code>except* ValueError, TypeError:</code> are valid in 3.14 without parentheses. If you add
+      <code>as e</code>, parentheses are required, because <code>except A, B as e</code> would be ambiguous. Code
+      that must still run on 3.13 should keep the parentheses.</p></aside>
+    <div class="runnable" data-title="PEP 758 in action">
+<textarea>
+def to_number(raw):
+    try:
+        return int(raw)
+    except ValueError, TypeError:
+        return 0
+
+print(to_number("7"), to_number("seven"), to_number(None))
+</textarea>
+    </div>
+    <h3>Why never use a bare <code>except:</code></h3>
+    <p>A bare <code>except:</code> (or <code>except BaseException:</code>) catches <em>everything</em>, including
+      <code>KeyboardInterrupt</code>, <code>SystemExit</code>, and the typo <code>NameError</code> you would want to
+      see. It hides bugs. Even <code>except Exception:</code> is too broad unless you log or re-raise. Catch the
+      narrowest exception you know how to handle and let the rest propagate.</p>
+    <div class="runnable" data-title="Predict: a bug hidden by a broad except" data-predict>
+<textarea>
+def total_price(items):
+    try:
+        return sum(item["price"] for item in itmes)   # typo!
+    except Exception:
+        return 0
+
+print(total_price([{"price": 5}, {"price": 7}]))
+</textarea>
+    </div>
+    <p>The function quietly returns <code>0</code>, and the typo goes unnoticed. With
+      <code>except KeyError:</code> the <code>NameError</code> would surface immediately. If you must catch broadly
+      (for example at the very top of a long-running service), log the error with its traceback, never
+      <code>pass</code>.</p>
+    <aside class="callout danger"><p><code>except SomeError: pass</code> silently swallows a failure. If ignoring an
+      error is truly correct, make it explicit and documented with
+      <code>contextlib.suppress(FileNotFoundError)</code>, and keep the type narrow.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> specific before general; the first match wins. Catch
+      only what you can handle. In 3.14, <code>except A, B:</code> works without parentheses unless you use
+      <code>as</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="eafp-lbyl">
+    <h2>EAFP vs LBYL</h2>
+    <p>Two styles for code that might fail:</p>
+    <div class="two-col">
+      <div>
+        <p><strong>LBYL: Look Before You Leap.</strong> Check first, then act.</p>
+        <pre><code class="language-python">if key in config:
+    port = int(config[key])
+else:
+    port = 8080</code></pre>
+      </div>
+      <div>
+        <p><strong>EAFP: Easier to Ask Forgiveness than Permission.</strong> Try it, handle failure.</p>
+        <pre><code class="language-python">try:
+    port = int(config[key])
+except KeyError:
+    port = 8080</code></pre>
+      </div>
+    </div>
+    <p>Python culture leans towards EAFP for three reasons. First, checks can be incomplete: <code>key in
+      config</code> does not tell you whether the value is a valid integer. Second, checks can be out of date: a
+      file that existed when you checked can be deleted before you open it (a <em>race condition</em>). Third, the
+      common path stays uncluttered. LBYL is still right when failure is common and cheap to detect, or when the
+      operation has side effects you cannot undo halfway.</p>
+    <div class="runnable" data-title="Parsing user input both ways">
+<textarea>
+def parse_lbyl(text):
+    text = text.strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+    return None
+
+def parse_eafp(text):
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+for sample in ["42", " -7 ", "3.5", "1_000", "٣"]:
+    print(f"{sample!r:8} LBYL={parse_lbyl(sample)!r:6} EAFP={parse_eafp(sample)!r}")
+</textarea>
+    </div>
+    <p>The LBYL version disagrees with <code>int()</code> on <code>"1_000"</code> (which <code>int</code> accepts)
+      and needs extra work for signs. EAFP asks the real authority, <code>int</code> itself.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> prefer EAFP when the operation itself is the best
+      validator; use LBYL when failure is the normal case or partial work is hard to undo.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="raising">
+    <h2>Raising exceptions and custom hierarchies</h2>
+    <p>Your own functions should raise exceptions when they are called with values they cannot work with. Raising
+      is better than returning a special value like <code>-1</code> or <code>None</code>, because the caller cannot
+      accidentally ignore it.</p>
+    <pre><code class="language-python">def withdraw(balance: float, amount: float) -&gt; float:
+    if amount &lt;= 0:
+        raise ValueError(f"amount must be positive, got {amount}")
+    if amount &gt; balance:
+        raise ValueError(f"insufficient funds: balance {balance}, requested {amount}")
+    return balance - amount</code></pre>
+    <p>Pick the built-in class that matches the problem: <code>ValueError</code> for a right-typed but wrong value,
+      <code>TypeError</code> for the wrong type, <code>KeyError</code>/<code>IndexError</code> for missing items,
+      <code>NotImplementedError</code> for a method still to be written. Inside an <code>except</code> block, a bare
+      <code>raise</code> re-raises the current exception unchanged, which is useful after logging.</p>
+    <h3>Custom exceptions</h3>
+    <p>For a library or application, define your own exception classes. A custom class is a one-liner that
+      subclasses <code>Exception</code> (classes are taught in Part 2; for now copy the pattern). Build a small
+      <strong>hierarchy</strong> with one base class for your package, so callers can catch everything from your
+      code with one clause, or specific failures individually.</p>
+    <div class="runnable" data-title="A small exception hierarchy">
+<textarea>
+class BankError(Exception):
+    """Base class for every error raised by the bank module."""
+
+class InsufficientFunds(BankError):
+    """Raised when a withdrawal exceeds the balance."""
+
+    def __init__(self, balance, amount):
+        super().__init__(f"balance {balance:.2f} is less than {amount:.2f}")
+        self.balance = balance
+        self.amount = amount
+
+class AccountLocked(BankError):
+    """Raised when an account is frozen."""
+
+def withdraw(balance, amount, locked=False):
+    if locked:
+        raise AccountLocked("account is locked")
+    if amount > balance:
+        raise InsufficientFunds(balance, amount)
+    return balance - amount
+
+for args in [(100, 30), (100, 300), (100, 1, True)]:
+    try:
+        print("new balance:", withdraw(*args))
+    except InsufficientFunds as e:
+        print("short by", e.amount - e.balance, "->", e)
+    except BankError as e:
+        print(type(e).__name__, "->", e)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Name custom exceptions with an <code>Error</code> suffix (PEP 8) or a clear noun
+      phrase, give each a docstring, and store useful data as attributes (<code>e.field</code>,
+      <code>e.line</code>) so callers do not have to parse the message. Project 1's <code>LedgerError</code> follows
+      exactly this pattern.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> raise early with a precise type and message. One base
+      exception per package, specific subclasses beneath it.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="chaining">
+    <h2>Chaining and notes</h2>
+    <p>Often you catch a low-level error and raise a higher-level one that makes sense to your caller: a
+      <code>KeyError</code> deep in config parsing becomes a <code>ConfigError("missing 'port'")</code>. Use
+      <code>raise New(...) from original</code> to <strong>chain</strong> them. The original is stored as
+      <code>__cause__</code> and printed in the traceback under "The above exception was the direct cause of the
+      following exception", so no information is lost.</p>
+    <div class="runnable" data-title="Explicit chaining with from">
+<textarea>
+class ConfigError(Exception):
+    """Raised when the configuration is invalid."""
+
+def read_port(config):
+    try:
+        return int(config["port"])
+    except KeyError as e:
+        raise ConfigError("missing required setting 'port'") from e
+    except ValueError as e:
+        raise ConfigError(f"port must be a number, got {config['port']!r}") from e
+
+for cfg in [{"port": "8080"}, {}, {"port": "eighty"}]:
+    try:
+        print(read_port(cfg))
+    except ConfigError as e:
+        print(f"ConfigError: {e}  (cause: {type(e.__cause__).__name__})")
+</textarea>
+    </div>
+    <p>If you raise inside an <code>except</code> block <em>without</em> <code>from</code>, Python still records the
+      original as <code>__context__</code> and prints "During handling of the above exception, another exception
+      occurred", which suggests a bug in the handler. Write <code>from e</code> to say "this is deliberate", or
+      <code>from None</code> to hide the original when it is pure noise.</p>
+    <p><strong>Notes</strong> (Python 3.11+) attach extra context to an exception as it travels up, without changing
+      its type: <code>e.add_note("while reading row 17")</code>. Notes are printed after the message.</p>
+    <div class="runnable" data-title="Predict: notes and causes" data-predict>
+<textarea>
+try:
+    try:
+        int("x")
+    except ValueError as e:
+        e.add_note("while parsing the quantity column")
+        raise
+except ValueError as e:
+    print(e.__notes__)
+
+try:
+    try:
+        {}["k"]
+    except KeyError:
+        raise LookupError("not found") from None
+except LookupError as e:
+    print(e.__cause__, e.__suppress_context__)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> translate low-level errors with <code>raise X(...) from
+      e</code>; use <code>from None</code> to hide irrelevant context; use <code>add_note</code> to add context
+      without changing the type.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="exception-groups">
+    <h2>Exception groups and <code>except*</code></h2>
+    <p>Sometimes several independent things fail at once: validating ten fields of a form, or running five tasks
+      concurrently. Reporting only the first failure is frustrating. An <code>ExceptionGroup</code> bundles several
+      exceptions into one, and the <code>except*</code> clause handles the members by type. Each
+      <code>except*</code> clause receives a sub-group of the matching exceptions; anything unhandled is re-raised.</p>
+    <div class="runnable" data-title="Validate everything, report everything">
+<textarea>
+def validate(user):
+    errors = []
+    if not user.get("name"):
+        errors.append(ValueError("name is required"))
+    if not isinstance(user.get("age"), int):
+        errors.append(TypeError("age must be an int"))
+    elif user["age"] < 0:
+        errors.append(ValueError("age cannot be negative"))
+    if "@" not in user.get("email", ""):
+        errors.append(ValueError("email looks invalid"))
+    if errors:
+        raise ExceptionGroup("invalid user", errors)
+
+try:
+    validate({"name": "", "age": "ten", "email": "nope"})
+except* ValueError as group:
+    for e in group.exceptions:
+        print("value problem:", e)
+except* TypeError as group:
+    for e in group.exceptions:
+        print("type problem:", e)
+</textarea>
+    </div>
+    <p>You will meet exception groups again with <code>asyncio.TaskGroup</code> in
+      <a href="m38-asyncio.html">M38</a>, where several concurrent tasks can fail together.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>ExceptionGroup(message, [errors])</code> bundles
+      failures; <code>except*</code> handles each type within the group; unmatched members propagate.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="finally-cleanup">
+    <h2>Cleanup, and the new <code>finally</code> rule</h2>
+    <p><code>finally</code> exists for cleanup that must happen whatever occurs: releasing a lock, closing a file,
+      printing "done". In M09 you will see that the <code>with</code> statement (a <em>context manager</em>) packages
+      this pattern so you rarely write <code>finally</code> by hand.</p>
+    <p>A <code>return</code>, <code>break</code>, or <code>continue</code> that jumps <em>out of</em> a
+      <code>finally</code> block is a trap: it silently discards any exception in flight and overrides any earlier
+      return value.</p>
+    <aside class="callout py314"><p><strong>PEP 765:</strong> Python 3.14 emits a <code>SyntaxWarning</code> when
+      <code>return</code>, <code>break</code>, or <code>continue</code> would exit a <code>finally</code> block. The
+      code still runs, but the compiler now tells you about the bug.</p></aside>
+    <div class="runnable" data-title="See the 3.14 SyntaxWarning">
+<textarea>
+import warnings
+
+source = '''
+def risky():
+    try:
+        raise ValueError("important!")
+    finally:
+        return "everything is fine"     # swallows the ValueError
+'''
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    code = compile(source, "<demo>", "exec")
+for w in caught:
+    print(f"{w.category.__name__}: {w.message}")
+
+namespace = {}
+exec(code, namespace)
+print(namespace["risky"]())   # the ValueError vanished
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> use <code>finally</code> only for cleanup; never
+      <code>return</code>, <code>break</code>, or <code>continue</code> out of it.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="assert-warnings">
+    <h2>Assertions, warnings, and good error messages</h2>
+    <h3><code>assert</code>: checks for programmers</h3>
+    <p><code>assert condition, "message"</code> raises <code>AssertionError</code> if the condition is false. Use it
+      to state assumptions that should <em>always</em> be true if your code is correct, an internal sanity check.
+      Never use it to validate user input or data from outside: running Python with <code>-O</code> removes every
+      assert. Tests are the main place you will write asserts (pytest is built on them, M17).</p>
+    <pre><code class="language-python">def mean(values):
+    result = sum(values) / len(values)
+    assert min(values) &lt;= result &lt;= max(values), "mean must lie within the data"   # internal invariant
+    return result</code></pre>
+    <h3><code>warnings</code>: problems that should not stop the program</h3>
+    <p>A warning tells the developer "this works, but you should know something", for example that a function is
+      deprecated. Warnings are printed once per location by default and can be turned into errors (the
+      <code>-W error</code> flag) for testing.</p>
+    <div class="runnable" data-title="Issuing a deprecation warning">
+<textarea>
+import warnings
+
+def old_total(items):
+    warnings.warn("old_total() is deprecated; use sum()", DeprecationWarning, stacklevel=2)
+    return sum(items)
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    print(old_total([1, 2, 3]))
+print([f"{w.category.__name__}: {w.message}" for w in caught])
+</textarea>
+    </div>
+    <h3>Writing error messages that help</h3>
+    <p>A good message answers three questions: <em>what</em> was wrong, <em>which value</em> caused it, and ideally
+      <em>what is expected</em>.</p>
+    <table class="rubric">
+      <thead><tr><th>Unhelpful</th><th>Helpful</th></tr></thead>
+      <tbody>
+        <tr><td><code>ValueError("bad input")</code></td><td><code>ValueError("age must be between 0 and 150, got -4")</code></td></tr>
+        <tr><td><code>KeyError("x")</code> from deep inside</td><td><code>ConfigError("missing required setting 'port' in settings.toml")</code></td></tr>
+        <tr><td><code>Exception("error")</code></td><td><code>LedgerError("jan.csv:17: invalid amount '12,3.4'")</code></td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>assert</code> is for internal invariants and
+      tests, not input validation. Warnings flag problems without stopping. Messages should include the bad value,
+      where it came from, and what was expected; use <code>!r</code> to show strings with quotes.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m07-e1" data-title="Safe division">
+      <div class="exercise-prompt">
+        <p>Write <code>safe_divide(a, b)</code> that returns <code>a / b</code>, or <code>None</code> when
+          <code>b</code> is zero. Use <code>try</code>/<code>except</code>, catching only
+          <code>ZeroDivisionError</code>, so that other mistakes such as passing a string still raise.</p>
+      </div>
+<textarea class="starter">
+def safe_divide(a, b):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_divides():
+    assert safe_divide(10, 4) == 2.5, "10 / 4 is 2.5"
+
+def test_zero():
+    assert safe_divide(1, 0) is None, "dividing by zero returns None"
+
+def test_other_errors_propagate():
+    try:
+        safe_divide("10", 2)
+    except TypeError:
+        return
+    assert False, "a TypeError must not be swallowed"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>except ZeroDivisionError: return None</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def safe_divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return None</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m07-e2" data-title="EAFP lookups in nested data">
+      <div class="exercise-prompt">
+        <p>Write <code>get_path(data, *keys, default=None)</code> that follows <code>keys</code> through nested
+          dicts and lists, for example <code>get_path(cfg, "db", "hosts", 0)</code>. Return <code>default</code> if
+          any step is missing (<code>KeyError</code>, <code>IndexError</code>) or impossible
+          (<code>TypeError</code>, such as indexing an int). Use EAFP, not <code>in</code> checks.</p>
+      </div>
+<textarea class="starter">
+def get_path(data, *keys, default=None):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+CFG = {"db": {"hosts": ["a.example", "b.example"], "port": 5432}}
+
+def test_found():
+    assert get_path(CFG, "db", "hosts", 1) == "b.example", "follow dict keys and list indexes"
+    assert get_path(CFG, "db", "port") == 5432, "follow two dict keys"
+
+def test_missing():
+    assert get_path(CFG, "db", "user") is None, "missing key gives the default"
+    assert get_path(CFG, "db", "hosts", 5, default="?") == "?", "missing index gives the default"
+
+def test_impossible():
+    assert get_path(CFG, "db", "port", "x", default=0) == 0, "indexing an int gives the default"
+
+def test_no_keys():
+    assert get_path(CFG) is CFG, "no keys returns the data itself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop over <code>keys</code>, doing <code>data = data[key]</code>
+        inside one <code>try</code>; catch the three exception types together.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def get_path(data, *keys, default=None):
+    try:
+        for key in keys:
+            data = data[key]
+    except KeyError, IndexError, TypeError:
+        return default
+    return data</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m07-e3" data-title="A validation hierarchy">
+      <div class="exercise-prompt">
+        <p>Create <code>ValidationError(Exception)</code> and two subclasses: <code>MissingFieldError</code> and
+          <code>RangeError</code>. <code>MissingFieldError(field)</code> must store <code>.field</code> and have the
+          message <code>"missing field: &lt;field&gt;"</code>. Then write <code>validate_age(record)</code> that returns
+          <code>record["age"]</code> as an int, raising <code>MissingFieldError("age")</code> if the key is absent and
+          <code>RangeError</code> if the age is outside 0–150.</p>
+      </div>
+<textarea class="starter">
+class ValidationError(Exception):
+    """Base class for validation problems."""
+
+
+class MissingFieldError(ValidationError):
+    def __init__(self, field):
+        ...
+
+
+class RangeError(ValidationError):
+    pass
+
+
+def validate_age(record):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_hierarchy():
+    assert issubclass(MissingFieldError, ValidationError), "MissingFieldError subclasses ValidationError"
+    assert issubclass(RangeError, ValidationError), "RangeError subclasses ValidationError"
+    assert issubclass(ValidationError, Exception), "ValidationError subclasses Exception"
+
+def test_valid():
+    assert validate_age({"age": 30}) == 30, "a valid age is returned"
+
+def test_missing():
+    try:
+        validate_age({})
+    except MissingFieldError as e:
+        assert e.field == "age", "the field attribute should be 'age'"
+        assert str(e) == "missing field: age", f"message was {str(e)!r}"
+        return
+    assert False, "missing age should raise MissingFieldError"
+
+def test_range():
+    for bad in (-1, 151):
+        try:
+            validate_age({"age": bad})
+        except RangeError:
+            continue
+        assert False, f"age {bad} should raise RangeError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>__init__</code>, call
+        <code>super().__init__(f"missing field: {field}")</code> and then set <code>self.field = field</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class ValidationError(Exception):
+    """Base class for validation problems."""
+
+
+class MissingFieldError(ValidationError):
+    def __init__(self, field):
+        super().__init__(f"missing field: {field}")
+        self.field = field
+
+
+class RangeError(ValidationError):
+    pass
+
+
+def validate_age(record):
+    try:
+        age = int(record["age"])
+    except KeyError:
+        raise MissingFieldError("age") from None
+    if not 0 &lt;= age &lt;= 150:
+        raise RangeError(f"age must be between 0 and 150, got {age}")
+    return age</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m07-e4" data-title="Translate errors with chaining">
+      <div class="exercise-prompt">
+        <p>Define <code>ConfigError(Exception)</code> and write <code>load_port(config)</code> that returns
+          <code>int(config["port"])</code>. A missing key or a non-numeric value must raise <code>ConfigError</code>
+          chained with <code>from</code> to the original exception. Ports outside 1–65535 raise
+          <code>ConfigError</code> too.</p>
+      </div>
+<textarea class="starter">
+class ConfigError(Exception):
+    pass
+
+
+def load_port(config):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_ok():
+    assert load_port({"port": "8080"}) == 8080, "a numeric string becomes an int"
+
+def test_missing_is_chained():
+    try:
+        load_port({})
+    except ConfigError as e:
+        assert isinstance(e.__cause__, KeyError), "the cause should be the original KeyError"
+        return
+    assert False, "missing port should raise ConfigError"
+
+def test_bad_value_is_chained():
+    try:
+        load_port({"port": "http"})
+    except ConfigError as e:
+        assert isinstance(e.__cause__, ValueError), "the cause should be the original ValueError"
+        assert "http" in str(e), "the message should mention the bad value"
+        return
+    assert False, "a non-numeric port should raise ConfigError"
+
+def test_range():
+    for bad in ("0", "70000"):
+        try:
+            load_port({"port": bad})
+        except ConfigError:
+            continue
+        assert False, f"port {bad} should raise ConfigError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use two <code>except</code> clauses, each with
+        <code>raise ConfigError(...) from e</code>. Do the range check after the <code>try</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class ConfigError(Exception):
+    pass
+
+
+def load_port(config):
+    try:
+        port = int(config["port"])
+    except KeyError as e:
+        raise ConfigError("missing setting 'port'") from e
+    except ValueError as e:
+        raise ConfigError(f"port must be a number, got {config['port']!r}") from e
+    if not 1 &lt;= port &lt;= 65535:
+        raise ConfigError(f"port must be 1-65535, got {port}")
+    return port</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m07-e5" data-title="Report every problem at once">
+      <div class="exercise-prompt">
+        <p>Write <code>parse_all(values)</code> that converts every string in <code>values</code> to an int. If any
+          fail, raise one <code>ExceptionGroup</code> with the message <code>"invalid values"</code> containing the
+          <code>ValueError</code> for <em>each</em> bad item. If all succeed, return the list of ints.</p>
+      </div>
+<textarea class="starter">
+def parse_all(values):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_all_good():
+    assert parse_all(["1", "2", "30"]) == [1, 2, 30], "valid values are converted"
+
+def test_group_collects_every_failure():
+    try:
+        parse_all(["1", "x", "2", "y", "z"])
+    except ExceptionGroup as eg:
+        assert eg.message == "invalid values", f"group message was {eg.message!r}"
+        assert len(eg.exceptions) == 3, "one ValueError per bad item"
+        assert all(isinstance(e, ValueError) for e in eg.exceptions), "members are ValueErrors"
+        return
+    assert False, "bad items should raise an ExceptionGroup"
+
+def test_except_star():
+    caught = []
+    try:
+        parse_all(["?"])
+    except* ValueError as group:
+        caught.extend(group.exceptions)
+    assert len(caught) == 1, "except* ValueError should catch the member"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Collect results and errors in two lists inside the loop; raise
+        <code>ExceptionGroup("invalid values", errors)</code> afterwards if <code>errors</code> is not empty.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def parse_all(values):
+    results, errors = [], []
+    for value in values:
+        try:
+            results.append(int(value))
+        except ValueError as e:
+            errors.append(e)
+    if errors:
+        raise ExceptionGroup("invalid values", errors)
+    return results</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a robust input validator</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">validate.py: forms that never crash</span></div>
+      <div class="widget-body">
+        <p>Write a module that asks the user for a sign-up form (name, age, email, and a password typed twice) and
+          never crashes, no matter what they type. Each field has a validator function that returns the cleaned
+          value or raises a specific exception from your own hierarchy.</p>
+        <pre data-label="Terminal"><code class="language-bash">mkdir validator &amp;&amp; cd validator
+pixi init
+pixi add python=3.14
+pixi run python validate.py</code></pre>
+        <ul>
+          <li><code>FormError(Exception)</code> with subclasses <code>RequiredError</code>, <code>FormatError</code>,
+            <code>RangeError</code>, and <code>MismatchError</code>; each stores the <code>field</code> name.</li>
+          <li>Validators: <code>validate_name</code>, <code>validate_age</code> (13–120),
+            <code>validate_email</code> (one <code>@</code> and a dot after it), <code>validate_password</code>
+            (length ≥ 10, at least one digit).</li>
+          <li><code>ask(prompt, validator, attempts=3)</code> loops until valid, printing the error message after each
+            failure, and raises <code>FormError</code> chained from the last failure after too many attempts.</li>
+          <li><code>validate_form(data: dict)</code> validates everything at once and raises an
+            <code>ExceptionGroup</code> listing every problem, for use by a future web form.</li>
+        </ul>
+        <ul class="checklist" data-id="m07-mini">
+          <li>Every validator raises a <em>specific</em> subclass with a message containing the bad value</li>
+          <li>No bare <code>except</code> and no <code>except Exception: pass</code> anywhere</li>
+          <li><code>ask</code> uses <code>try</code>/<code>except</code>/<code>else</code> with a small <code>try</code> block</li>
+          <li>Too many attempts raise <code>FormError(...) from last_error</code></li>
+          <li><code>validate_form</code> reports all invalid fields with <code>ExceptionGroup</code>, handled with <code>except*</code> in <code>main</code></li>
+          <li>Ctrl+C exits cleanly with a friendly message (catch <code>KeyboardInterrupt</code> only in <code>main</code>)</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> attach notes with <code>add_note</code> naming the attempt number; emit a
+          <code>DeprecationWarning</code> from an old <code>check_email</code> alias; write
+          <code>assert</code>-based checks at the bottom of the file for each validator.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m07-quiz">
+      <script type="application/json">
+      {"title": "Errors and exceptions quiz", "passScore": 0.7, "questions": [
+        {"type": "single", "prompt": "Where should you look first in a traceback?", "options": ["The first line", "The last line: the exception type and message", "The middle frame", "The module docstring"], "answer": 1,
+         "explanation": "<p>The last line says what went wrong; the frame above it says where. Then read upwards for how you got there.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "try:\n    x = int('5')\nexcept ValueError:\n    print('bad')\nelse:\n    print('good', x)\nfinally:\n    print('done')", "answer": "good 5\ndone",
+         "explanation": "<p>No exception, so <code>else</code> runs, then <code>finally</code>.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "try:\n    [][0]\nexcept LookupError:\n    print('lookup')\nexcept IndexError:\n    print('index')", "answer": "lookup",
+         "explanation": "<p><code>IndexError</code> is a subclass of <code>LookupError</code>, and the first matching clause wins. Put specific classes first.</p>"},
+        {"type": "multi", "prompt": "Which are valid in Python 3.14?", "options": ["<code>except ValueError, TypeError:</code>", "<code>except (ValueError, TypeError) as e:</code>", "<code>except ValueError, TypeError as e:</code>", "<code>except* ValueError, TypeError:</code>"], "answer": [0, 1, 3],
+         "explanation": "<p>PEP 758 allows dropping the parentheses only when there is no <code>as</code> clause.</p>"},
+        {"type": "single", "prompt": "Why is a bare <code>except:</code> harmful?", "options": ["It is slower", "It catches everything, including KeyboardInterrupt, SystemExit, and bugs like NameError", "It is a syntax error", "It only catches the first exception"], "answer": 1,
+         "explanation": "<p>Catch the narrowest type you can handle so unexpected problems stay visible.</p>"},
+        {"type": "text", "prompt": "What does the acronym EAFP stand for? (four words after 'Easier to')", "answer": ["Ask Forgiveness than Permission", "ask forgiveness than permission", "Easier to Ask Forgiveness than Permission"],
+         "explanation": "<p>Easier to Ask Forgiveness than Permission: try the operation and handle the exception.</p>"},
+        {"type": "single", "prompt": "After <code>raise ConfigError('x') from e</code>, where is <code>e</code> stored?", "options": ["<code>__context__</code> only", "<code>__cause__</code>", "<code>__notes__</code>", "Nowhere"], "answer": 1,
+         "explanation": "<p>Explicit chaining sets <code>__cause__</code> (and <code>__context__</code> is also set automatically).</p>"},
+        {"type": "single", "prompt": "What does <code>raise X from None</code> do?", "options": ["Raises nothing", "Raises X and suppresses display of the exception being handled", "Converts X to None", "Re-raises the original"], "answer": 1,
+         "explanation": "<p><code>from None</code> sets <code>__suppress_context__</code>, hiding the original from the traceback.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "def f():\n    try:\n        return 'try'\n    finally:\n        print('cleanup')\n\nprint(f())", "answer": "cleanup\ntry",
+         "explanation": "<p><code>finally</code> runs before the function actually returns, so 'cleanup' is printed first.</p>"},
+        {"type": "single", "prompt": "What does Python 3.14 do with <code>return</code> inside a <code>finally</code> block (PEP 765)?", "options": ["Raises SyntaxError", "Emits a SyntaxWarning", "Silently ignores the return", "Nothing has changed"], "answer": 1,
+         "explanation": "<p>It still runs, but the compiler warns, because such a return can swallow exceptions.</p>"},
+        {"type": "single", "prompt": "Which handler receives members of an <code>ExceptionGroup</code> by type?", "options": ["<code>except</code>", "<code>except*</code>", "<code>finally</code>", "<code>else</code>"], "answer": 1,
+         "explanation": "<p><code>except* T</code> receives a sub-group of the members that are instances of <code>T</code>.</p>"},
+        {"type": "single", "prompt": "Why should you not validate user input with <code>assert</code>?", "options": ["assert is slow", "Running with <code>-O</code> removes asserts entirely", "assert cannot take a message", "assert only works in tests"], "answer": 1,
+         "explanation": "<p>Asserts are for internal invariants. Raise a proper exception for bad input.</p>"},
+        {"type": "multi", "prompt": "Which make an error message more helpful?", "options": ["Including the bad value", "Saying what was expected", "Naming the file or field involved", "Using the word 'error' twice"], "answer": [0, 1, 2],
+         "explanation": "<p>Good messages say what, which value, where, and what was expected.</p>"},
+        {"type": "text", "prompt": "Which method attaches extra context text to an exception without changing its type?", "answer": ["add_note", "add_note()", "e.add_note"],
+         "explanation": "<p><code>e.add_note(\"...\")</code> appends to <code>e.__notes__</code>, printed after the message.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Exceptions are objects in a class hierarchy; your code deals with subclasses of <code>Exception</code>.</li>
+      <li>Read tracebacks bottom-up: what, where, then how.</li>
+      <li><code>try</code> small; <code>except</code> specific; <code>else</code> for success; <code>finally</code> for cleanup.</li>
+      <li>Python 3.14: <code>except A, B:</code> without parentheses (not with <code>as</code>); a <code>SyntaxWarning</code> for <code>return</code>/<code>break</code>/<code>continue</code> out of <code>finally</code>.</li>
+      <li>Prefer EAFP when the operation itself validates best.</li>
+      <li>Raise precise exceptions; give your package one base exception with specific subclasses.</li>
+      <li>Chain with <code>from</code>, hide noise with <code>from None</code>, add context with <code>add_note</code>.</li>
+      <li><code>ExceptionGroup</code> + <code>except*</code> report many failures at once.</li>
+      <li><code>assert</code> for invariants, <code>warnings</code> for non-fatal notices, and messages that include the bad value.</li>
+    </ul>
+    <div class="flashcards" data-title="Exceptions">
+      <script type="application/json">
+      [{"front": "Syntax error vs exception", "back": "Syntax error: invalid code, nothing runs. Exception: raised while valid code runs."},
+       {"front": "When does <code>else</code> run in a try statement?", "back": "Only when the try block raised no exception."},
+       {"front": "When does <code>finally</code> run?", "back": "Always: after success, a handled exception, an unhandled exception, or a return."},
+       {"front": "Order of except clauses", "back": "Specific before general; the first match wins."},
+       {"front": "PEP 758", "back": "<code>except A, B:</code> without parentheses in 3.14, but parentheses are required with <code>as</code>."},
+       {"front": "PEP 765", "back": "3.14 warns (SyntaxWarning) about return/break/continue exiting a finally block."},
+       {"front": "EAFP", "back": "Easier to Ask Forgiveness than Permission: try, then handle the exception."},
+       {"front": "<code>raise X from e</code>", "back": "Chains explicitly; e becomes <code>X.__cause__</code>."},
+       {"front": "<code>except*</code>", "back": "Handles matching members of an ExceptionGroup."},
+       {"front": "Why not <code>assert</code> for input?", "back": "<code>python -O</code> strips asserts."},
+       {"front": "Custom exception pattern", "back": "One package base class (<code>class AppError(Exception)</code>) with specific subclasses."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/errors.html">Python tutorial: Errors and exceptions</a></li>
+      <li><a href="https://docs.python.org/3.14/library/exceptions.html">Built-in exceptions and the full hierarchy</a></li>
+      <li><a href="https://peps.python.org/pep-0758/">PEP 758: Allow except and except* without parentheses</a></li>
+      <li><a href="https://peps.python.org/pep-0765/">PEP 765: Disallow return/break/continue that exit a finally block</a></li>
+      <li><a href="https://peps.python.org/pep-0654/">PEP 654: Exception groups and except*</a></li>
+      <li><a href="https://docs.python.org/3.14/library/warnings.html">warnings: warning control</a></li>
+      <li>Next: <a href="m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

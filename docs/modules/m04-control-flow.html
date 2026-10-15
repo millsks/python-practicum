@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M04 · Control Flow · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m04">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 04</p>
+    <h1>Control Flow</h1>
+    <p class="lede">So far your programs have run straight from top to bottom. Real programs make decisions and repeat
+      work: "if the password is wrong, ask again", "for every line in the file, count the words". Control flow is how you
+      tell Python which statements to run, when, and how many times. With it, you can write genuinely useful programs.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m03-strings.html">M03</a></span></div>
+    <ul class="objectives">
+      <li>Use Boolean logic, truthiness, and short-circuit evaluation correctly</li>
+      <li>Make decisions with <code>if</code>/<code>elif</code>/<code>else</code> and conditional expressions</li>
+      <li>Repeat work with <code>while</code> and <code>for</code> loops over ranges, strings, and lists</li>
+      <li>Control loops with <code>break</code>, <code>continue</code>, and the loop <code>else</code> clause</li>
+      <li>Use the walrus operator <code>:=</code> where it makes code clearer</li>
+      <li>Write <code>match</code> statements with literal, capture, sequence, mapping, class, OR, and guarded patterns</li>
+      <li>Plan an algorithm with a flowchart before writing code</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="booleans-truthiness">
+    <h2>Boolean logic and truthiness</h2>
+    <p>Every decision a program makes comes down to a <strong>condition</strong>: an expression that is either true or
+      false. You met the Boolean values <code>True</code> and <code>False</code> and the comparison operators
+      (<code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>)
+      in <a href="m02-values-types.html">M02</a>. The logical operators combine conditions:</p>
+    <table>
+      <thead><tr><th><code>a</code></th><th><code>b</code></th><th><code>a and b</code></th><th><code>a or b</code></th><th><code>not a</code></th></tr></thead>
+      <tbody>
+        <tr><td>True</td><td>True</td><td>True</td><td>True</td><td>False</td></tr>
+        <tr><td>True</td><td>False</td><td>False</td><td>True</td><td>False</td></tr>
+        <tr><td>False</td><td>True</td><td>False</td><td>True</td><td>True</td></tr>
+        <tr><td>False</td><td>False</td><td>False</td><td>False</td><td>True</td></tr>
+      </tbody>
+    </table>
+    <h3>Truthiness</h3>
+    <p>Python lets you use <em>any</em> value as a condition. Each value is either <strong>truthy</strong> (treated as
+      true) or <strong>falsy</strong> (treated as false). The falsy values are a short list worth memorizing:</p>
+    <ul>
+      <li><code>False</code> and <code>None</code></li>
+      <li>Zero of any numeric type: <code>0</code>, <code>0.0</code>, <code>0j</code></li>
+      <li>Empty collections: <code>""</code>, <code>[]</code>, <code>()</code>, <code>{}</code>, <code>set()</code>, <code>range(0)</code></li>
+    </ul>
+    <p>Everything else is truthy, including <code>"0"</code>, <code>"False"</code>, <code>[0]</code>, and
+      <code>-1</code>. So the idiomatic way to check "is this list non-empty?" is simply <code>if items:</code>.</p>
+    <div class="runnable" data-title="Truthy or falsy?">
+<textarea>
+for value in [0, 1, -1, 0.0, "", "0", " ", [], [0], None, "False"]:
+    print(f"{value!r:>8} -> {bool(value)}")
+</textarea>
+    </div>
+    <h3>Short-circuit evaluation</h3>
+    <p><code>and</code> and <code>or</code> are lazy: they stop as soon as the answer is known. This is called
+      <strong>short-circuiting</strong>. <code>a and b</code> does not even look at <code>b</code> if <code>a</code> is
+      falsy; <code>a or b</code> skips <code>b</code> if <code>a</code> is truthy. They also return one of their
+      <em>operands</em>, not necessarily <code>True</code> or <code>False</code>:</p>
+    <ul>
+      <li><code>a or b</code> returns <code>a</code> if it is truthy, otherwise <code>b</code>. Useful for defaults:
+        <code>name = user_input or "Anonymous"</code>.</li>
+      <li><code>a and b</code> returns <code>a</code> if it is falsy, otherwise <code>b</code>. Useful as a guard:
+        <code>count &gt; 0 and total / count &gt; 10</code> never divides by zero.</li>
+    </ul>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print("" or "default")
+print("Ada" or "default")
+print(0 and 1 / 0)
+print(3 and "yes")
+count = 0
+print(count > 0 and 10 / count > 1)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Precedence: <code>not</code> binds tighter than <code>and</code>, which binds tighter
+      than <code>or</code>. <code>a or b and c</code> means <code>a or (b and c)</code>. Add parentheses whenever you mix
+      them.</p></aside>
+    <p><strong>Remember:</strong> falsy means <code>False</code>, <code>None</code>, zero, or empty; <code>and</code>/<code>or</code>
+      short-circuit and return an operand.</p>
+  </section>
+
+  <section class="lesson-section" id="if-statements">
+    <h2>Decisions: <code>if</code>, <code>elif</code>, <code>else</code></h2>
+    <p>An <code>if</code> statement runs its block only when its condition is truthy. <code>elif</code> ("else if")
+      adds more conditions, checked in order, and <code>else</code> catches everything that did not match. Python runs
+      <strong>the first</strong> matching branch and skips the rest.</p>
+    <pre><code class="language-python">temperature = 18
+if temperature &gt;= 30:
+    advice = "Shorts and sunscreen."
+elif temperature &gt;= 15:
+    advice = "A light jacket."
+elif temperature &gt;= 0:
+    advice = "A warm coat."
+else:
+    advice = "Stay inside!"
+print(advice)</code></pre>
+    <p>Here is that decision as a <strong>flowchart</strong>, a diagram of the paths a program can take. Diamonds are
+      decisions, rectangles are actions.</p>
+    <pre class="mermaid">
+flowchart TD
+  S([start]) --> A{"temperature >= 30?"}
+  A -- yes --> R1["Shorts and sunscreen"]
+  A -- no --> B{"temperature >= 15?"}
+  B -- yes --> R2["A light jacket"]
+  B -- no --> C{"temperature >= 0?"}
+  C -- yes --> R3["A warm coat"]
+  C -- no --> R4["Stay inside!"]
+  R1 --> E([print advice])
+  R2 --> E
+  R3 --> E
+  R4 --> E
+    </pre>
+    <div class="runnable" data-title="Try different temperatures" data-stdin="18">
+<textarea>
+temperature = int(input("Temperature in C? "))
+if temperature >= 30:
+    advice = "Shorts and sunscreen."
+elif temperature >= 15:
+    advice = "A light jacket."
+elif temperature >= 0:
+    advice = "A warm coat."
+else:
+    advice = "Stay inside!"
+print(advice)
+</textarea>
+    </div>
+    <aside class="callout think"><p>Why does the order of the <code>elif</code> branches matter? What would happen with
+      a temperature of 35 if the first test were <code>temperature &gt;= 0</code>?</p></aside>
+    <h3>The conditional expression</h3>
+    <p>When you just need to choose between two values, the <strong>conditional expression</strong> (sometimes called
+      the ternary operator) does it in one line: <code>value_if_true if condition else value_if_false</code>.</p>
+    <div class="runnable" data-title="One-line choices">
+<textarea>
+n = 7
+parity = "even" if n % 2 == 0 else "odd"
+print(n, "is", parity)
+items = 1
+print(f"{items} item{'s' if items != 1 else ''}")
+</textarea>
+    </div>
+    <aside class="callout danger"><p>A classic beginner bug: <code>if answer == "yes" or "y":</code> is always true!
+      Python reads it as <code>(answer == "yes") or ("y")</code>, and <code>"y"</code> is a truthy string. Write
+      <code>if answer == "yes" or answer == "y":</code> or, better, <code>if answer in ("yes", "y"):</code>.</p></aside>
+    <aside class="callout pro"><p>Prefer simple, flat conditions. Instead of nesting <code>if</code> inside
+      <code>if</code>, combine with <code>and</code>, or handle the special cases first and keep the main path
+      unindented. Readability counts.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="while-loops">
+    <h2>Repeating with <code>while</code></h2>
+    <p>A <strong>loop</strong> repeats a block of code. Each repetition is called an <strong>iteration</strong>. A
+      <code>while</code> loop repeats <em>as long as</em> its condition stays truthy; it checks the condition before every
+      iteration.</p>
+    <div class="tracer" data-title="A countdown, step by step">
+<textarea>
+count = 3
+while count > 0:
+    print(count)
+    count -= 1
+print("Liftoff!")
+</textarea>
+    </div>
+    <p>Step through and watch the condition being checked four times: three times it is true, the fourth time
+      (<code>count</code> is 0) it is false and the loop ends.</p>
+    <p><code>while</code> is the right choice when you do not know in advance how many iterations you need: "keep asking
+      until the input is valid", "keep halving until the number is small".</p>
+    <div class="runnable" data-title="Halving until small">
+<textarea>
+n = 1000
+steps = 0
+while n > 1:
+    n = n // 2
+    steps += 1
+print("Halved", steps, "times; n is now", n)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>If the condition never becomes false, you have an <strong>infinite loop</strong>.
+      Forgetting <code>count -= 1</code> above is the classic cause. In a terminal, press <kbd>Ctrl</kbd>+<kbd>C</kbd> to
+      stop a runaway program. Always ask: "what changes each iteration so that the loop eventually ends?"</p></aside>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+total = 0
+i = 1
+while i <= 4:
+    total += i
+    i += 1
+print(total, i)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="for-loops">
+    <h2>Iterating with <code>for</code> and <code>range</code></h2>
+    <p>A <code>for</code> loop takes each item of an <strong>iterable</strong> (anything you can loop over: a string, a
+      list, a range, a file…) in turn, binds it to a loop variable, and runs the block. You do not manage a counter, so
+      there is nothing to forget.</p>
+    <div class="runnable" data-title="Looping over strings and lists">
+<textarea>
+for letter in "Pixi":
+    print(letter)
+
+fruits = ["apple", "pear", "kiwi"]
+for fruit in fruits:
+    print(fruit.upper(), len(fruit))
+</textarea>
+    </div>
+    <h3><code>range</code></h3>
+    <p><code>range</code> produces a sequence of integers without building a list in memory:</p>
+    <ul>
+      <li><code>range(5)</code>: 0, 1, 2, 3, 4 (five numbers, starting at 0, stopping <em>before</em> 5)</li>
+      <li><code>range(2, 6)</code>: 2, 3, 4, 5</li>
+      <li><code>range(10, 0, -3)</code>: 10, 7, 4, 1 (a step, which can be negative)</li>
+    </ul>
+    <p>Just like slices, the stop value is excluded. That makes <code>range(len(s))</code> exactly the valid indexes of
+      <code>s</code>.</p>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print(list(range(4)))
+print(list(range(1, 10, 3)))
+for i in range(3, 0, -1):
+    print(i, end=" ")
+</textarea>
+    </div>
+    <h3><code>enumerate</code>: index and item together</h3>
+    <p>When you need the position as well as the item, use <code>enumerate</code> instead of indexing by hand:</p>
+    <div class="tabs">
+      <div class="tab" data-label="Clunky"><pre><code class="language-python">for i in range(len(fruits)):
+    print(i, fruits[i])</code></pre></div>
+      <div class="tab" data-label="Pythonic"><pre><code class="language-python">for i, fruit in enumerate(fruits):
+    print(i, fruit)</code></pre></div>
+    </div>
+    <h3>The accumulator pattern</h3>
+    <p>Many loops build up a result: start with an empty value, then update it each iteration. This is called the
+      <strong>accumulator pattern</strong>.</p>
+    <div class="tracer" data-title="Accumulating a total and counting vowels">
+<textarea>
+prices = [4.5, 3.25, 5.0]
+total = 0
+for price in prices:
+    total += price
+vowels = 0
+for ch in "banana":
+    if ch in "aeiou":
+        vowels += 1
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Use <code>for</code> when you are walking through a collection or a known number of
+      steps; use <code>while</code> when you repeat until something happens. Most loops in real Python code are
+      <code>for</code> loops.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="break-continue-else">
+    <h2><code>break</code>, <code>continue</code>, and loop <code>else</code></h2>
+    <ul>
+      <li><code>break</code> leaves the loop immediately.</li>
+      <li><code>continue</code> skips the rest of this iteration and moves on to the next one.</li>
+      <li>A loop may have an <code>else</code> block, which runs only if the loop finished <em>without</em> hitting
+        <code>break</code>. Think of it as "no break". It is perfect for searches: "if I never found it, then…".</li>
+    </ul>
+    <div class="runnable" data-title="Search with break and else">
+<textarea>
+numbers = [4, 9, 15, 22, 35]
+for n in numbers:
+    if n % 7 == 0:
+        print("First multiple of 7:", n)
+        break
+else:
+    print("No multiple of 7 found")
+
+for n in numbers:
+    if n % 2 == 0:
+        continue          # skip even numbers
+    print("odd:", n)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+for word in ["alpha", "beta", "gamma"]:
+    if word.startswith("z"):
+        print("found", word)
+        break
+else:
+    print("no z-words")
+</textarea>
+    </div>
+    <h3>Nested loops</h3>
+    <p>A loop inside a loop runs the inner loop completely for <em>each</em> iteration of the outer loop. With 3 outer
+      and 4 inner iterations, the inner body runs 12 times. <code>break</code> only leaves the innermost loop.</p>
+    <div class="runnable" data-title="A multiplication table">
+<textarea>
+for row in range(1, 6):
+    for col in range(1, 6):
+        print(f"{row * col:4}", end="")
+    print()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Primes with nested loops and loop else">
+<textarea>
+for n in range(2, 30):
+    for divisor in range(2, n):
+        if n % divisor == 0:
+            break             # n has a divisor: not prime
+    else:
+        print(n, end=" ")    # the inner loop never broke: prime
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="walrus">
+    <h2>The walrus operator <code>:=</code></h2>
+    <p>The <strong>assignment expression</strong> <code>name := value</code>, nicknamed the walrus operator because
+      <code>:=</code> looks like a walrus's eyes and tusks, assigns <em>and</em> produces the value, so you can use it
+      inside a condition. Its most common use is a loop that reads until a stop signal:</p>
+    <div class="tabs">
+      <div class="tab" data-label="Without walrus"><pre><code class="language-python">line = input("&gt; ")
+while line != "quit":
+    print("You said", line)
+    line = input("&gt; ")     # duplicated</code></pre></div>
+      <div class="tab" data-label="With walrus"><pre><code class="language-python">while (line := input("&gt; ")) != "quit":
+    print("You said", line)</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Reading until 'quit'" data-stdin="hello\nPixi\nquit">
+<textarea>
+while (line := input("> ")) != "quit":
+    print("You said", line.upper())
+print("Bye!")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Compute once, use twice">
+<textarea>
+password = "hunter2"
+if (n := len(password)) < 12:
+    print(f"Too short: {n} characters, need 12")
+</textarea>
+    </div>
+    <aside class="callout note"><p>The parentheses matter: <code>(line := input()) != "quit"</code> assigns the input, then
+      compares. Without them, <code>line := input() != "quit"</code> would assign the Boolean result of the comparison.
+      Use the walrus only when it removes repetition; plain assignment is clearer everywhere else.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="pattern-matching">
+    <h2>Structural pattern matching: <code>match</code>/<code>case</code></h2>
+    <p>A <code>match</code> statement compares a value (the <strong>subject</strong>) against a series of
+      <strong>patterns</strong>, top to bottom, and runs the block of the first pattern that fits. It is far more than a
+      "switch" statement: patterns can check the <em>shape</em> of data and pull pieces out of it into names. This is
+      called <strong>destructuring</strong>.</p>
+    <h3>Literal, OR, and wildcard patterns</h3>
+    <div class="runnable" data-title="HTTP status codes">
+<textarea>
+for status in [200, 404, 418, 500, 503]:
+    match status:
+        case 200:
+            text = "OK"
+        case 404:
+            text = "Not found"
+        case 500 | 502 | 503:            # OR pattern: any of these
+            text = "Server error"
+        case _:                          # wildcard: matches anything
+            text = "Something else"
+    print(status, text)
+</textarea>
+    </div>
+    <h3>Capture and sequence patterns</h3>
+    <p>A bare name in a pattern is a <strong>capture pattern</strong>: it matches anything and binds it to that name. A
+      list-like pattern <code>[a, b]</code> matches a sequence of exactly that length, and <code>*rest</code> captures
+      any remaining items.</p>
+    <div class="runnable" data-title="A tiny command parser">
+<textarea>
+for command in ["go north", "take lamp key", "look", "quit", "", "dance wildly"]:
+    match command.split():
+        case []:
+            reply = "Say something!"
+        case ["go", direction]:
+            reply = f"You walk {direction}."
+        case ["take", *items]:
+            reply = f"You pick up: {', '.join(items)}."
+        case ["look"]:
+            reply = "You see a dark room."
+        case ["quit" | "exit"]:
+            reply = "Goodbye."
+        case [verb, *_]:
+            reply = f"I don't know how to {verb!r}."
+    print(f"{command!r:16} -> {reply}")
+</textarea>
+    </div>
+    <h3>Guards</h3>
+    <p>A <strong>guard</strong> is an <code>if</code> after a pattern; the case only matches if the guard is also true.</p>
+    <pre><code class="language-python">match point:
+    case (x, y) if x == y:
+        print("on the diagonal")
+    case (x, y):
+        print("somewhere else")</code></pre>
+    <h3>Mapping patterns</h3>
+    <p>A dictionary-like pattern <code>{"key": pattern}</code> matches a <code>dict</code> that has those keys (extra
+      keys are allowed). Dictionaries are covered fully in <a href="m06-collections.html">M06</a>; for now, read
+      <code>{"type": "click", "x": 3}</code> as "a record with fields". This is exactly how you handle JSON data from the
+      web.</p>
+    <div class="runnable" data-title="Handling events">
+<textarea>
+events = [
+    {"type": "click", "x": 10, "y": 20},
+    {"type": "key", "key": "q"},
+    {"type": "key", "key": "a"},
+    {"type": "scroll", "amount": -3},
+    {"oops": True},
+]
+for event in events:
+    match event:
+        case {"type": "click", "x": x, "y": y}:
+            print(f"click at ({x}, {y})")
+        case {"type": "key", "key": "q" | "Q"}:
+            print("quit requested")
+        case {"type": "key", "key": key}:
+            print(f"key {key!r}")
+        case {"type": "scroll", "amount": amount} if amount < 0:
+            print(f"scroll up {-amount}")
+        case _:
+            print("unrecognized event:", event)
+</textarea>
+    </div>
+    <h3>Class patterns</h3>
+    <p>A class pattern such as <code>int()</code> or <code>str(s)</code> checks the <em>type</em> of the subject.
+      <code>Point(x=0, y=y)</code> checks the type and its attributes. (You will write your own classes in
+      <a href="m10-classes.html">M10</a>; here the <code>@dataclass</code> line creates a simple <code>Point</code> type
+      for us.)</p>
+    <div class="runnable" data-title="Matching on type and shape">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+for thing in [42, 3.5, "hi", Point(0, 0), Point(0, 7), Point(2, 2), Point(1, 5), [1, 2]]:
+    match thing:
+        case bool():
+            kind = "a bool"
+        case int() | float():
+            kind = "a number"
+        case str(text):
+            kind = f"text of length {len(text)}"
+        case Point(x=0, y=0):
+            kind = "the origin"
+        case Point(x=0, y=y):
+            kind = f"on the y-axis at {y}"
+        case Point(x=x, y=y) if x == y:
+            kind = "on the diagonal"
+        case Point():
+            kind = "some other point"
+        case _:
+            kind = "something else"
+    print(f"{thing!r:>18}: {kind}")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>A bare name always captures, so <code>case red:</code> does <em>not</em> compare with a
+      variable called <code>red</code>; it matches everything and rebinds <code>red</code>. To compare against a named
+      constant, use a dotted name such as <code>case Color.RED:</code>. Also put specific cases before general ones:
+      cases are tried in order.</p></aside>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+match [1, 2, 3]:
+    case [first]:
+        print("one item")
+    case [first, *rest]:
+        print(first, rest)
+    case _:
+        print("other")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="algorithmic-thinking">
+    <h2>Algorithmic thinking with flowcharts</h2>
+    <p>An <strong>algorithm</strong> is a step-by-step procedure that solves a problem. Before writing a loop-heavy
+      program, professionals sketch the algorithm: inputs, decisions, repetitions, and when to stop. A flowchart is one
+      good way; plain-language steps (<strong>pseudocode</strong>) are another.</p>
+    <p>Here is the algorithm for this module's guessing game:</p>
+    <pre class="mermaid">
+flowchart TD
+  S([start]) --> P["pick secret number 1..100<br/>attempts = 0"]
+  P --> G["read a guess"]
+  G --> V{"is it a valid number?"}
+  V -- no --> M["print 'please enter a number'"] --> G
+  V -- yes --> I["attempts += 1"]
+  I --> C{"guess vs secret"}
+  C -- "lower" --> L["print 'too low'"] --> G
+  C -- "higher" --> H["print 'too high'"] --> G
+  C -- "equal" --> W["print 'correct in N attempts'"] --> E([end])
+    </pre>
+    <p>Every arrow back to "read a guess" is a loop; every diamond is an <code>if</code>. Reading off the chart: we need a
+      <code>while</code> loop (we do not know how many guesses), a validity check, and an
+      <code>if</code>/<code>elif</code>/<code>else</code> comparison. Translating it:</p>
+    <div class="runnable" data-title="The guessing game core (secret fixed for testing)" data-stdin="50\nabc\n25\n37\n31">
+<textarea>
+secret = 31
+attempts = 0
+while True:
+    text = input("Your guess: ")
+    if not text.isdigit():
+        print("Please enter a whole number.")
+        continue
+    guess = int(text)
+    attempts += 1
+    if guess < secret:
+        print("Too low.")
+    elif guess > secret:
+        print("Too high.")
+    else:
+        print(f"Correct! You needed {attempts} attempts.")
+        break
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>while True:</code> with a <code>break</code> inside is a common, readable pattern
+      when the exit decision happens in the middle of the loop body.</p></aside>
+    <aside class="callout think"><p>With the strategy "always guess the middle of the remaining range", how many guesses do
+      you need at most for 1..100? (This strategy is <em>binary search</em>, a famous algorithm you will meet again in
+      Part 3.)</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Some exercises below ask you to complete a small <strong>function</strong>: a named block that receives inputs
+      (<em>parameters</em>) and sends back a result with <code>return</code>. Functions let the tests try many inputs.
+      You will learn them properly in <a href="m05-functions.html">M05</a>; for now, write your code in the indented
+      body and <code>return</code> the answer.</p>
+
+    <div class="exercise" data-id="m04-e1" data-title="FizzBuzz">
+      <div class="exercise-prompt"><p>Print the numbers 1 to 15, one per line, but print <code>Fizz</code> instead of
+        multiples of 3, <code>Buzz</code> instead of multiples of 5, and <code>FizzBuzz</code> for multiples of both.</p></div>
+<textarea class="starter">
+for n in range(1, 16):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+EXPECTED = ["1", "2", "Fizz", "4", "Buzz", "Fizz", "7", "8", "Fizz", "Buzz", "11", "Fizz", "13", "14", "FizzBuzz"]
+
+def test_line_count():
+    lines = program_output.strip().splitlines()
+    assert len(lines) == 15, f"print exactly 15 lines, got {len(lines)}"
+
+def test_values():
+    lines = [line.strip() for line in program_output.strip().splitlines()]
+    for i, (got, want) in enumerate(zip(lines, EXPECTED), start=1):
+        assert got == want, f"line {i}: expected {want!r}, got {got!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check the "both" case first (<code>n % 15 == 0</code>), otherwise a
+        multiple of 15 would be caught by the "Fizz" branch.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">for n in range(1, 16):
+    if n % 15 == 0:
+        print("FizzBuzz")
+    elif n % 3 == 0:
+        print("Fizz")
+    elif n % 5 == 0:
+        print("Buzz")
+    else:
+        print(n)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m04-e2" data-title="Letter grades">
+      <div class="exercise-prompt"><p>Complete <code>letter_grade(score)</code> so it returns <code>"A"</code> for 90 and
+        above, <code>"B"</code> for 80–89, <code>"C"</code> for 70–79, <code>"D"</code> for 60–69, and <code>"F"</code>
+        below 60. Scores outside 0–100 return <code>"invalid"</code>.</p></div>
+<textarea class="starter">
+def letter_grade(score):
+    if score >= 90:
+        return "A"
+    # add the other branches
+    return "F"
+
+print(letter_grade(85))
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_boundaries():
+    cases = {100: "A", 90: "A", 89: "B", 80: "B", 79: "C", 70: "C", 69: "D", 60: "D", 59: "F", 0: "F"}
+    for score, want in cases.items():
+        got = letter_grade(score)
+        assert got == want, f"letter_grade({score}) should be {want!r}, got {got!r}"
+
+def test_invalid():
+    for score in (-1, 101, 250):
+        assert letter_grade(score) == "invalid", f"letter_grade({score}) should be 'invalid'"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check for invalid scores first:
+        <code>if not 0 &lt;= score &lt;= 100: return "invalid"</code>. Then the <code>elif</code> chain from high to low.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def letter_grade(score):
+    if not 0 &lt;= score &lt;= 100:
+        return "invalid"
+    if score &gt;= 90:
+        return "A"
+    elif score &gt;= 80:
+        return "B"
+    elif score &gt;= 70:
+        return "C"
+    elif score &gt;= 60:
+        return "D"
+    return "F"
+
+print(letter_grade(85))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m04-e3" data-title="Sum of digits with while">
+      <div class="exercise-prompt"><p>Complete <code>digit_sum(n)</code> to return the sum of the decimal digits of a
+        non-negative integer, using a <code>while</code> loop with <code>%</code> and <code>//</code> (no strings).
+        <code>digit_sum(9875)</code> is <code>29</code>; <code>digit_sum(0)</code> is <code>0</code>.</p></div>
+<textarea class="starter">
+def digit_sum(n):
+    total = 0
+    while ...:
+        ...
+    return total
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    for n, want in [(9875, 29), (0, 0), (7, 7), (1001, 2), (99999, 45)]:
+        got = digit_sum(n)
+        assert got == want, f"digit_sum({n}) should be {want}, got {got}"
+
+def test_big():
+    assert digit_sum(2 ** 100) == 115, "digit_sum(2 ** 100) should be 115"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>n % 10</code> is the last digit and <code>n // 10</code> removes
+        it. Loop while <code>n &gt; 0</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def digit_sum(n):
+    total = 0
+    while n &gt; 0:
+        total += n % 10
+        n //= 10
+    return total</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m04-e4" data-title="First long word">
+      <div class="exercise-prompt"><p>Complete <code>first_long_word(text, length)</code>: return the first word in
+        <code>text</code> with at least <code>length</code> characters, or <code>None</code> if there is none. Use a
+        <code>for</code> loop with <code>break</code> or <code>return</code>. Bonus: try writing it with a loop
+        <code>else</code>.</p></div>
+<textarea class="starter">
+def first_long_word(text, length):
+    for word in text.split():
+        ...
+    return None
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_found():
+    assert first_long_word("the quick brown fox jumps", 5) == "quick", "'quick' is the first word with 5+ letters"
+
+def test_first_not_longest():
+    assert first_long_word("a bb cccc ddddd", 3) == "cccc", "return the FIRST match, not the longest"
+
+def test_none():
+    assert first_long_word("tiny words only", 10) is None, "return None when nothing is long enough"
+
+def test_empty():
+    assert first_long_word("", 1) is None, "an empty text has no words"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>if len(word) &gt;= length: return word</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def first_long_word(text, length):
+    for word in text.split():
+        if len(word) &gt;= length:
+            result = word
+            break
+    else:
+        result = None
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m04-e5" data-title="A command interpreter with match">
+      <div class="exercise-prompt"><p>Complete <code>respond(command)</code> using a <code>match</code> on
+        <code>command.split()</code>:</p>
+        <ul>
+          <li><code>"go north"</code> → <code>"Going north"</code> (any single direction word)</li>
+          <li><code>"take lamp key"</code> → <code>"Taking lamp, key"</code> (one or more items, joined with <code>", "</code>)</li>
+          <li><code>"quit"</code> or <code>"exit"</code> → <code>"Bye"</code></li>
+          <li><code>""</code> (no words) → <code>"Say something"</code></li>
+          <li><code>"add 2 3"</code> → <code>"5"</code>: two whole numbers added (use a guard with <code>isdigit()</code>)</li>
+          <li>anything else → <code>"Unknown command"</code></li>
+        </ul></div>
+<textarea class="starter">
+def respond(command):
+    match command.split():
+        case ["go", direction]:
+            return f"Going {direction}"
+        case _:
+            return "Unknown command"
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_go():
+    assert respond("go north") == "Going north", f"got {respond('go north')!r}"
+    assert respond("go") == "Unknown command", "'go' without a direction is unknown"
+
+def test_take():
+    assert respond("take lamp key") == "Taking lamp, key", f"got {respond('take lamp key')!r}"
+    assert respond("take sword") == "Taking sword", f"got {respond('take sword')!r}"
+    assert respond("take") == "Unknown command", "'take' needs at least one item"
+
+def test_quit():
+    assert respond("quit") == "Bye" and respond("exit") == "Bye", "quit and exit return 'Bye'"
+
+def test_empty():
+    assert respond("") == "Say something", "an empty command returns 'Say something'"
+    assert respond("   ") == "Say something", "whitespace only is also empty"
+
+def test_add():
+    assert respond("add 2 3") == "5", f"got {respond('add 2 3')!r}"
+    assert respond("add 10 32") == "42", "add works for any whole numbers"
+    assert respond("add two 3") == "Unknown command", "non-numbers fall through to unknown"
+
+def test_unknown():
+    assert respond("dance") == "Unknown command", "anything else is unknown"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use <code>case ["take", first, *rest]:</code> to require at least one
+        item, an OR pattern <code>case ["quit" | "exit"]:</code>, and
+        <code>case ["add", a, b] if a.isdigit() and b.isdigit():</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def respond(command):
+    match command.split():
+        case []:
+            return "Say something"
+        case ["go", direction]:
+            return f"Going {direction}"
+        case ["take", first, *rest]:
+            return "Taking " + ", ".join([first, *rest])
+        case ["quit" | "exit"]:
+            return "Bye"
+        case ["add", a, b] if a.isdigit() and b.isdigit():
+            return str(int(a) + int(b))
+        case _:
+            return "Unknown command"</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a guessing game and a menu calculator</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Guessing game + text-menu calculator</span></div>
+      <div class="widget-body">
+        <p>Two small interactive programs in your <code>practice</code> workspace. Run them with
+          <code>pixi run python guess.py</code> and <code>pixi run python calc.py</code>, and add a task for each.</p>
+        <h4>Part A: <code>guess.py</code></h4>
+        <ul>
+          <li>Pick a secret with <code>import random</code> and <code>secret = random.randint(1, 100)</code>.</li>
+          <li>Loop until the player guesses it, replying "Too low" or "Too high"; ignore non-numeric input with a
+            friendly message (<code>str.isdigit()</code>) without counting it as an attempt.</li>
+          <li>Limit the player to 7 attempts; use a loop <code>else</code> (or a flag) to reveal the number if they run out.</li>
+          <li>At the end, ask "Play again? (y/n)" and start over on <code>y</code>.</li>
+        </ul>
+<pre data-label="Example session"><code>I'm thinking of a number between 1 and 100. You have 7 attempts.
+Guess 1: 50
+Too high.
+Guess 2: 25
+Too low.
+Guess 3: forty
+Please enter a whole number.
+Guess 3: 37
+Correct! You got it in 3 attempts.
+Play again? (y/n) n
+Thanks for playing!</code></pre>
+        <h4>Part B: <code>calc.py</code></h4>
+        <ul>
+          <li>Show a menu (<code>1) add  2) subtract  3) multiply  4) divide  5) power  q) quit</code>) in a loop.</li>
+          <li>Use <code>match</code> on the choice, with an OR pattern for <code>"q" | "quit"</code>.</li>
+          <li>Read two numbers with <code>float(input(...))</code> and print the result with an f-string.</li>
+          <li>Refuse division by zero with a message instead of crashing.</li>
+          <li>Use the walrus operator for the menu loop: <code>while (choice := input("Choice: ").strip()) not in ("q", "quit"):</code></li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m04-mini">
+          <li>You drew (on paper or in Mermaid) a flowchart for the guessing game before coding it</li>
+          <li>The game gives correct too-low/too-high hints and counts only valid attempts</li>
+          <li>Running out of attempts reveals the secret; "Play again" works</li>
+          <li>The calculator menu repeats until <code>q</code> or <code>quit</code></li>
+          <li>The calculator dispatches with <code>match</code>/<code>case</code>, including an OR pattern and a <code>case _</code> for invalid choices</li>
+          <li>Dividing by zero prints a message and the program keeps running</li>
+          <li>Both scripts run via Pixi tasks and are formatted with <code>pixi run ruff format</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Let the player choose a difficulty that changes the range and the number of attempts.</li>
+          <li>Make the computer guess <em>your</em> number using binary search, and count how many guesses it needs.</li>
+          <li>Let the calculator accept a single line like <code>3 * 4</code> and parse it with <code>match line.split():</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m04-quiz">
+<script type="application/json">
+{"title": "Control flow quiz", "passScore": 0.7, "questions": [
+  {"type": "multi", "prompt": "Which values are falsy?", "options": ["<code>0</code>", "<code>\"0\"</code>", "<code>[]</code>", "<code>None</code>", "<code>\" \"</code>"], "answer": [0, 2, 3], "explanation": "<p>Zero, empty collections, <code>None</code>, and <code>False</code> are falsy. <code>\"0\"</code> and <code>\" \"</code> are non-empty strings, so they are truthy.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"\" or \"guest\")", "answer": "guest", "explanation": "<p><code>or</code> returns its first truthy operand. The empty string is falsy, so the result is <code>\"guest\"</code>.</p>"},
+  {"type": "single", "prompt": "Why does <code>count &gt; 0 and total / count &gt; 1</code> never raise ZeroDivisionError?", "options": ["Python ignores division by zero", "<code>and</code> short-circuits: if <code>count &gt; 0</code> is False, the division is never evaluated", "Division always happens first", "It does raise it"], "answer": 1, "explanation": "<p>Short-circuit evaluation stops at the first falsy operand of <code>and</code>, so the right side acts as if guarded.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "x = 15\nif x > 10:\n    print(\"big\")\nelif x > 5:\n    print(\"medium\")\nelse:\n    print(\"small\")", "answer": "big", "explanation": "<p>Only the first matching branch runs. <code>x &gt; 5</code> is also true, but it is never checked.</p>"},
+  {"type": "single", "prompt": "What is wrong with <code>if answer == \"y\" or \"yes\":</code>?", "options": ["Nothing", "It is always true, because <code>\"yes\"</code> on its own is truthy", "It is a SyntaxError", "It only matches \"yes\""], "answer": 1, "explanation": "<p>It parses as <code>(answer == \"y\") or \"yes\"</code>. Write <code>answer in (\"y\", \"yes\")</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(list(range(2, 11, 3)))", "answer": "[2, 5, 8]", "explanation": "<p>Start at 2, step 3, stop before 11.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "for i in range(5):\n    if i == 1:\n        continue\n    if i == 3:\n        break\n    print(i)", "answer": "0\n2", "explanation": "<p><code>continue</code> skips printing 1; <code>break</code> ends the loop at 3 before printing it.</p>"},
+  {"type": "single", "prompt": "When does a loop's <code>else</code> block run?", "options": ["When the loop body raises an error", "When the loop finishes without executing <code>break</code>", "Only when the loop runs zero times", "Every time, after the loop"], "answer": 1, "explanation": "<p>Read it as \"no break\". It runs after normal completion (including zero iterations) but not after a <code>break</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "n = 0\nwhile n < 10:\n    n += 3\nprint(n)", "answer": "12", "explanation": "<p>n goes 3, 6, 9, 12. After 12 the condition <code>12 &lt; 10</code> is false.</p>"},
+  {"type": "single", "prompt": "How many times does <code>print</code> run?", "code": "for a in range(3):\n    for b in range(4):\n        print(a, b)", "options": ["3", "4", "7", "12"], "answer": 3, "explanation": "<p>The inner loop runs completely (4 times) for each of the 3 outer iterations: 3 × 4 = 12.</p>"},
+  {"type": "text", "prompt": "What is the nickname of the <code>:=</code> operator?", "answer": ["walrus", "the walrus", "walrus operator", "the walrus operator"], "explanation": "<p>The assignment expression <code>:=</code> assigns and returns a value, so it can be used inside conditions.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "match [\"go\", \"east\"]:\n    case [\"go\", direction]:\n        print(direction)\n    case _:\n        print(\"?\")", "answer": "east", "explanation": "<p>The sequence pattern matches a two-item list starting with \"go\" and captures the second item as <code>direction</code>.</p>"},
+  {"type": "single", "prompt": "In a <code>match</code>, what does <code>case _:</code> do?", "options": ["Matches only None", "Matches anything without binding a name", "Matches an empty list", "Is a syntax error"], "answer": 1, "explanation": "<p><code>_</code> is the wildcard pattern. Put it last as a catch-all.</p>"},
+  {"type": "multi", "prompt": "Which statements about pattern matching are true?", "options": ["<code>case 1 | 2 | 3:</code> is an OR pattern", "<code>case [x, *rest]:</code> matches any sequence with at least one item", "<code>case red:</code> compares the subject with a variable named <code>red</code>", "A guard like <code>case (x, y) if x == y:</code> adds an extra condition"], "answer": [0, 1, 3], "explanation": "<p>A bare name like <code>red</code> is a capture pattern: it matches anything and binds the name. Use a dotted constant such as <code>Color.RED</code> to compare.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Falsy values: <code>False</code>, <code>None</code>, zero, and empty collections; everything else is truthy.</li>
+      <li><code>and</code>/<code>or</code> short-circuit and return one of their operands.</li>
+      <li><code>if</code>/<code>elif</code>/<code>else</code> runs the first matching branch; <code>a if cond else b</code> chooses a value.</li>
+      <li><code>while</code> repeats while a condition holds; make sure something changes so it ends.</li>
+      <li><code>for</code> walks any iterable; <code>range(start, stop, step)</code> excludes stop; <code>enumerate</code> gives indexes.</li>
+      <li><code>break</code> exits, <code>continue</code> skips ahead, loop <code>else</code> means "no break".</li>
+      <li><code>:=</code> assigns inside an expression; use it to remove duplication.</li>
+      <li><code>match</code> destructures data with literal, capture, wildcard, sequence, mapping, class, OR, and guarded patterns.</li>
+      <li>Sketch the algorithm (flowchart or pseudocode) before coding anything with loops.</li>
+    </ul>
+    <div class="flashcards" data-title="Control flow">
+<script type="application/json">
+[{"front": "Falsy values", "back": "<code>False</code>, <code>None</code>, <code>0</code>, <code>0.0</code>, and empty collections such as <code>\"\"</code>, <code>[]</code>, <code>{}</code>."},
+ {"front": "Short-circuiting", "back": "<code>and</code> stops at the first falsy operand, <code>or</code> at the first truthy one; the deciding operand is returned."},
+ {"front": "Conditional expression", "back": "<code>x if condition else y</code>: choose between two values in one expression."},
+ {"front": "<code>while</code> vs <code>for</code>", "back": "<code>while</code>: repeat until a condition changes. <code>for</code>: walk each item of an iterable."},
+ {"front": "<code>range(2, 10, 3)</code>", "back": "2, 5, 8. Start included, stop excluded, step 3."},
+ {"front": "<code>break</code> / <code>continue</code>", "back": "Leave the loop now / skip to the next iteration."},
+ {"front": "Loop <code>else</code>", "back": "Runs when the loop ends without <code>break</code>. Perfect for \"not found\" after a search."},
+ {"front": "Walrus operator", "back": "<code>(name := value)</code> assigns and returns the value, e.g. <code>while (line := input()) != \"quit\":</code>."},
+ {"front": "Capture pattern", "back": "A bare name in a <code>case</code>: matches anything and binds it. <code>_</code> matches without binding."},
+ {"front": "Sequence pattern", "back": "<code>case [\"take\", first, *rest]:</code> matches by length and position, capturing the pieces."},
+ {"front": "Mapping and class patterns", "back": "<code>{\"type\": \"click\", \"x\": x}</code> matches dicts with those keys; <code>Point(x=0, y=y)</code> checks type and attributes."},
+ {"front": "Guard", "back": "<code>case pattern if condition:</code> matches only when the condition is also true."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/controlflow.html">More control flow tools</a> (official tutorial)</li>
+      <li><a href="https://peps.python.org/pep-0636/">PEP 636: Structural pattern matching tutorial</a></li>
+      <li><a href="https://docs.python.org/3.14/reference/compound_stmts.html#the-match-statement">The match statement</a> in the language reference</li>
+      <li><a href="https://peps.python.org/pep-0572/">PEP 572: Assignment expressions</a></li>
+      <li><a href="https://docs.python.org/3.14/library/stdtypes.html#truth-value-testing">Truth value testing</a></li>
+      <li>Next: <a href="m05-functions.html">M05 · Functions</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

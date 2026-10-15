@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M35 · Problem-Solving Patterns · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m35">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 35</p>
+    <h1>Problem-Solving Patterns</h1>
+    <p class="lede">Knowing fifty algorithms is not the same as solving a problem you have never seen. This module turns
+      Part 4 into a repeatable method: a sequence of steps that works on unfamiliar problems, a catalogue that maps the
+      signals in a problem statement to the technique that fits, and a practice system that makes the patterns stick.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites:
+      <a href="m30-searching.html">M30</a>, <a href="m31-graph-algorithms.html">M31</a>,
+      <a href="m32-dynamic-programming.html">M32</a>, <a href="m33-greedy-backtracking.html">M33</a></span></div>
+    <ul class="objectives">
+      <li>Apply a seven-step method: understand, examples, brute force, optimize, code, test, analyze</li>
+      <li>Map problem signals to techniques with a decision flowchart</li>
+      <li>Move from brute force to optimal on six classic problems and explain each improvement</li>
+      <li>Test edge cases systematically and use a brute-force oracle for randomized testing</li>
+      <li>Communicate complexity clearly, in interviews and code reviews</li>
+      <li>Build a sustainable practice habit with a problem journal, spaced repetition, and timed sessions</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="method">
+    <h2>A repeatable method</h2>
+    <p>Strong problem solvers are not faster thinkers; they waste less time. They follow roughly the same steps every
+      time, so they never start coding before they understand the problem, and never optimize before they have a
+      correct baseline.</p>
+    <ol>
+      <li><strong>Understand.</strong> Restate the problem in your own words. Pin down inputs (types, sizes, ranges,
+        sorted? duplicates? negatives?), the exact output, and what to do with invalid or empty input. Ask questions.</li>
+      <li><strong>Examples.</strong> Work two or three by hand, including a tiny one and a tricky one. Hand-solving is
+        where patterns appear: "I kept looking back for the last smaller value…" is a monotonic stack waiting to happen.</li>
+      <li><strong>Brute force.</strong> State the simplest correct algorithm and its complexity, even if it is
+        hopeless. It proves you understand the problem and becomes your test oracle.</li>
+      <li><strong>Optimize.</strong> Find the bottleneck in the brute force and ask which pattern removes it (the
+        catalogue below). Use the input size to target a complexity: n ≤ 20 allows O(2<sup>n</sup>); n ≤ 10<sup>3</sup>
+        allows O(n²); n ≤ 10<sup>5</sup>–10<sup>6</sup> needs O(n log n) or O(n).</li>
+      <li><strong>Code.</strong> Write clean code with good names. Small helpers beat clever one-liners.</li>
+      <li><strong>Test.</strong> Run your examples, then edge cases, then (when possible) random inputs against the
+        brute force.</li>
+      <li><strong>Analyze.</strong> State time and space complexity and justify them. Mention trade-offs.</li>
+    </ol>
+    <aside class="callout think"><p>Which step do you usually skip? Most learners jump from step 1 straight to step 5.
+      The cost shows up later as a solution to the wrong problem, or as an "optimized" algorithm with no baseline to
+      check it against.</p></aside>
+    <p>The size-to-complexity table is worth memorizing, because Python executes roughly 10<sup>7</sup> simple
+      operations per second:</p>
+    <table>
+      <thead><tr><th>n up to</th><th>Feasible complexity</th><th>Typical techniques</th></tr></thead>
+      <tbody>
+        <tr><td>10–12</td><td>O(n!)</td><td>permutations, backtracking</td></tr>
+        <tr><td>20–25</td><td>O(2<sup>n</sup>), O(2<sup>n</sup>·n)</td><td>subsets, bitmask DP</td></tr>
+        <tr><td>500</td><td>O(n³)</td><td>interval DP, Floyd-Warshall</td></tr>
+        <tr><td>5,000</td><td>O(n²)</td><td>2-D DP, all pairs</td></tr>
+        <tr><td>10<sup>6</sup></td><td>O(n log n)</td><td>sorting, heaps, binary search</td></tr>
+        <tr><td>10<sup>7</sup>+</td><td>O(n)</td><td>hashing, two pointers, sliding window, prefix sums</td></tr>
+      </tbody>
+    </table>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["log n", "n", "n log n", "n^2", "2^n"], "maxN": 30}'></div>
+  </section>
+
+  <section class="lesson-section" id="catalogue">
+    <h2>The pattern catalogue</h2>
+    <p>Most problems are variations on a dozen patterns. The skill is reading the <em>signals</em> in the statement.</p>
+    <table>
+      <thead><tr><th>Signal in the problem</th><th>Technique</th><th>Typical cost</th><th>Module</th></tr></thead>
+      <tbody>
+        <tr><td>"have I seen this before?", pairs summing to a target, counting frequencies</td><td>Hashing (dict/set/Counter)</td><td>O(n)</td><td><a href="m23-hash-tables.html">M23</a></td></tr>
+        <tr><td>sorted array, pairs/triples, palindromes, partitioning in place</td><td>Two pointers</td><td>O(n)</td><td><a href="m30-searching.html">M30</a></td></tr>
+        <tr><td>contiguous subarray/substring with a constraint ("longest", "at most k")</td><td>Sliding window</td><td>O(n)</td><td>M30</td></tr>
+        <tr><td>range sums asked many times</td><td>Prefix sums</td><td>O(n) + O(1)/query</td><td>M30</td></tr>
+        <tr><td>"minimum X such that feasible", monotone yes/no answer</td><td>Binary search on the answer</td><td>O(n log range)</td><td>M30</td></tr>
+        <tr><td>grids, mazes, "fewest steps", connected regions</td><td>BFS / DFS</td><td>O(V + E)</td><td><a href="m31-graph-algorithms.html">M31</a></td></tr>
+        <tr><td>"k largest/smallest", merging sorted streams, repeatedly take the best</td><td>Heap</td><td>O(n log k)</td><td><a href="m25-heaps.html">M25</a></td></tr>
+        <tr><td>count ways, min/max cost, choices that constrain later choices</td><td>Dynamic programming</td><td>states × transition</td><td><a href="m32-dynamic-programming.html">M32</a></td></tr>
+        <tr><td>intervals, scheduling, "always take the best available" with a proof</td><td>Greedy</td><td>O(n log n)</td><td><a href="m33-greedy-backtracking.html">M33</a></td></tr>
+        <tr><td>"all combinations/arrangements", puzzles, constraints</td><td>Backtracking</td><td>exponential, pruned</td><td>M33</td></tr>
+        <tr><td>dynamic connectivity, "are these in the same group?", merging sets</td><td>Union-find</td><td>≈ O(1) amortized</td><td><a href="m27-advanced-structures.html">M27</a></td></tr>
+        <tr><td>"next greater/smaller element", spans, histogram areas</td><td>Monotonic stack</td><td>O(n)</td><td><a href="m22-stacks-queues.html">M22</a></td></tr>
+      </tbody>
+    </table>
+    <h3>A decision flowchart</h3>
+    <pre class="mermaid">
+flowchart TD
+  A[Read the problem: input size, output, constraints] --> B{Enumerate all<br/>arrangements or subsets?}
+  B -- yes --> BT[Backtracking with pruning<br/>bitmasks if n ≤ 20]
+  B -- no --> C{Graph, grid, or<br/>relationships?}
+  C -- "shortest steps" --> BFS[BFS]
+  C -- "weighted shortest" --> DJ[Dijkstra / A*]
+  C -- "groups / connectivity" --> UF[Union-find or DFS]
+  C -- no --> D{Contiguous subarray<br/>or substring?}
+  D -- yes --> SW[Sliding window or prefix sums]
+  D -- no --> E{Sorted input or<br/>sortable without losing info?}
+  E -- "pairs / partition" --> TP[Two pointers]
+  E -- "find a value" --> BS[Binary search]
+  E -- no --> F{Monotone feasibility:<br/>if x works, x+1 works?}
+  F -- yes --> BA[Binary search on the answer]
+  F -- no --> G{Count ways or optimize<br/>over sequential choices?}
+  G -- yes --> H{Greedy choice<br/>provable?}
+  H -- yes --> GR[Greedy]
+  H -- no --> DP[Dynamic programming]
+  G -- no --> I{Top k, or repeatedly<br/>extract the best?}
+  I -- yes --> HP[Heap]
+  I -- no --> J{Next greater or smaller<br/>for each element?}
+  J -- yes --> MS[Monotonic stack]
+  J -- no --> HS[Hashing for O(1) lookups<br/>then revisit the brute force]
+    </pre>
+    <aside class="callout tip"><p>The flowchart is a starting point, not a law. Many problems combine patterns: sort
+      then two pointers, BFS over states where each state is a bitmask, DP with a heap. When nothing fits, return to
+      the brute force and ask "what work am I repeating?"</p></aside>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-hashing">
+    <h2>Walkthrough 1: two sum (hashing)</h2>
+    <p><strong>Problem.</strong> Given a list of integers and a target, return the indexes of two different elements
+      that sum to the target (assume exactly one answer).</p>
+    <p><strong>Brute force:</strong> check every pair, O(n²). <strong>Bottleneck:</strong> for each x we scan the
+      whole list looking for <code>target - x</code>. <strong>Pattern:</strong> "have I seen the complement?" is a set
+      or dict lookup. One pass, storing each value's index <em>after</em> checking, so an element never pairs with
+      itself.</p>
+    <div class="tabs">
+      <div class="tab" data-label="Brute force O(n²)">
+        <div class="runnable" data-title="Every pair">
+<textarea>
+def two_sum_brute(nums, target):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] + nums[j] == target:
+                return i, j
+
+print(two_sum_brute([2, 7, 11, 15], 9), two_sum_brute([3, 3], 6))
+</textarea>
+        </div>
+      </div>
+      <div class="tab" data-label="Optimal O(n)">
+        <div class="runnable" data-title="One pass with a dict">
+<textarea>
+def two_sum(nums, target):
+    seen = {}                                # value -> index
+    for i, x in enumerate(nums):
+        if target - x in seen:
+            return seen[target - x], i
+        seen[x] = i                          # store after checking
+
+print(two_sum([2, 7, 11, 15], 9), two_sum([3, 3], 6))
+</textarea>
+        </div>
+      </div>
+    </div>
+    <p><strong>Analysis:</strong> O(n) expected time, O(n) space. If the input were sorted, two pointers would give
+      O(n) time and O(1) space; trading space for time is a choice worth saying out loud.</p>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-window">
+    <h2>Walkthrough 2: longest substring without repeats (sliding window)</h2>
+    <p><strong>Problem.</strong> Return the length of the longest substring with no repeated characters.</p>
+    <p><strong>Brute force:</strong> check all O(n²) substrings, each in O(n): O(n³). <strong>Bottleneck:</strong>
+      neighboring substrings share almost everything. <strong>Pattern:</strong> "contiguous" + "longest with a
+      constraint" = sliding window. Grow the right edge; when the constraint breaks, move the left edge past the
+      previous occurrence of the repeated character. Each index enters and leaves the window at most once: O(n).</p>
+    <div class="viz" data-viz="array-technique" data-config='{"technique": "sliding-window", "array": [2, 1, 5, 1, 3, 2], "k": 3}'></div>
+    <div class="runnable" data-title="Sliding window with last-seen positions">
+<textarea>
+def longest_unique(s: str) -> int:
+    last = {}                  # char -> most recent index
+    left = best = 0
+    for right, ch in enumerate(s):
+        if last.get(ch, -1) >= left:
+            left = last[ch] + 1          # jump past the earlier copy
+        last[ch] = right
+        best = max(best, right - left + 1)
+    return best
+
+for s in ["abcabcbb", "bbbbb", "pwwkew", "", "abba"]:
+    print(repr(s), longest_unique(s))
+</textarea>
+    </div>
+    <aside class="callout danger"><p>The <code>"abba"</code> case catches a classic bug: without the
+      <code>&gt;= left</code> check, the second <code>a</code> would move <code>left</code> <em>backwards</em> to
+      index 1. Edge cases like this are why step 6 (test) matters.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-answer">
+    <h2>Walkthrough 3: ship within D days (binary search on the answer)</h2>
+    <p><strong>Problem.</strong> Packages with weights must ship in order over at most D days. Find the minimum ship
+      capacity that makes it possible.</p>
+    <p><strong>Brute force:</strong> try every capacity from <code>max(weights)</code> up to <code>sum(weights)</code>,
+      simulating each: O(n · sum). <strong>Signal:</strong> feasibility is <em>monotone</em>: if capacity c works, every
+      larger capacity works too. A monotone yes/no predicate over a range is exactly what binary search needs
+      (<a href="m30-searching.html">M30</a>), even though we are searching over <em>answers</em>, not an array.</p>
+    <div class="viz" data-viz="binary-search" data-config='{"array": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], "target": 15}'></div>
+    <div class="runnable" data-title="Binary search over capacities">
+<textarea>
+def days_needed(weights, cap):
+    days, load = 1, 0
+    for w in weights:
+        if load + w > cap:
+            days, load = days + 1, 0
+        load += w
+    return days
+
+def min_capacity(weights: list[int], d: int) -> int:
+    lo, hi = max(weights), sum(weights)        # lo always too small or exact; hi always feasible
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if days_needed(weights, mid) <= d:
+            hi = mid                           # feasible: try smaller
+        else:
+            lo = mid + 1                       # infeasible: need more
+    return lo
+
+print(min_capacity([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 5))   # 15
+print(min_capacity([3, 2, 2, 4, 1, 4], 3))                 # 6
+</textarea>
+    </div>
+    <p><strong>Analysis:</strong> O(n log(sum)) time, O(1) space. The template (find the smallest x where
+      <code>feasible(x)</code> is true) solves a whole family: minimum eating speed, smallest divisor, splitting arrays,
+      placing routers.</p>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-grid">
+    <h2>Walkthrough 4: rotting oranges (multi-source BFS)</h2>
+    <p><strong>Problem.</strong> In a grid, 2 = rotten orange, 1 = fresh, 0 = empty. Each minute, rotten oranges rot
+      their four neighbors. Return the minutes until no fresh orange remains, or −1 if some never rot.</p>
+    <p><strong>Brute force:</strong> simulate minute by minute, scanning the whole grid each time: O((rows·cols)²).
+      <strong>Signal:</strong> grid + "minimum time/steps" = BFS. Start the queue with <em>all</em> rotten oranges at
+      once (multi-source BFS); BFS layers are minutes. Each cell enters the queue once: O(rows·cols).</p>
+    <div class="viz" data-viz="grid-path" data-config='{"rows": 8, "cols": 12}'></div>
+    <div class="runnable" data-title="BFS layers are minutes">
+<textarea>
+from collections import deque
+
+def minutes_to_rot(grid: list[list[int]]) -> int:
+    rows, cols = len(grid), len(grid[0])
+    queue = deque((r, c) for r in range(rows) for c in range(cols) if grid[r][c] == 2)
+    fresh = sum(row.count(1) for row in grid)
+    minutes = 0
+    while queue and fresh:
+        for _ in range(len(queue)):            # one BFS layer = one minute
+            r, c = queue.popleft()
+            for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == 1:
+                    grid[nr][nc] = 2
+                    fresh -= 1
+                    queue.append((nr, nc))
+        minutes += 1
+    return -1 if fresh else minutes
+
+print(minutes_to_rot([[2, 1, 1], [1, 1, 0], [0, 1, 1]]))   # 4
+print(minutes_to_rot([[2, 1, 1], [0, 1, 1], [1, 0, 1]]))   # -1
+print(minutes_to_rot([[0, 2]]))                             # 0
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-heap">
+    <h2>Walkthrough 5: k most frequent words (heap)</h2>
+    <p><strong>Problem.</strong> Return the k most frequent words, ties broken alphabetically.</p>
+    <p><strong>Brute force:</strong> count, then sort all distinct words: O(u log u) for u distinct words. That is
+      often fine! <strong>Signal:</strong> "top k" with k much smaller than u suggests a heap of size k: O(u log k).
+      <code>heapq.nsmallest</code> does this for you with a key.</p>
+    <div class="runnable" data-title="Counter + heapq.nsmallest">
+<textarea>
+import heapq
+from collections import Counter
+
+def top_k_words(words: list[str], k: int) -> list[str]:
+    counts = Counter(words)
+    return heapq.nsmallest(k, counts, key=lambda w: (-counts[w], w))
+
+text = "the quick brown fox jumps over the lazy dog the fox barks".split()
+print(top_k_words(text, 2))
+print(Counter(text).most_common(3))       # most_common breaks ties by first appearance, not alphabetically
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Saying "sorting is O(u log u), and with u = 10<sup>4</sup> that is fast enough; a
+      heap would only matter for streaming data or huge u" is a <em>better</em> interview answer than silently writing
+      the heap. Engineering is choosing the simplest thing that meets the constraints.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="walkthrough-stack">
+    <h2>Walkthrough 6: daily temperatures (monotonic stack)</h2>
+    <p><strong>Problem.</strong> For each day, how many days until a warmer temperature? (0 if never.)</p>
+    <p><strong>Brute force:</strong> for each day scan forward: O(n²) on a decreasing list. <strong>Signal:</strong>
+      "next greater element" for every position. Keep a stack of indexes whose answer is still unknown; their
+      temperatures are decreasing from bottom to top (that is the <em>monotonic</em> invariant). A new warmer day
+      resolves every cooler day on top. Each index is pushed and popped once: O(n).</p>
+    <div class="tracer" data-title="Trace the stack">
+<textarea>
+temps = [73, 74, 75, 71, 69, 72, 76]
+answer = [0] * len(temps)
+stack = []
+for i, t in enumerate(temps):
+    while stack and temps[stack[-1]] < t:
+        j = stack.pop()
+        answer[j] = i - j
+    stack.append(i)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the answer" data-predict>
+<textarea>
+temps = [30, 40, 50, 60, 50, 40, 70]
+answer, stack = [0] * len(temps), []
+for i, t in enumerate(temps):
+    while stack and temps[stack[-1]] < t:
+        j = stack.pop()
+        answer[j] = i - j
+    stack.append(i)
+print(answer)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="testing">
+    <h2>Testing edge cases</h2>
+    <p>Most wrong answers come from a handful of input shapes. Run through this list for every problem:</p>
+    <div class="two-col">
+      <ul>
+        <li>empty input; a single element; two elements</li>
+        <li>all elements equal; all distinct</li>
+        <li>already sorted; reverse sorted</li>
+        <li>negatives, zero, very large values</li>
+      </ul>
+      <ul>
+        <li>the answer at the very start or very end</li>
+        <li>no valid answer; many valid answers</li>
+        <li>maximum input size (performance)</li>
+        <li>off-by-one boundaries: <code>&lt;</code> vs <code>&lt;=</code>, inclusive vs exclusive ends</li>
+      </ul>
+    </div>
+    <p>The most powerful technique is <strong>differential testing</strong>: compare the optimized solution with the
+      brute force on thousands of small random inputs. When they disagree, you have a minimal failing case for free.</p>
+    <div class="runnable" data-title="Brute force as an oracle">
+<textarea>
+import random
+
+def longest_unique_brute(s):
+    return max((j - i for i in range(len(s) + 1) for j in range(i, len(s) + 1)
+                if len(set(s[i:j])) == j - i), default=0)
+
+def longest_unique_buggy(s):              # forgets the ">= left" check
+    last, left, best = {}, 0, 0
+    for right, ch in enumerate(s):
+        if ch in last:
+            left = last[ch] + 1
+        last[ch] = right
+        best = max(best, right - left + 1)
+    return best
+
+rng = random.Random(0)
+for trial in range(2000):
+    s = "".join(rng.choice("ab") for _ in range(rng.randint(0, 6)))
+    if longest_unique_buggy(s) != longest_unique_brute(s):
+        print(f"counterexample after {trial} trials: {s!r}",
+              longest_unique_buggy(s), "!=", longest_unique_brute(s))
+        break
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>In a project, put these checks in pytest and run them with <code>pixi run pytest</code>.
+      The <code>hypothesis</code> library (<code>pixi add hypothesis</code>) automates random input generation and
+      shrinks failures to the smallest counterexample.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="complexity">
+    <h2>Communicating complexity</h2>
+    <p>Whether in an interview, a design document, or a code review, a complexity claim should be precise and
+      justified.</p>
+    <ul>
+      <li><strong>Name your variables.</strong> "O(n + m) where n is the text length and m the pattern length", not
+        "O(n)". For graphs, use V and E; for grids, rows·cols.</li>
+      <li><strong>State time and space separately</strong>, and say whether space counts the output.</li>
+      <li><strong>Say which case.</strong> Worst, average/expected (hashing, quickselect), or amortized (list append,
+        monotonic stack, union-find).</li>
+      <li><strong>Justify in one sentence.</strong> "Each index is pushed and popped at most once, so the while loop
+        runs at most n times in total."</li>
+      <li><strong>Mention hidden costs.</strong> Slicing and string concatenation copy (O(k)); <code>x in list</code>
+        is O(n); <code>list.pop(0)</code> is O(n), use <code>collections.deque</code>.</li>
+      <li><strong>Connect to the constraints.</strong> "n ≤ 10<sup>5</sup>, so O(n log n) is about 2 million steps:
+        comfortably fast."</li>
+    </ul>
+    <div class="runnable" data-title="Measure to confirm a claim">
+<textarea>
+import timeit
+
+for n in (1_000, 10_000, 100_000):
+    data = list(range(n))
+    as_set = set(data)
+    t_list = timeit.timeit(lambda: (n - 1) in data, number=200)
+    t_set = timeit.timeit(lambda: (n - 1) in as_set, number=200)
+    print(f"n={n:>7}: list {t_list * 1e3:7.2f} ms   set {t_set * 1e3:6.3f} ms")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="how-to-practice">
+    <h2>How to practice</h2>
+    <p>Patterns become automatic through deliberate, spaced practice, not marathon sessions.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Keep a problem journal</h4><p>For each problem record: the signal you noticed (or
+        missed), the pattern, the key insight in one sentence, your complexity, and the bug you made. The journal is
+        your personal catalogue.</p></div>
+      <div class="card"><h4>Spaced repetition</h4><p>Re-solve each problem from scratch after 1 day, 3 days, 1 week,
+        and 1 month. If you get stuck, reset the schedule. Re-solving beats re-reading: retrieval is what builds
+        memory.</p></div>
+      <div class="card"><h4>Timed sessions</h4><p>Practice in 45-minute blocks: 5 to understand, 10 to design, 20 to
+        code, 10 to test. If you are stuck after 20 minutes, read a hint, not the full solution, then journal what you
+        missed.</p></div>
+      <div class="card"><h4>Mix the patterns</h4><p>Practicing ten sliding-window problems in a row teaches you to
+        apply a pattern you were told to use. Interleave topics so you practice <em>choosing</em> the pattern, which is
+        the real skill.</p></div>
+      <div class="card"><h4>Talk out loud</h4><p>Explain your reasoning as you go, as you would in an interview or
+        pair-programming session. It exposes gaps and builds the habit of communicating trade-offs.</p></div>
+      <div class="card"><h4>Review others' solutions</h4><p>After solving, read two other solutions. Note one idiom or
+        trick you will reuse. Then close them and rewrite yours.</p></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Six problems, six different patterns, deliberately unlabeled in their titles. Before coding, write down which
+      signal you notice and which technique it suggests.</p>
+
+    <div class="exercise" data-id="m35-e1" data-title="Pairs with a given difference">
+      <div class="exercise-prompt">
+        <p>Write <code>count_pairs_with_diff(nums, k)</code> returning the number of <em>distinct</em> value pairs
+          <code>(a, b)</code> with <code>b - a == k</code>, where both values occur in <code>nums</code>
+          (<code>k ≥ 0</code>; for <code>k == 0</code> a value must occur at least twice). Aim for O(n).</p>
+      </div>
+<textarea class="starter">
+def count_pairs_with_diff(nums: list[int], k: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert count_pairs_with_diff([3, 1, 4, 1, 5], 2) == 2, "(1, 3) and (3, 5)"
+    assert count_pairs_with_diff([1, 2, 3, 4, 5], 1) == 4, "four consecutive pairs"
+    assert count_pairs_with_diff([1, 3, 1, 5, 4], 0) == 1, "only 1 occurs twice"
+
+def test_edges():
+    assert count_pairs_with_diff([], 3) == 0, "empty input"
+    assert count_pairs_with_diff([7, 7, 7], 0) == 1, "one distinct pair (7, 7)"
+    assert count_pairs_with_diff([1, 1, 1, 2], 1) == 1, "duplicates count once"
+
+def test_large():
+    nums = list(range(200_000))
+    assert count_pairs_with_diff(nums, 5) == 199_995, "must be fast on large input"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: "does the complement exist?" Use a
+        <code>Counter</code>; for k &gt; 0 count values v with <code>v + k</code> present.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import Counter
+
+def count_pairs_with_diff(nums: list[int], k: int) -&gt; int:
+    counts = Counter(nums)
+    if k == 0:
+        return sum(1 for c in counts.values() if c &gt; 1)
+    return sum(1 for v in counts if v + k in counts)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m35-e2" data-title="Shortest subarray reaching a sum">
+      <div class="exercise-prompt">
+        <p>Given positive integers and a target, write <code>shortest_subarray(nums, target)</code> returning the length
+          of the shortest contiguous subarray whose sum is at least <code>target</code>, or 0 if none exists. Aim for
+          O(n).</p>
+      </div>
+<textarea class="starter">
+def shortest_subarray(nums: list[int], target: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert shortest_subarray([2, 3, 1, 2, 4, 3], 7) == 2, "[4, 3] sums to 7"
+    assert shortest_subarray([1, 4, 4], 4) == 1, "a single 4"
+    assert shortest_subarray([1, 1, 1, 1, 1], 11) == 0, "impossible"
+
+def test_whole_array():
+    assert shortest_subarray([1, 2, 3], 6) == 3, "needs everything"
+
+def test_large():
+    nums = [1] * 300_000
+    assert shortest_subarray(nums, 150_000) == 150_000, "must be linear"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: contiguous + positive numbers + "shortest with sum ≥".
+        Grow the right edge, and while the window sum is at least the target, record its length and shrink from the
+        left.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def shortest_subarray(nums: list[int], target: int) -&gt; int:
+    best = len(nums) + 1
+    left = window = 0
+    for right, x in enumerate(nums):
+        window += x
+        while window &gt;= target:
+            best = min(best, right - left + 1)
+            window -= nums[left]
+            left += 1
+    return 0 if best == len(nums) + 1 else best</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m35-e3" data-title="Minimum eating speed">
+      <div class="exercise-prompt">
+        <p>Koko has piles of bananas and <code>h</code> hours (<code>h ≥ len(piles)</code>). Each hour she picks one
+          pile and eats up to <code>speed</code> bananas from it. Write <code>min_speed(piles, h)</code> returning the
+          smallest integer speed that finishes everything within <code>h</code> hours.</p>
+      </div>
+<textarea class="starter">
+def min_speed(piles: list[int], h: int) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert min_speed([3, 6, 7, 11], 8) == 4, "speed 4 takes 1 + 2 + 2 + 3 = 8 hours"
+    assert min_speed([30, 11, 23, 4, 20], 5) == 30, "one pile per hour needs the max pile"
+    assert min_speed([30, 11, 23, 4, 20], 6) == 23, "one extra hour allows speed 23"
+
+def test_large_values():
+    assert min_speed([10**9], 2) == 500_000_000, "binary search handles huge values"
+    assert min_speed([1, 1, 1], 10) == 1, "minimum speed is 1"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: "smallest value such that it is feasible", and higher
+        speeds are always feasible if a lower one is. Binary search speeds in <code>[1, max(piles)]</code>; hours for a
+        pile are <code>-(-pile // speed)</code> (ceiling division).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def min_speed(piles: list[int], h: int) -&gt; int:
+    lo, hi = 1, max(piles)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        hours = sum(-(-p // mid) for p in piles)
+        if hours &lt;= h:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m35-e4" data-title="Count the islands">
+      <div class="exercise-prompt">
+        <p>Write <code>count_islands(grid)</code> where <code>grid</code> is a list of strings of <code>"#"</code>
+          (land) and <code>"."</code> (water). An island is a group of land cells connected horizontally or vertically.
+          Return the number of islands. Do not use recursion (large islands would exceed the recursion limit).</p>
+      </div>
+<textarea class="starter">
+def count_islands(grid: list[str]) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    grid = ["##..#", "#...#", "..#..", "....#"]
+    assert count_islands(grid) == 4, "four separate islands"
+    assert count_islands(["#.#", ".#.", "#.#"]) == 5, "diagonals do not connect"
+
+def test_edges():
+    assert count_islands([]) == 0, "empty grid"
+    assert count_islands(["...", "..."]) == 0, "all water"
+    assert count_islands(["###", "###"]) == 1, "all land is one island"
+
+def test_big_island_no_recursion():
+    grid = ["#" * 300 for _ in range(300)]
+    assert count_islands(grid) == 1, "90,000 cells must not hit the recursion limit"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: grid + connected regions. Scan every cell; on unvisited
+        land, increment the count and flood-fill with an explicit stack or deque, marking cells as visited.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def count_islands(grid: list[str]) -&gt; int:
+    seen: set[tuple[int, int]] = set()
+    islands = 0
+    for r, row in enumerate(grid):
+        for c, cell in enumerate(row):
+            if cell != "#" or (r, c) in seen:
+                continue
+            islands += 1
+            stack = [(r, c)]
+            seen.add((r, c))
+            while stack:
+                cr, cc = stack.pop()
+                for nr, nc in ((cr + 1, cc), (cr - 1, cc), (cr, cc + 1), (cr, cc - 1)):
+                    if 0 &lt;= nr &lt; len(grid) and 0 &lt;= nc &lt; len(grid[nr]) and grid[nr][nc] == "#" and (nr, nc) not in seen:
+                        seen.add((nr, nc))
+                        stack.append((nr, nc))
+    return islands</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m35-e5" data-title="Next greater element">
+      <div class="exercise-prompt">
+        <p>Write <code>next_greater(nums)</code> returning a list where position i holds the first value to the
+          <em>right</em> of <code>nums[i]</code> that is strictly greater, or <code>-1</code> if there is none. Aim for
+          O(n).</p>
+      </div>
+<textarea class="starter">
+def next_greater(nums: list[int]) -> list[int]:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert next_greater([2, 1, 2, 4, 3]) == [4, 2, 4, -1, -1], "classic example"
+    assert next_greater([5, 4, 3]) == [-1, -1, -1], "strictly decreasing"
+    assert next_greater([1, 2, 3]) == [2, 3, -1], "strictly increasing"
+
+def test_equal_values():
+    assert next_greater([2, 2, 3]) == [3, 3, -1], "equal is not greater"
+
+def test_large_decreasing():
+    nums = list(range(200_000, 0, -1)) + [10**9]
+    assert next_greater(nums)[:3] == [10**9] * 3, "must be linear on a long decreasing run"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: "next greater" for every element. Keep a stack of indexes
+        still waiting for an answer; when a bigger value arrives, pop and fill them in.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def next_greater(nums: list[int]) -&gt; list[int]:
+    answer = [-1] * len(nums)
+    stack: list[int] = []
+    for i, x in enumerate(nums):
+        while stack and nums[stack[-1]] &lt; x:
+            answer[stack.pop()] = x
+        stack.append(i)
+    return answer</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m35-e6" data-title="When is everyone connected?">
+      <div class="exercise-prompt">
+        <p>There are <code>n</code> people labeled <code>0..n-1</code>. <code>logs</code> is a list of
+          <code>(time, a, b)</code> meaning a and b became friends at that time (not necessarily sorted). Friendship is
+          transitive for being "in the same group". Write <code>earliest_all_connected(n, logs)</code> returning the
+          earliest time at which everyone is in one group, <code>0</code> when <code>n == 1</code>, or <code>-1</code> if that never happens.</p>
+      </div>
+<textarea class="starter">
+def earliest_all_connected(n: int, logs: list[tuple[int, int, int]]) -> int:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_example():
+    logs = [(20190101, 0, 1), (20190104, 3, 4), (20190107, 2, 3), (20190211, 1, 5),
+            (20190224, 2, 4), (20190301, 0, 3), (20190312, 1, 2), (20190322, 4, 5)]
+    assert earliest_all_connected(6, logs) == 20190301, "everyone joins one group on 20190301"
+
+def test_unsorted_and_never():
+    assert earliest_all_connected(4, [(5, 0, 1), (1, 2, 3), (3, 1, 2)]) == 5, "logs must be processed in time order"
+    assert earliest_all_connected(4, [(1, 0, 1), (2, 2, 3)]) == -1, "two groups remain"
+
+def test_single_person():
+    assert earliest_all_connected(1, []) == 0, "a single person is connected from the start"
+
+def test_large():
+    n = 50_000
+    logs = [(t, t, t + 1) for t in range(n - 1)]
+    assert earliest_all_connected(n, logs) == n - 2, "a long chain must stay fast"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Signal: groups merging over time. Sort the logs by time and use
+        union-find with path compression; track the number of groups and return the time when it reaches 1.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def earliest_all_connected(n: int, logs: list[tuple[int, int, int]]) -&gt; int:
+    parent = list(range(n))
+    size = [1] * n
+    groups = n
+
+    def find(x: int) -&gt; int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]      # path halving
+            x = parent[x]
+        return x
+
+    if groups == 1:
+        return 0
+    for time, a, b in sorted(logs):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            continue
+        if size[ra] &lt; size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra                         # union by size
+        size[ra] += size[rb]
+        groups -= 1
+        if groups == 1:
+            return time
+    return -1</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Your problem journal and a ten-problem set</span></div>
+      <div class="widget-body">
+        <p>Create a local practice repository that you will keep using after this course. It holds your journal,
+          your solutions, and tests that let you re-solve any problem from scratch and check yourself instantly.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init practice &amp;&amp; cd practice
+pixi add python pytest
+mkdir -p problems tests
+pixi run pytest -q                  # run everything
+pixi run pytest -q -k sliding       # run one pattern</code></pre>
+        <pre data-label="Layout"><code class="language-bash">practice/
+  pixi.toml
+  JOURNAL.md                  # one entry per attempt
+  problems/
+    p01_two_sum.py            # each file: docstring statement, brute(), solve()
+    ...
+  tests/
+    test_p01_two_sum.py       # examples + edge cases + random brute-vs-solve check</code></pre>
+        <ol>
+          <li>Pick ten problems: at least one each of hashing, two pointers, sliding window, binary search on the
+            answer, BFS/DFS, heap, DP, greedy, backtracking, and union-find or monotonic stack. Reuse ones from this
+            Part, or find new ones.</li>
+          <li>For each, write the statement as a docstring, then <code>brute()</code> and <code>solve()</code>.</li>
+          <li>Write tests: the examples, the edge-case checklist from this module, and a randomized comparison of
+            <code>solve</code> with <code>brute</code> on small inputs.</li>
+          <li>Add a journal entry per problem: date, signal, pattern, key insight, complexity, mistakes, and the next
+            review date (1 day, 3 days, 1 week, 1 month).</li>
+        </ol>
+        <ul class="checklist" data-id="m35-mini">
+          <li>Ten problems covering at least eight different patterns</li>
+          <li>Each problem has a brute force and an optimized solution</li>
+          <li>Each test file includes edge cases and a randomized oracle test</li>
+          <li><code>pixi run pytest</code> passes for all ten</li>
+          <li><code>JOURNAL.md</code> has an entry with review dates for every problem</li>
+          <li>You re-solved at least two problems from scratch a day later</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add a <code>review</code> Pixi task that prints which problems are due today
+          by parsing the journal; time each <code>solve()</code> on the largest allowed input with
+          <code>timeit</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m35-quiz">
+<script type="application/json">
+{"title": "Problem-solving patterns quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why write a brute-force solution before optimizing?", "options": ["Interviewers require it", "It confirms you understand the problem and becomes a test oracle", "It is usually fast enough", "It uses less memory"], "answer": 1, "explanation": "<p>A correct baseline lets you verify the optimized version on random inputs and gives you something working if time runs out.</p>"},
+  {"type": "single", "prompt": "Input size n ≤ 20. Which complexity is likely acceptable?", "options": ["Only O(n)", "O(2^n · n)", "Only O(log n)", "O(n!) for sure"], "answer": 1, "explanation": "<p>2^20 · 20 is about 2 × 10^7, feasible. 20! is about 2.4 × 10^18, not feasible.</p>"},
+  {"type": "single", "prompt": "\"Find the longest substring with at most k distinct characters\" most strongly suggests...", "options": ["Dynamic programming", "Sliding window", "Backtracking", "Union-find"], "answer": 1, "explanation": "<p>Contiguous + longest + a constraint that can be maintained incrementally is the sliding-window signal.</p>"},
+  {"type": "single", "prompt": "\"Find the minimum capacity such that the task can be finished in D days\" suggests...", "options": ["Binary search on the answer", "Heap", "Monotonic stack", "Huffman coding"], "answer": 0, "explanation": "<p>Feasibility is monotone in capacity, so binary search over capacities finds the boundary.</p>"},
+  {"type": "multi", "prompt": "Which signals suggest BFS?", "options": ["Fewest steps in an unweighted grid", "Spreading from several sources at once, minute by minute", "Weighted shortest path", "Level-by-level traversal"], "answer": [0, 1, 3], "explanation": "<p>BFS explores by distance in unweighted graphs. With weights, use Dijkstra or A*.</p>"},
+  {"type": "single", "prompt": "Why is the monotonic-stack solution to daily temperatures O(n) despite a nested while loop?", "options": ["The while loop runs at most once per iteration", "Each index is pushed once and popped at most once, so the total while-loop work is at most n", "Python optimizes it", "Temperatures are bounded"], "answer": 1, "explanation": "<p>This is amortized analysis: count total pushes and pops over the whole run, not per iteration.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "temps = [5, 3, 4, 6]\nanswer, stack = [0] * 4, []\nfor i, t in enumerate(temps):\n    while stack and temps[stack[-1]] < t:\n        j = stack.pop()\n        answer[j] = i - j\n    stack.append(i)\nprint(answer)", "answer": "[3, 1, 1, 0]", "explanation": "<p>5 waits 3 days for 6; 3 waits 1 day for 4; 4 waits 1 day for 6; 6 never gets warmer.</p>"},
+  {"type": "single", "prompt": "Which is the best way to find bugs in an optimized solution?", "options": ["Read it carefully once", "Compare it with a brute force on many small random inputs", "Run it on one large input", "Add print statements everywhere"], "answer": 1, "explanation": "<p>Differential testing finds disagreements automatically, and small inputs make the counterexample easy to debug.</p>"},
+  {"type": "multi", "prompt": "Which make a complexity claim precise?", "options": ["Naming what n (and m, V, E) mean", "Stating time and space separately", "Saying worst, expected, or amortized", "Saying \"it's fast\""], "answer": [0, 1, 2], "explanation": "<p>Precise claims name variables, separate resources, and specify the case. \"Fast\" is not a claim.</p>"},
+  {"type": "text", "prompt": "Which data structure answers \"are a and b in the same group?\" while groups keep merging, in nearly O(1) amortized time?", "answer": ["union-find", "union find", "disjoint set", "disjoint-set", "dsu"], "explanation": "<p>Union-find with path compression and union by size/rank runs in inverse-Ackermann amortized time per operation.</p>"},
+  {"type": "single", "prompt": "Why interleave different problem types in practice instead of doing ten of one type in a row?", "options": ["It is more fun", "It trains choosing the pattern, not just applying a pattern you were told", "It is faster", "Blocked practice is impossible"], "answer": 1, "explanation": "<p>Interleaved practice feels harder but transfers better, because recognizing which technique applies is the real skill.</p>"},
+  {"type": "single", "prompt": "In spaced repetition for problems, what should you do at each review?", "options": ["Re-read your old solution", "Re-solve the problem from scratch, then compare", "Skip problems you solved once", "Copy the solution into a new file"], "answer": 1, "explanation": "<p>Retrieval practice (solving again without looking) builds durable memory; re-reading creates an illusion of mastery.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Method: understand → examples → brute force → optimize → code → test → analyze.</li>
+      <li>Use the input size to pick a target complexity before designing.</li>
+      <li>Read signals: complement lookup → hashing; contiguous + constraint → sliding window; monotone feasibility →
+        binary search on the answer; grid steps → BFS; top k → heap; count/optimize choices → DP or provable greedy;
+        all arrangements → backtracking; merging groups → union-find; next greater → monotonic stack.</li>
+      <li>Test edge cases from a checklist and use the brute force as an oracle.</li>
+      <li>Communicate complexity with named variables, separate time and space, and a one-sentence justification.</li>
+      <li>Practice with a journal, spaced re-solving, timed sessions, and interleaved topics.</li>
+    </ul>
+    <div class="flashcards" data-title="Problem-solving patterns">
+<script type="application/json">
+[{"front": "The seven steps", "back": "Understand, examples, brute force, optimize, code, test, analyze."},
+ {"front": "n ≤ 10^5 suggests", "back": "O(n log n) or O(n): sorting, heaps, binary search, hashing, two pointers, sliding window."},
+ {"front": "Signal: pairs summing to a target (unsorted)", "back": "Hashing: look up the complement in a dict/set. O(n)."},
+ {"front": "Signal: longest/shortest contiguous subarray with a constraint", "back": "Sliding window: grow right, shrink left. O(n)."},
+ {"front": "Signal: minimum X such that feasible(X)", "back": "Binary search on the answer over a monotone predicate."},
+ {"front": "Signal: fewest steps in a grid", "back": "BFS (multi-source if many starts); layers = steps."},
+ {"front": "Signal: k largest / most frequent", "back": "Heap of size k, or heapq.nsmallest/nlargest. O(n log k)."},
+ {"front": "Signal: next greater/smaller element", "back": "Monotonic stack; each index pushed and popped once. O(n)."},
+ {"front": "Signal: groups merging over time", "back": "Union-find with path compression and union by size."},
+ {"front": "Differential testing", "back": "Compare optimized code with a brute force on many small random inputs."},
+ {"front": "Spaced repetition schedule", "back": "Re-solve from scratch after 1 day, 3 days, 1 week, 1 month."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/collections.html">collections: Counter, deque, defaultdict</a></li>
+      <li><a href="https://docs.python.org/3/library/heapq.html">heapq</a> and <a href="https://docs.python.org/3/library/bisect.html">bisect</a></li>
+      <li><a href="https://docs.python.org/3/library/timeit.html">timeit: measure execution time</a></li>
+      <li><a href="https://wiki.python.org/moin/TimeComplexity">Python wiki: time complexity of built-in operations</a></li>
+      <li>Put it all together: <a href="../projects/p04-puzzle-solver.html">Project 4: Puzzle Solver Suite</a>. Then
+        continue to <a href="m36-metaprogramming.html">Part 5 · M36 Metaprogramming</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

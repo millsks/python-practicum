@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What's New in Python 3.14 · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-py314">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Python versions</p>
+    <h1>What's New in Python 3.14</h1>
+    <p class="lede">Python 3.14 is this course's baseline. This page walks through every headline change with a
+      before/after example, a cell you can run right here (the browser runs real CPython 3.14 via Pyodide), and a link to
+      the module that teaches it in depth.</p>
+    <div class="lesson-meta"><span>⏱ ~60 min to read and try everything</span><span><span class="tag v314">3.14</span> released October 2025</span><span>Official notes: <a href="https://docs.python.org/3.14/whatsnew/3.14.html">What's New In Python 3.14</a></span></div>
+    <ul class="objectives">
+      <li>Recognize every major Python 3.14 language, stdlib, concurrency, typing, interpreter, and tooling change</li>
+      <li>Rewrite older code to use the 3.14 idiom when it is clearer or safer</li>
+      <li>Know which features you can try in the browser and which need a local Pixi environment</li>
+      <li>Find the course module that teaches each feature in depth</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="overview">
+    <h2>At a glance</h2>
+    <p>Python ships a new feature release every October (<a href="https://peps.python.org/pep-0602/">PEP 602</a>). Each
+      release gets about two years of bug fixes and then security fixes until five years after release. 3.14 is a big
+      one: a new string-literal kind, a new model for annotations, an officially supported no-GIL build, multiple
+      interpreters in the standard library, and a much friendlier REPL.</p>
+    <table>
+      <thead><tr><th>Area</th><th>Change</th><th>PEP</th><th>Try in browser?</th><th>Taught in</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="4">Language</td><td>Template strings <code>t"..."</code></td><td>750</td><td>Yes</td><td><a href="../modules/m03-strings.html">M03</a></td></tr>
+        <tr><td>Deferred evaluation of annotations</td><td>649 / 749</td><td>Yes</td><td><a href="../modules/m16-typing.html">M16</a></td></tr>
+        <tr><td><code>except A, B:</code> without parentheses</td><td>758</td><td>Yes</td><td><a href="../modules/m07-exceptions.html">M07</a></td></tr>
+        <tr><td>Warnings for <code>return</code>/<code>break</code>/<code>continue</code> in <code>finally</code></td><td>765</td><td>Yes</td><td><a href="../modules/m07-exceptions.html">M07</a></td></tr>
+        <tr><td rowspan="6">Stdlib</td><td><code>compression.zstd</code> and Zstandard in <code>tarfile</code>/<code>zipfile</code>/<code>shutil</code></td><td>784</td><td>Maybe (depends on the Pyodide build)</td><td><a href="../modules/m09-files-io.html">M09</a></td></tr>
+        <tr><td><code>uuid.uuid7()</code></td><td>-</td><td>Yes</td><td><a href="../modules/m40-stdlib.html">M40</a></td></tr>
+        <tr><td><code>Path.copy()</code> / <code>Path.move()</code></td><td>-</td><td>Yes</td><td><a href="../modules/m09-files-io.html">M09</a></td></tr>
+        <tr><td>Max-heap functions in <code>heapq</code></td><td>-</td><td>Yes</td><td><a href="../modules/m25-heaps.html">M25</a></td></tr>
+        <tr><td><code>map(..., strict=True)</code></td><td>-</td><td>Yes</td><td><a href="../modules/m14-iterators.html">M14</a></td></tr>
+        <tr><td><code>functools.Placeholder</code></td><td>-</td><td>Yes</td><td><a href="../modules/m18-functional.html">M18</a></td></tr>
+        <tr><td rowspan="3">Concurrency</td><td>Free-threaded build officially supported</td><td>779</td><td>No (local)</td><td><a href="../modules/m37-concurrency.html">M37</a></td></tr>
+        <tr><td><code>concurrent.interpreters</code>, <code>InterpreterPoolExecutor</code></td><td>734</td><td>No (local)</td><td><a href="../modules/m37-concurrency.html">M37</a></td></tr>
+        <tr><td><code>python -m asyncio ps</code> / <code>pstree</code></td><td>-</td><td>No (local)</td><td><a href="../modules/m38-asyncio.html">M38</a></td></tr>
+        <tr><td>Typing</td><td><code>annotationlib</code>, <code>get_annotations</code>, <code>Format</code></td><td>649 / 749</td><td>Yes</td><td><a href="../modules/m16-typing.html">M16</a></td></tr>
+        <tr><td rowspan="3">Interpreter</td><td>Tail-call interpreter</td><td>-</td><td>n/a</td><td><a href="../modules/m39-performance.html">M39</a></td></tr>
+        <tr><td>Experimental JIT in official builds</td><td>744</td><td>No (local)</td><td><a href="../modules/m39-performance.html">M39</a></td></tr>
+        <tr><td>Incremental garbage collection</td><td>-</td><td>n/a</td><td><a href="../modules/m39-performance.html">M39</a></td></tr>
+        <tr><td rowspan="3">Tooling</td><td>Syntax-highlighted, colored REPL</td><td>-</td><td>Local</td><td><a href="../modules/m00-setup.html">M00</a></td></tr>
+        <tr><td>Color in <code>unittest</code> and <code>argparse</code> output</td><td>-</td><td>Local</td><td><a href="../modules/m17-testing.html">M17</a>, <a href="../modules/m40-stdlib.html">M40</a></td></tr>
+        <tr><td>Safe external debugger attach: <code>python -m pdb -p PID</code></td><td>768</td><td>No (local)</td><td><a href="../modules/m43-debugging-security.html">M43</a></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Which Python is running this page?">
+<textarea>
+import sys
+print(sys.version)
+print("3.14 or newer:", sys.version_info >= (3, 14))
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Locally, this course pins Python 3.14 in <code>pixi.toml</code>
+      (<code>python = "3.14.*"</code>). Run every example on this page with <code>pixi run python example.py</code>, or open
+      the REPL with <code>pixi run python</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="language">
+    <h2>Language changes</h2>
+
+    <h3 id="t-strings">Template strings: <code>t"..."</code> (PEP 750)</h3>
+    <p>An f-string is evaluated immediately into a plain <code>str</code>: by the time your code sees it, the
+      interpolated values are already glued into the text, so nothing can escape or validate them. A <dfn>template
+      string</dfn> uses the same syntax with a <code>t</code> prefix, but evaluates to a
+      <code>string.templatelib.Template</code> object that keeps the literal parts and the interpolated values
+      <em>separate</em>. A library function then decides how to combine them: escape HTML, parameterize SQL, build
+      structured log records, and so on.</p>
+    <div class="two-col">
+      <div><p><strong>Before (unsafe):</strong></p>
+<pre><code class="language-python">user = "&lt;script&gt;alert(1)&lt;/script&gt;"
+html = f"&lt;p&gt;Hello {user}&lt;/p&gt;"
+# the script tag is now inside html</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">user = "&lt;script&gt;alert(1)&lt;/script&gt;"
+html = render_html(t"&lt;p&gt;Hello {user}&lt;/p&gt;")
+# render_html escapes each interpolation</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Build a tiny HTML-escaping renderer">
+<textarea>
+from html import escape
+from string.templatelib import Interpolation, Template
+
+def render_html(template: Template) -> str:
+    parts = []
+    for item in template:            # iterating yields str and Interpolation objects in order
+        if isinstance(item, Interpolation):
+            parts.append(escape(str(item.value)))
+        else:
+            parts.append(item)
+    return "".join(parts)
+
+user = "<script>alert(1)</script>"
+tpl = t"<p>Hello {user}</p>"
+print(type(tpl).__name__)
+print(tpl.strings)
+print(tpl.values)
+print(render_html(tpl))
+</textarea>
+    </div>
+    <p>Each <code>Interpolation</code> records the <code>value</code>, the source <code>expression</code> text, the
+      <code>conversion</code> (<code>"r"</code>, <code>"s"</code>, <code>"a"</code>, or <code>None</code>), and the
+      <code>format_spec</code>. Templates are not strings: <code>str(tpl)</code> gives a debugging repr, not the
+      rendered text, which is deliberate so you cannot accidentally skip the processing step.</p>
+    <div class="runnable" data-title="Predict: what does an Interpolation remember?" data-predict>
+<textarea>
+price = 3.5
+tpl = t"Total: {price * 2:.2f}"
+item = tpl.interpolations[0]
+print(item.expression, "|", item.value, "|", item.format_spec)
+</textarea>
+    </div>
+
+    <h3 id="deferred-annotations">Deferred evaluation of annotations (PEP 649 / 749)</h3>
+    <p>Before 3.14, annotations were evaluated eagerly when the <code>def</code> or <code>class</code> statement ran.
+      Referring to a class that was defined later in the file raised <code>NameError</code>, so people wrote string
+      annotations (<code>"Node"</code>) or put <code>from __future__ import annotations</code> at the top of every file.
+      In 3.14 annotations are stored as a small function and evaluated only when someone asks for them, for example via
+      <code>__annotations__</code> or <code>annotationlib.get_annotations()</code>.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong></p>
+<pre><code class="language-python">from __future__ import annotations  # or "Node" strings
+
+class Node:
+    def add(self, child: "Node") -&gt; "Node": ...</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">class Node:
+    def add(self, child: Node) -&gt; Node: ...
+# no quotes, no __future__ import</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Forward references just work">
+<textarea>
+def make_tree() -> Tree:          # Tree does not exist yet: fine in 3.14
+    return Tree([])
+
+class Tree:
+    def __init__(self, children: list[Tree]) -> None:
+        self.children = children
+
+print(make_tree())
+print(make_tree.__annotations__)   # evaluated now, when Tree exists
+</textarea>
+    </div>
+    <p>The full story (formats, <code>annotationlib</code>) is in <a href="#typing">Typing</a> below.</p>
+
+    <h3 id="except-no-parens">Bracketless <code>except</code> (PEP 758)</h3>
+    <p>You may now list several exception types after <code>except</code> or <code>except*</code> without parentheses,
+      <em>as long as you do not use <code>as</code></em>. With <code>as name</code>, the parentheses are still required,
+      because <code>except A, B as e</code> would be ambiguous to read.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong></p>
+<pre><code class="language-python">try:
+    value = int(text)
+except (ValueError, TypeError):
+    value = 0</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">try:
+    value = int(text)
+except ValueError, TypeError:
+    value = 0</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Try both forms">
+<textarea>
+def to_int(text):
+    try:
+        return int(text)
+    except ValueError, TypeError:          # new in 3.14
+        return 0
+
+def to_int_verbose(text):
+    try:
+        return int(text)
+    except (ValueError, TypeError) as exc:  # 'as' still needs parentheses
+        print("bad input:", exc)
+        return 0
+
+print(to_int("42"), to_int("x"), to_int(None))
+print(to_int_verbose("x"))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Do not confuse this with Python 2's <code>except ValueError, e:</code>, which meant
+      "bind the exception to <code>e</code>". In Python 3.14 <code>except A, B:</code> means "catch A or B" and binds
+      nothing.</p></aside>
+
+    <h3 id="finally-warnings">Warnings for control flow in <code>finally</code> (PEP 765)</h3>
+    <p>A <code>return</code>, <code>break</code>, or <code>continue</code> that leaves a <code>finally</code> block
+      silently discards any exception in flight, which hides real bugs. 3.14 emits a <code>SyntaxWarning</code> at
+      compile time for these. The code still runs, but linters and <code>-W error</code> builds will now flag it.</p>
+    <div class="two-col">
+      <div><p><strong>Before (bug hides):</strong></p>
+<pre><code class="language-python">def load():
+    try:
+        return parse()       # raises
+    finally:
+        return None          # swallows the error</code></pre></div>
+      <div><p><strong>After (clear):</strong></p>
+<pre><code class="language-python">def load():
+    try:
+        return parse()
+    finally:
+        cleanup()            # no return here
+</code></pre></div>
+    </div>
+    <div class="runnable" data-title="See the new SyntaxWarning">
+<textarea>
+import warnings
+
+source = """
+def risky():
+    try:
+        1 / 0
+    finally:
+        return "swallowed!"
+"""
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    namespace = {}
+    exec(compile(source, "<demo>", "exec"), namespace)
+
+for w in caught:
+    print(w.category.__name__, "->", w.message)
+print("risky() returns:", namespace["risky"](), "(the ZeroDivisionError vanished)")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="stdlib">
+    <h2>Standard library</h2>
+
+    <h3 id="zstd">Zstandard compression: <code>compression.zstd</code> (PEP 784)</h3>
+    <p><a href="https://facebook.github.io/zstd/">Zstandard</a> compresses about as well as gzip at a fraction of the CPU
+      time and decompresses very fast, which is why Parquet files, Linux packages, and many data pipelines use it.
+      3.14 adds the <code>compression</code> package with <code>compression.zstd</code>, and re-exports the old modules as
+      <code>compression.gzip</code>, <code>compression.bz2</code>, <code>compression.lzma</code>, and
+      <code>compression.zlib</code>. <code>tarfile</code>, <code>zipfile</code>, and <code>shutil</code> learned to read
+      and write Zstandard archives too (for example <code>tarfile.open(path, "w:zst")</code>,
+      <code>zipfile.ZIP_ZSTANDARD</code>, and the <code>"zstdtar"</code> archive format).</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong> a third-party package</p>
+<pre><code class="language-bash">pixi add zstandard</code></pre></div>
+      <div><p><strong>After (3.14):</strong> built in</p>
+<pre><code class="language-python">from compression import zstd
+blob = zstd.compress(data)</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Compress and round-trip">
+<textarea>
+import importlib.util
+
+if importlib.util.find_spec("compression.zstd") is None or importlib.util.find_spec("_zstd") is None:
+    print("This browser build of Python was compiled without zstd; run this locally with pixi run python.")
+else:
+    from compression import zstd
+    data = ("timestamp,city,temp\n" + "2026-10-14,Oslo,7.5\n" * 500).encode()
+    packed = zstd.compress(data, level=10)
+    print(f"{len(data):,} bytes -> {len(packed):,} bytes ({len(packed) / len(data):.1%})")
+    assert zstd.decompress(packed) == data
+    print("round trip OK")
+</textarea>
+    </div>
+
+    <h3 id="uuid7">Time-ordered IDs: <code>uuid.uuid7()</code></h3>
+    <p><code>uuid4()</code> is fully random, so new rows land at random places in a database index, which fragments it.
+      A <dfn>UUIDv7</dfn> starts with a 48-bit millisecond Unix timestamp, so IDs generated later sort later: great
+      primary keys that are still globally unique. 3.14 also adds <code>uuid6()</code> and <code>uuid8()</code>, plus
+      the <code>NIL</code> and <code>MAX</code> constants.</p>
+    <div class="runnable" data-title="UUIDv7 sorts by creation time">
+<textarea>
+import time
+import uuid
+
+ids = []
+for _ in range(4):
+    ids.append(uuid.uuid7())
+    time.sleep(0.002)
+
+for u in ids:
+    print(u, "version", u.version)
+print("already sorted:", ids == sorted(ids))
+ms = ids[0].int >> 80                    # top 48 bits are the timestamp in ms
+print("embedded time:", time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ms / 1000)), "UTC")
+</textarea>
+    </div>
+
+    <h3 id="pathlib-copy">Copy and move with <code>pathlib</code></h3>
+    <p><code>Path.copy(target)</code> copies a file or a whole directory tree, and <code>Path.move(target)</code> moves
+      one. Both return the new <code>Path</code>. There are also <code>copy_into(dir)</code> and
+      <code>move_into(dir)</code>. You no longer need to mix <code>pathlib</code> with <code>shutil</code> for everyday
+      file management.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong></p>
+<pre><code class="language-python">import shutil
+shutil.copy2(src, dst)
+shutil.move(str(dst), str(final))</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">dst = src.copy(dst)
+final = dst.move(final)</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Copy, move, and inspect">
+<textarea>
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp())
+report = root / "report.txt"
+report.write_text("Q3 numbers\n")
+
+(root / "backup").mkdir()
+backup = report.copy(root / "backup" / "report.txt")   # returns the new Path
+archived = report.move(root / "archive.txt")
+
+print(sorted(p.relative_to(root).as_posix() for p in root.rglob("*")))
+print("returned:", backup.name, archived.name)
+print("original still there?", report.exists())
+</textarea>
+    </div>
+
+    <h3 id="heapq-max">Max-heaps in <code>heapq</code></h3>
+    <p><code>heapq</code> has always been a <em>min</em>-heap. To get a max-heap you pushed negated numbers
+      (<code>-x</code>), which breaks for non-numeric items. 3.14 adds <code>heapify_max</code>,
+      <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>, and
+      <code>heapreplace_max</code>.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong></p>
+<pre><code class="language-python">heap = [-x for x in scores]
+heapq.heapify(heap)
+best = -heapq.heappop(heap)</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">heap = list(scores)
+heapq.heapify_max(heap)
+best = heapq.heappop_max(heap)</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Predict the max-heap output" data-predict>
+<textarea>
+import heapq
+
+heap = [3, 9, 1, 7]
+heapq.heapify_max(heap)
+heapq.heappush_max(heap, 5)
+print(heapq.heappop_max(heap), heapq.heappop_max(heap), heap[0])
+</textarea>
+    </div>
+
+    <h3 id="map-strict"><code>map(strict=True)</code></h3>
+    <p>Since 3.10, <code>zip(strict=True)</code> raises if its iterables have different lengths. 3.14 gives
+      <code>map</code> the same safety switch for multi-iterable calls, so a silently truncated result becomes a loud
+      <code>ValueError</code>.</p>
+    <div class="runnable" data-title="Catch a length mismatch">
+<textarea>
+prices = [10, 20, 30]
+quantities = [1, 2]            # one is missing!
+
+print(list(map(lambda p, q: p * q, prices, quantities)))   # silently drops 30
+try:
+    list(map(lambda p, q: p * q, prices, quantities, strict=True))
+except ValueError as exc:
+    print("ValueError:", exc)
+</textarea>
+    </div>
+
+    <h3 id="placeholder"><code>functools.Placeholder</code></h3>
+    <p><code>functools.partial</code> could only pre-fill arguments from the left (or by keyword). Many built-ins take
+      positional-only arguments, so you could not freeze, say, the second argument of <code>str.replace</code>.
+      <code>Placeholder</code> reserves a positional slot that is filled when the partial is called.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong></p>
+<pre><code class="language-python">underscore = lambda s: s.replace(" ", "_")</code></pre></div>
+      <div><p><strong>After (3.14):</strong></p>
+<pre><code class="language-python">from functools import partial, Placeholder as _
+underscore = partial(str.replace, _, " ", "_")</code></pre></div>
+    </div>
+    <div class="runnable" data-title="Fill the gap later">
+<textarea>
+from functools import Placeholder, partial
+
+underscore = partial(str.replace, Placeholder, " ", "_")
+print(underscore("hello big world"))
+
+starts_with_py = partial(str.startswith, Placeholder, "py")
+print([w for w in ["python", "pixi", "pytest", "numpy"] if starts_with_py(w)])
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="concurrency">
+    <h2>Concurrency</h2>
+
+    <h3 id="free-threading">Free-threaded Python is officially supported (PEP 779)</h3>
+    <p>The <dfn>GIL</dfn> (global interpreter lock) lets only one thread run Python bytecode at a time, so CPU-bound
+      threads never ran in parallel. 3.13 introduced an experimental build without the GIL; in 3.14 that
+      <em>free-threaded</em> build (<code>python3.14t</code>) moves to "officially supported" (phase II). It is still a
+      separate build, not the default. Single-threaded code runs a little slower on it, and C extensions must declare
+      support, but CPU-bound threads finally scale across cores.</p>
+    <div class="runnable" data-local="Real parallel threads need a local free-threaded build; the browser has no threads." data-title="Scale CPU work across threads (run locally)">
+<textarea>
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+def busy(n: int) -> int:
+    return sum(i * i for i in range(n))
+
+print("GIL enabled:", sys._is_gil_enabled())
+start = time.perf_counter()
+with ThreadPoolExecutor(max_workers=4) as pool:
+    list(pool.map(busy, [3_000_000] * 4))
+print(f"4 tasks on 4 threads: {time.perf_counter() - start:.2f}s")
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Try the free-threaded build without touching your project:
+      <code>pixi exec --spec "python-freethreading=3.14.*" python3.14t -c "import sys; print(sys._is_gil_enabled())"</code>.
+      In a workspace, add a separate feature, for example <code>pixi add --feature ft "python-freethreading=3.14.*"</code>, and
+      an environment that uses it. <a href="../modules/m37-concurrency.html">M37</a> covers when it pays off.</p></aside>
+
+    <h3 id="interpreters">Multiple interpreters: <code>concurrent.interpreters</code> (PEP 734)</h3>
+    <p>A <dfn>subinterpreter</dfn> is a separate Python interpreter inside the same process, each with its own modules
+      and (since 3.12) its own GIL. They give process-like isolation with thread-like cost. 3.14 exposes them in the
+      stdlib as <code>concurrent.interpreters</code> and adds <code>concurrent.futures.InterpreterPoolExecutor</code>,
+      which has the same API as the thread and process pools.</p>
+    <div class="two-col">
+      <div><p><strong>Before:</strong> processes for CPU parallelism</p>
+<pre><code class="language-python">from concurrent.futures import ProcessPoolExecutor
+with ProcessPoolExecutor() as pool:
+    results = list(pool.map(work, items))</code></pre></div>
+      <div><p><strong>After (3.14):</strong> interpreters</p>
+<pre><code class="language-python">from concurrent.futures import InterpreterPoolExecutor
+with InterpreterPoolExecutor() as pool:
+    results = list(pool.map(work, items))</code></pre></div>
+    </div>
+    <div class="runnable" data-local="Subinterpreters are not available in the browser build of CPython." data-title="Run code in another interpreter (run locally)">
+<textarea>
+from concurrent import interpreters
+
+interp = interpreters.create()
+interp.exec("import sys; print('hello from interpreter', id(sys))")
+print("main interpreter id:", interpreters.get_current().id, "| new one:", interp.id)
+interp.close()
+</textarea>
+    </div>
+
+    <h3 id="asyncio-ps">Inspecting running asyncio programs</h3>
+    <p>When an async service hangs, you want to know which tasks exist and what each is awaiting. 3.14 can show you
+      from outside the process: <code>python -m asyncio ps PID</code> prints a table of tasks, and
+      <code>python -m asyncio pstree PID</code> shows the await tree. It uses the same safe-attach machinery as remote
+      pdb (below). Inside a program, <code>asyncio.capture_call_graph()</code> and
+      <code>asyncio.print_call_graph()</code> give the same information.</p>
+<pre data-label="Terminal (two shells)"><code class="language-bash"># shell 1
+pixi run python crawler.py        # prints its PID, then runs for a while
+# shell 2
+pixi run python -m asyncio ps 12345
+pixi run python -m asyncio pstree 12345</code></pre>
+    <div class="runnable" data-title="Print the await graph from inside">
+<textarea>
+import asyncio
+
+async def leaf():
+    asyncio.print_call_graph()       # who is awaiting whom, right now
+    await asyncio.sleep(0)
+
+async def worker():
+    await leaf()
+
+async def main():
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(worker(), name="worker-1")
+
+await main()      # in a local script: asyncio.run(main())
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="typing">
+    <h2>Typing and annotations</h2>
+    <p>With deferred evaluation, an annotation may refer to names that do not exist (yet). Asking for its
+      <em>values</em> would then raise <code>NameError</code>. The new <code>annotationlib</code> module lets tools ask
+      for annotations in different <dfn>formats</dfn>:</p>
+    <table>
+      <thead><tr><th><code>annotationlib.Format</code></th><th>Returns</th><th>Use it for</th></tr></thead>
+      <tbody>
+        <tr><td><code>VALUE</code></td><td>Real objects (the default; may raise <code>NameError</code>)</td><td>Runtime validation (dataclasses, pydantic)</td></tr>
+        <tr><td><code>FORWARDREF</code></td><td>Real objects where possible, <code>ForwardRef</code> placeholders otherwise</td><td>Libraries that must not crash on missing names</td></tr>
+        <tr><td><code>STRING</code></td><td>The annotation source text</td><td>Documentation tools, help output</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Three ways to read the same annotations">
+<textarea>
+from annotationlib import Format, get_annotations
+
+def ship(order: Order, express: bool = False) -> Receipt: ...
+
+print(get_annotations(ship, format=Format.STRING))
+print(get_annotations(ship, format=Format.FORWARDREF))
+try:
+    get_annotations(ship)              # Format.VALUE
+except NameError as exc:
+    print("NameError:", exc)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Prefer <code>annotationlib.get_annotations(obj)</code> (or
+      <code>inspect.get_annotations</code>) over reading <code>obj.__annotations__</code> directly in library code.
+      <code>from __future__ import annotations</code> still works in 3.14 but is no longer needed for forward references
+      and is expected to be deprecated eventually. Type checkers such as mypy understand both.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="interpreter">
+    <h2>Performance and the interpreter</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Tail-call interpreter</h4><p>A new way of compiling CPython's bytecode loop in which each
+        opcode handler is a small C function that tail-calls the next one. With recent Clang it gives a few percent
+        speedup on typical benchmarks. It's an internal change: your code does not change.</p></div>
+      <div class="card"><h4>Experimental JIT</h4><p>Official Windows and macOS binaries now include the copy-and-patch JIT
+        (<a href="https://peps.python.org/pep-0744/">PEP 744</a>), off by default. Enable it with
+        <code>PYTHON_JIT=1</code>. Speedups in 3.14 are modest and vary.</p></div>
+      <div class="card"><h4>Incremental GC</h4><p>The cyclic garbage collector collects the old generation a slice at a
+        time, which cuts long pause times in programs with large heaps. (3.15 reverts to the generational collector; see
+        the <a href="python-315.html">3.15 preview</a>.)</p></div>
+    </div>
+<pre data-label="Terminal"><code class="language-bash"># is the JIT compiled in, and is it on?
+PYTHON_JIT=1 pixi run python -c "import sys; print(sys._jit.is_available(), sys._jit.is_enabled())"</code></pre>
+    <div class="runnable" data-title="Measure before you believe">
+<textarea>
+import timeit
+
+def loop_sum(n):
+    total = 0
+    for i in range(n):
+        total += i
+    return total
+
+for label, stmt in [("for loop", "loop_sum(10_000)"), ("built-in sum", "sum(range(10_000))")]:
+    t = min(timeit.repeat(stmt, globals=globals(), number=200, repeat=3))
+    print(f"{label:>13}: {t * 1000:.1f} ms per 200 calls")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Interpreter improvements speed up <em>every</em> program a little. Choosing
+      <code>sum()</code> over a hand-written loop speeds this one up a lot. Which should you reach for first when code is
+      slow? <a href="../modules/m39-performance.html">M39</a> argues: measure, then fix the algorithm, then the code,
+      and only then think about the interpreter.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tooling">
+    <h2>Tooling and the REPL</h2>
+    <h3 id="repl">A colorful, smarter REPL</h3>
+    <p>The interactive shell that 3.13 rewrote now <strong>syntax-highlights</strong> code as you type, and
+      tracebacks are in color. Import statements autocomplete module names (<code>import co</code> then
+      <kbd>Tab</kbd>). Colors follow the <code>PYTHON_COLORS</code>, <code>NO_COLOR</code>, and
+      <code>FORCE_COLOR</code> environment variables.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi run python                # the 3.14 REPL with highlighting
+NO_COLOR=1 pixi run python     # plain output (for screen readers or logs)</code></pre>
+    <h3 id="color-output">Color in <code>unittest</code>, <code>argparse</code>, and more</h3>
+    <p><code>unittest</code> output colors passes and failures. <code>argparse.ArgumentParser</code> has a
+      <code>color</code> parameter (on by default) that colors help text, and a <code>suggest_on_error</code> option
+      that suggests the closest valid choice when you mistype one. <code>json</code>, <code>calendar</code>, and other
+      command-line tools gained color too.</p>
+    <div class="runnable" data-title="argparse suggestions">
+<textarea>
+import argparse
+import contextlib
+import io
+
+parser = argparse.ArgumentParser(prog="pp", suggest_on_error=True, color=False)
+parser.add_argument("command", choices=["build", "test", "serve"])
+
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    try:
+        parser.parse_args(["tset"])
+    except SystemExit as exit_info:   # argparse exits on bad input
+        print("exit code:", exit_info.code)
+print(err.getvalue().strip().splitlines()[-1])
+</textarea>
+    </div>
+    <h3 id="remote-pdb">Attach a debugger to a running process (PEP 768)</h3>
+    <p>3.14 adds a safe hook that lets an external tool ask a running interpreter to execute code at a safe point. The
+      first user is pdb: <code>python -m pdb -p PID</code> attaches to a live process, without restarting it or having
+      added any debugging code. (For production use you can disable it with <code>PYTHON_DISABLE_REMOTE_DEBUG</code> or
+      <code>-X disable-remote-debug</code>.)</p>
+<pre data-label="Terminal"><code class="language-bash">pixi run python long_job.py &amp;     # prints nothing, runs for minutes
+pixi run python -m pdb -p $!       # attach to it and inspect frames</code></pre>
+    <div class="runnable" data-local="Attaching to another process requires a real OS process and permissions (on macOS you may need sudo)." data-title="A program to attach to (run locally)">
+<textarea>
+import os
+import time
+
+print("PID:", os.getpid(), "- attach with: pixi run python -m pdb -p", os.getpid())
+counter = 0
+while True:
+    counter += 1
+    time.sleep(1)
+</textarea>
+    </div>
+    <aside class="callout note"><p>Programs can also call <code>sys.remote_exec(pid, script_path)</code> to run a file
+      inside another Python process; the asyncio <code>ps</code>/<code>pstree</code> tools are built on the same
+      mechanism.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="upgrading">
+    <h2>Upgrading a project to 3.14</h2>
+    <ol>
+      <li>Pin it: <code>pixi add "python=3.14.*"</code>, then <code>pixi install</code> updates <code>pixi.lock</code>.</li>
+      <li>Run the full suite with warnings as errors once: <code>pixi run python -W error -m pytest</code>. New
+        <code>SyntaxWarning</code>s from PEP 765 and deprecations show up here.</li>
+      <li>Drop <code>from __future__ import annotations</code> and quoted forward references when you are ready (ruff's
+        <code>UP</code> rules help); code that reads <code>__annotations__</code> should switch to
+        <code>annotationlib.get_annotations</code>.</li>
+      <li>Set mypy's <code>python_version</code> to your lowest supported version, not 3.14, so 3.14-only APIs are
+        caught if you still support 3.12.</li>
+      <li>Test a CI matrix across the supported versions using Pixi features (see the
+        <a href="pixi-cheatsheet.html">Pixi cheat sheet</a>).</li>
+    </ol>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-py314-quiz">
+<script type="application/json">
+{"title": "Python 3.14 quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does <code>t\"Hi {name}\"</code> evaluate to?", "options": ["A <code>str</code>, like an f-string", "A <code>string.templatelib.Template</code>", "A <code>bytes</code> object", "A lazily evaluated f-string"], "answer": 1, "explanation": "<p>Template strings produce a <code>Template</code> that keeps literal text and interpolations separate, so a library can process the values (for example escape them) before building a string.</p>"},
+  {"type": "single", "prompt": "Which is valid Python 3.14?", "options": ["<code>except ValueError, TypeError as e:</code>", "<code>except ValueError, TypeError:</code>", "<code>except ValueError or TypeError:</code> catches both", "<code>except [ValueError, TypeError]:</code>"], "answer": 1, "explanation": "<p>PEP 758 allows unparenthesized lists only without <code>as</code>. <code>except A or B</code> evaluates to just <code>A</code>, a classic bug, and a list is not allowed.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import heapq\nh = [2, 8, 5]\nheapq.heapify_max(h)\nprint(heapq.heappop_max(h))", "answer": "8", "explanation": "<p>The new max-heap functions keep the largest item at index 0; <code>heappop_max</code> removes and returns it.</p>"},
+  {"type": "multi", "prompt": "Which of these need a local environment rather than the browser?", "options": ["The free-threaded build", "<code>python -m pdb -p PID</code>", "Template strings", "<code>concurrent.interpreters</code>", "<code>uuid.uuid7()</code>"], "answer": [0, 1, 3], "explanation": "<p>Pyodide has no threads, subinterpreters, or other processes to attach to. Template strings and <code>uuid7</code> are pure language/stdlib features that work anywhere 3.14 runs.</p>"},
+  {"type": "single", "prompt": "Why is <code>uuid7</code> a better database primary key than <code>uuid4</code>?", "options": ["It is shorter", "It is time-ordered, so new keys append to the index instead of landing at random positions", "It is cryptographically secret", "It never collides"], "answer": 1, "explanation": "<p>UUIDv7 begins with a millisecond timestamp. Inserts stay close together in B-tree indexes, reducing page splits.</p>"},
+  {"type": "single", "prompt": "With deferred annotations, when is <code>def f(x: Missing): ...</code> an error?", "options": ["When the <code>def</code> runs", "Only when something asks for the annotation values, such as <code>f.__annotations__</code>", "Never", "At import time of the module"], "answer": 1, "explanation": "<p>PEP 649 stores annotations as a function evaluated on demand. <code>annotationlib.get_annotations(f, format=Format.STRING)</code> works even when the name is missing.</p>"},
+  {"type": "text", "prompt": "Which <code>functools</code> object lets <code>partial</code> leave a positional slot to fill later?", "answer": ["Placeholder", "functools.Placeholder"], "explanation": "<p><code>partial(str.replace, Placeholder, \" \", \"_\")</code> fixes the second and third arguments and leaves the first open.</p>"},
+  {"type": "single", "prompt": "What happens with <code>return</code> inside <code>finally</code> in 3.14?", "options": ["It is a SyntaxError", "It compiles with a SyntaxWarning, because it can swallow exceptions", "It is silently allowed as before", "It raises RuntimeError at run time"], "answer": 1, "explanation": "<p>PEP 765 adds a compile-time <code>SyntaxWarning</code>; the behavior is unchanged, but the bug is now visible.</p>"},
+  {"type": "text", "prompt": "Which module, new in 3.14, provides Zstandard compression?", "answer": ["compression.zstd", "compression"], "explanation": "<p><code>from compression import zstd</code>. The <code>compression</code> package also re-exports gzip, bz2, lzma, and zlib.</p>"},
+  {"type": "single", "prompt": "Which command shows the tasks of a running asyncio program with PID 4242?", "options": ["<code>python -m asyncio ps 4242</code>", "<code>python -m pdb asyncio 4242</code>", "<code>python -X asyncio 4242</code>", "<code>asyncio.run(4242)</code>"], "answer": 0, "explanation": "<p><code>python -m asyncio ps PID</code> prints a task table; <code>pstree</code> prints the await tree.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Flashcards and further reading</h2>
+    <div class="flashcards" data-title="Python 3.14 in ten cards">
+<script type="application/json">
+[{"front": "PEP 750", "back": "Template strings: <code>t\"...\"</code> builds a <code>string.templatelib.Template</code>."},
+ {"front": "PEP 649 / 749", "back": "Annotations are evaluated lazily; read them with <code>annotationlib.get_annotations</code>."},
+ {"front": "PEP 758", "back": "<code>except A, B:</code> without parentheses (only when there is no <code>as</code>)."},
+ {"front": "PEP 765", "back": "SyntaxWarning for <code>return</code>/<code>break</code>/<code>continue</code> leaving a <code>finally</code>."},
+ {"front": "PEP 779", "back": "The free-threaded (no-GIL) build is officially supported, but not the default."},
+ {"front": "PEP 734", "back": "<code>concurrent.interpreters</code> and <code>InterpreterPoolExecutor</code>."},
+ {"front": "PEP 784", "back": "<code>compression.zstd</code>, plus Zstandard in tarfile, zipfile, and shutil."},
+ {"front": "PEP 768", "back": "Safe external debugger attach: <code>python -m pdb -p PID</code>."},
+ {"front": "Max-heap API", "back": "<code>heapq.heapify_max</code>, <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>, <code>heapreplace_max</code>."},
+ {"front": "<code>map(strict=True)</code>", "back": "Raises <code>ValueError</code> when the iterables have different lengths."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/whatsnew/3.14.html">What's New In Python 3.14</a> (the official, complete list)</li>
+      <li><a href="https://peps.python.org/pep-0750/">PEP 750</a>, <a href="https://peps.python.org/pep-0649/">PEP 649</a>, <a href="https://peps.python.org/pep-0779/">PEP 779</a>, <a href="https://peps.python.org/pep-0734/">PEP 734</a>, <a href="https://peps.python.org/pep-0768/">PEP 768</a></li>
+      <li><a href="https://py-free-threading.github.io/">Free-threaded Python guide</a></li>
+      <li>Next: <a href="python-315.html">Preview: Python 3.15</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

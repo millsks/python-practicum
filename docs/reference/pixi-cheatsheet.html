@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixi Cheat Sheet · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-pixi">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Tooling</p>
+    <h1>Pixi Cheat Sheet</h1>
+    <p class="lede">Every Pixi command and <code>pixi.toml</code> setting this course uses, in one place: installing,
+      adding packages, running code, tasks, environments, lockfiles, global tools, CI, and fixes for common problems.
+      If you know pip, venv, or conda, the translation tables at the end map your habits to Pixi.</p>
+    <div class="lesson-meta"><span>⏱ Keep open while you work</span><span><span class="tag pixi">pixi</span> examples tested with pixi 0.81</span><span>Docs: <a href="https://pixi.sh/latest/">pixi.sh</a></span></div>
+    <ul class="objectives">
+      <li>Install Pixi and create a workspace</li>
+      <li>Add conda-forge and PyPI dependencies, per feature and per platform</li>
+      <li>Define tasks with dependencies, arguments, environment variables, and caching</li>
+      <li>Compose environments from features and test across Python versions</li>
+      <li>Keep the lockfile healthy locally and in CI</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="mental-model">
+    <h2>The mental model</h2>
+    <p>A <dfn>workspace</dfn> is a folder with a <code>pixi.toml</code> manifest (what you <em>want</em>) and a
+      <code>pixi.lock</code> lockfile (exactly what was <em>resolved</em>, for every platform). Environments live in
+      <code>.pixi/envs/&lt;name&gt;</code> and are created from the lockfile. You never activate anything by hand:
+      <code>pixi run</code> puts the right environment on <code>PATH</code> for one command.</p>
+    <pre class="mermaid">
+flowchart LR
+  M["pixi.toml<br/>(what you ask for)"] -- "pixi lock / pixi install" --> L["pixi.lock<br/>(exact versions, all platforms)"]
+  L -- "pixi install" --> E[".pixi/envs/default<br/>(installed packages)"]
+  E -- "pixi run / pixi shell" --> C["your command"]
+  F["features"] --> M
+    </pre>
+    <aside class="callout pro"><p>Commit <code>pixi.toml</code> and <code>pixi.lock</code>. Ignore <code>.pixi/</code>.
+      Anyone who clones the repo and runs <code>pixi install</code> gets byte-for-byte the same packages you have.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="install">
+    <h2>Install and update Pixi</h2>
+    <div class="tabs">
+      <div class="tab" data-label="macOS / Linux">
+<pre data-label="Terminal"><code class="language-bash">curl -fsSL https://pixi.sh/install.sh | sh
+# or
+brew install pixi</code></pre></div>
+      <div class="tab" data-label="Windows">
+<pre data-label="PowerShell"><code class="language-bash">powershell -ExecutionPolicy ByPass -c "irm -useb https://pixi.sh/install.ps1 | iex"
+# or
+winget install prefix-dev.pixi</code></pre></div>
+      <div class="tab" data-label="After installing">
+<pre data-label="Terminal"><code class="language-bash">pixi --version              # check it is on PATH (restart the shell first)
+pixi self-update            # upgrade pixi itself (not for brew/winget installs)
+pixi completion --shell zsh # shell completion; also bash, fish, powershell</code></pre></div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="init">
+    <h2>Create a workspace</h2>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi init my-app</code></td><td>New folder with <code>pixi.toml</code>, <code>.gitignore</code>, <code>.gitattributes</code></td></tr>
+        <tr><td><code>pixi init</code></td><td>Initialize the current folder</td></tr>
+        <tr><td><code>pixi init --format pyproject</code></td><td>Put the Pixi config inside <code>pyproject.toml</code> under <code>[tool.pixi]</code> (this course keeps a separate <code>pixi.toml</code>)</td></tr>
+        <tr><td><code>pixi init -c conda-forge -p linux-64 -p osx-arm64</code></td><td>Choose channels and platforms up front</td></tr>
+        <tr><td><code>pixi import environment.yml</code></td><td>Bring an existing conda environment file into the workspace</td></tr>
+      </tbody>
+    </table>
+<pre data-label="Terminal: the first five minutes"><code class="language-bash">pixi init hello &amp;&amp; cd hello
+pixi add "python=3.14.*"
+pixi add numpy pytest
+echo 'print("hi")' &gt; app.py
+pixi run python app.py</code></pre>
+  </section>
+
+  <section class="lesson-section" id="dependencies">
+    <h2>Add and remove dependencies</h2>
+    <p>Pixi installs <strong>conda</strong> packages (from conda-forge by default) and <strong>PyPI</strong> packages
+      in the same environment. Prefer conda-forge: its packages ship compiled libraries and work across languages. Use
+      <code>--pypi</code> only for packages that are not on conda-forge.</p>
+    <table>
+      <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi add numpy</code></td><td>Add from conda-forge with a semver range, e.g. <code>numpy = "&gt;=2.3.4,&lt;3"</code></td></tr>
+        <tr><td><code>pixi add "numpy&gt;=2.1,&lt;3" "python=3.14.*"</code></td><td>Add with explicit version specs (quote them for the shell)</td></tr>
+        <tr><td><code>pixi add --pypi requests-cache</code></td><td>Add a PyPI package (<code>[pypi-dependencies]</code>)</td></tr>
+        <tr><td><code>pixi add --pypi --editable --path . my-package</code></td><td>Install your own <code>src/</code> package in editable mode</td></tr>
+        <tr><td><code>pixi add --pypi --git https://github.com/org/repo.git pkg --branch main</code></td><td>PyPI package from git (also <code>--tag</code>, <code>--rev</code>)</td></tr>
+        <tr><td><code>pixi add --feature test pytest pytest-cov</code></td><td>Add to a feature instead of the default set</td></tr>
+        <tr><td><code>pixi add --platform win-64 pywin32</code></td><td>Platform-specific dependency (<code>[target.win-64.dependencies]</code>)</td></tr>
+        <tr><td><code>pixi add --no-install pandas</code></td><td>Update manifest and lockfile only</td></tr>
+        <tr><td><code>pixi remove numpy</code></td><td>Remove (add <code>--pypi</code> / <code>--feature</code> to match how it was added)</td></tr>
+        <tr><td><code>pixi search pandas</code></td><td>Find a conda package and its latest version</td></tr>
+        <tr><td><code>pixi list</code> / <code>pixi tree</code> / <code>pixi tree -i openssl</code></td><td>Installed packages / dependency tree / who depends on openssl</td></tr>
+      </tbody>
+    </table>
+<pre data-label="pixi.toml"><code class="language-toml">[dependencies]                 # conda-forge packages, every environment
+python = "3.14.*"
+numpy = "&gt;=2.3,&lt;3"
+
+[pypi-dependencies]            # PyPI packages (only when not on conda-forge)
+my-app = { path = ".", editable = true }
+
+[target.linux-64.dependencies] # platform-specific
+libstdcxx-ng = "*"</code></pre>
+    <aside class="callout warn"><p>Never mix in <code>pip install</code>. Packages installed that way are not in the
+      lockfile, so nobody else gets them, and the next <code>pixi install</code> may remove them.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="running">
+    <h2>Run code: <code>run</code>, <code>shell</code>, <code>exec</code></h2>
+    <table>
+      <thead><tr><th>Command</th><th>Use it when</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi run python app.py</code></td><td>Run any command inside the default environment</td></tr>
+        <tr><td><code>pixi run test</code></td><td>Run a task defined in <code>[tasks]</code></td></tr>
+        <tr><td><code>pixi run -e py315 python -V</code></td><td>Run in a named environment</td></tr>
+        <tr><td><code>pixi run --clean-env python app.py</code></td><td>Hide your shell's environment variables (catches hidden assumptions)</td></tr>
+        <tr><td><code>pixi run python -m pytest -x</code></td><td>Run a module with flags</td></tr>
+        <tr><td><code>pixi shell</code> / <code>pixi shell -e py315</code></td><td>Interactive shell with the environment active; <code>exit</code> to leave</td></tr>
+        <tr><td><code>pixi shell-hook</code></td><td>Print activation script (for direnv, Docker entrypoints)</td></tr>
+        <tr><td><code>pixi exec --spec "python=3.15" python</code></td><td>One-off command in a temporary cached environment; no workspace needed</td></tr>
+        <tr><td><code>pixi exec ruff check .</code></td><td>Try a tool without installing it (<code>pixi x</code> is the short alias)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="tasks">
+    <h2>Tasks</h2>
+    <p>Tasks are named commands in <code>pixi.toml</code>. They run cross-platform (Pixi uses its own shell, so
+      <code>&amp;&amp;</code>, pipes, and <code>$VAR</code> work on Windows too).</p>
+<pre data-label="pixi.toml"><code class="language-toml">[tasks]
+fmt  = "ruff format ."
+lint = "ruff check ."
+test = { cmd = "pytest tests/unit", description = "Fast unit tests" }
+
+# run other tasks first
+ci = { depends-on = ["fmt", "lint", "test"] }
+
+# arguments with defaults:  pixi run greet   |   pixi run greet Ada
+greet = { cmd = "echo hello {{ name }}", args = [{ arg = "name", default = "world" }] }
+
+# environment variables and working directory
+serve = { cmd = "python -m http.server 8000", cwd = "docs", env = { PYTHONUNBUFFERED = "1" } }
+
+# caching: skipped when inputs and outputs are unchanged
+build = { cmd = "python -m build", inputs = ["src/**/*.py", "pyproject.toml"], outputs = ["dist/*"] }
+
+# run a dependency in another environment
+test-315 = { depends-on = [{ task = "test", environment = "py315" }] }
+
+[feature.docs.tasks]           # tasks that only exist in environments with this feature
+docs = "mkdocs serve"</code></pre>
+    <table>
+      <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>cmd</code></td><td>Command string (or list of arguments)</td></tr>
+        <tr><td><code>depends-on</code></td><td>Tasks to run first (names, or tables with <code>task</code>, <code>args</code>, <code>environment</code>)</td></tr>
+        <tr><td><code>args</code></td><td>Named arguments, used as <code>{{ name }}</code> in <code>cmd</code>; optional <code>default</code></td></tr>
+        <tr><td><code>env</code></td><td>Environment variables for this task</td></tr>
+        <tr><td><code>cwd</code></td><td>Working directory, relative to the workspace root</td></tr>
+        <tr><td><code>inputs</code> / <code>outputs</code></td><td>Glob patterns; when both are unchanged, the task is a cache hit and is skipped</td></tr>
+        <tr><td><code>description</code></td><td>Shown by <code>pixi task list</code></td></tr>
+        <tr><td><code>clean-env</code></td><td>Run with a minimal environment</td></tr>
+        <tr><td><code>default-environment</code></td><td>Environment used when you don't pass <code>-e</code></td></tr>
+      </tbody>
+    </table>
+<pre data-label="Terminal"><code class="language-bash">pixi task list                                   # what can I run?
+pixi task add test "pytest tests" --description "All tests"
+pixi task alias ci lint test                     # a task that only runs others
+pixi task add --feature docs docs "mkdocs serve"
+pixi task remove ci
+pixi run greet Ada                               # pass a task argument</code></pre>
+    <aside class="callout pixi"><p>This repository's own tasks: <code>pixi run serve</code> (the site),
+      <code>pixi run projects</code>, <code>pixi run start p01</code>, <code>pixi run grade p01</code>, and
+      <code>pixi run ci</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="environments">
+    <h2>Features, environments, and solve groups</h2>
+    <p>A <dfn>feature</dfn> is a named bundle of dependencies, tasks, and settings. An <dfn>environment</dfn> is a
+      list of features (plus the default feature, which is everything at the top level). A <dfn>solve group</dfn> makes
+      several environments share one resolution, so <code>prod</code> and <code>test</code> get identical versions of
+      shared packages.</p>
+<pre data-label="pixi.toml"><code class="language-toml">[dependencies]                  # the default feature: in every environment
+numpy = "&gt;=2.3,&lt;3"
+
+[feature.test.dependencies]
+pytest = "*"
+
+[feature.lint.dependencies]
+ruff = "*"
+mypy = "*"
+
+[feature.py314.dependencies]
+python = "3.14.*"
+[feature.py315.dependencies]
+python = "3.15.*"
+
+[environments]
+default = { features = ["py314", "test", "lint"], solve-group = "main" }
+prod    = { features = ["py314"], solve-group = "main" }        # same numpy as default
+py315   = ["py315", "test"]                                       # preview Python
+lint    = { features = ["lint"], no-default-feature = true }    # tiny: no numpy</code></pre>
+<pre data-label="Terminal"><code class="language-bash">pixi install -e py315           # install one environment
+pixi install --all              # install all of them
+pixi run -e py315 pytest        # run in one
+pixi workspace environment add docs --feature docs
+pixi workspace environment list
+pixi info                       # environments, features, platforms, cache paths</code></pre>
+    <aside class="callout danger"><p>Specs for the same package from different features are combined, not overridden.
+      Putting <code>python = "3.14.*"</code> at the top level and <code>python = "3.15.*"</code> in a feature makes that
+      environment unsolvable. Put each Python pin in its own feature, as above.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="platforms">
+    <h2>Platforms and system requirements</h2>
+    <p>The lockfile is solved for every platform in <code>platforms</code>, even ones you are not on, so a Mac user's
+      lockfile works on a Linux CI runner.</p>
+<pre data-label="pixi.toml"><code class="language-toml">[workspace]
+name = "my-app"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+
+[system-requirements]          # minimum system versions the packages may assume
+macos = "13.0"
+cuda = "12"
+
+[target.win-64.tasks]          # per-platform tasks (and dependencies, activation)
+open-docs = "start docs/index.html"</code></pre>
+<pre data-label="Terminal"><code class="language-bash">pixi workspace platform add linux-aarch64
+pixi workspace platform remove osx-64
+pixi workspace channel add bioconda</code></pre>
+  </section>
+
+  <section class="lesson-section" id="lockfile">
+    <h2>Lockfile, update, and upgrade</h2>
+    <table>
+      <thead><tr><th>Command</th><th>Changes manifest?</th><th>Changes lockfile?</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi install</code></td><td>No</td><td>Only if the manifest changed</td><td>Create/refresh environments</td></tr>
+        <tr><td><code>pixi install --locked</code></td><td>No</td><td>No; fails if out of date</td><td>CI: prove the lockfile matches the manifest</td></tr>
+        <tr><td><code>pixi install --frozen</code></td><td>No</td><td>No; installs the lockfile as is</td><td>Reproduce exactly, even if the manifest drifted</td></tr>
+        <tr><td><code>pixi lock</code></td><td>No</td><td>Yes</td><td>Re-solve without installing</td></tr>
+        <tr><td><code>pixi update</code> / <code>pixi update numpy</code></td><td>No</td><td>Yes: newest versions <em>within</em> current specs</td><td>Routine refresh</td></tr>
+        <tr><td><code>pixi update --dry-run</code></td><td>No</td><td>No</td><td>Preview what would change</td></tr>
+        <tr><td><code>pixi upgrade</code> / <code>pixi upgrade numpy</code></td><td>Yes: widens specs to the latest</td><td>Yes</td><td>Cross a major version</td></tr>
+        <tr><td><code>pixi reinstall</code></td><td>No</td><td>Only if needed</td><td>Rebuild a broken environment</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p>In a merge conflict on <code>pixi.lock</code>, don't hand-edit it: accept either side,
+      then run <code>pixi lock</code> to regenerate it from the merged <code>pixi.toml</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="global">
+    <h2>Global tools</h2>
+    <p><code>pixi global</code> installs command-line tools each into its own isolated environment and puts their
+      executables on your <code>PATH</code> (in <code>~/.pixi/bin</code>). Use it for tools you want everywhere
+      (<code>gh</code>, <code>git</code>, <code>ripgrep</code>), never for a project's own dependencies.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi global install gh ripgrep
+pixi global install --environment py python=3.14 ipython   # several packages in one env
+pixi global list
+pixi global update                # update all global environments
+pixi global remove --environment py ipython
+pixi global uninstall gh
+pixi global edit                  # open ~/.pixi/manifests/pixi-global.toml
+pixi global sync                  # make installed tools match that manifest</code></pre>
+  </section>
+
+  <section class="lesson-section" id="ci">
+    <h2>CI with GitHub Actions</h2>
+    <p>The official <code>prefix-dev/setup-pixi</code> action installs Pixi, installs your environments from the
+      lockfile, and caches them.</p>
+<pre data-label=".github/workflows/ci.yml"><code class="language-yaml">name: CI
+on:
+  push: { branches: ["main"] }
+  pull_request: { branches: ["main"] }
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: latest
+          cache: true                 # cache .pixi keyed on pixi.lock
+          environments: default py315 # which environments to install
+      - run: pixi run ci
+      - run: pixi run -e py315 test</code></pre>
+    <aside class="callout pro"><p>Because the lockfile covers every platform, the same three lines work on Linux, macOS,
+      and Windows. A Python-version matrix is just more Pixi environments, not more setup steps.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="explorer">
+    <h2>Interactive <code>pixi.toml</code> explorer</h2>
+    <p><code>pixi.toml</code> is plain TOML, so the standard library can read it. Edit the manifest below (add a task,
+      a feature, or an environment) and run the cell to see how Pixi would see it: tasks with their dependencies in
+      execution order, and each environment's resolved feature list.</p>
+    <div class="runnable" data-title="Explore a pixi.toml">
+<textarea>
+import tomllib
+from graphlib import TopologicalSorter
+
+MANIFEST = '''
+[workspace]
+name = "weather"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "win-64"]
+
+[dependencies]
+pandas = ">=3,<4"
+
+[feature.py314.dependencies]
+python = "3.14.*"
+[feature.py315.dependencies]
+python = "3.15.*"
+[feature.test.dependencies]
+pytest = "*"
+[feature.lint.dependencies]
+ruff = "*"
+
+[tasks]
+fmt = "ruff format ."
+lint = { cmd = "ruff check .", depends-on = ["fmt"] }
+test = { cmd = "pytest", description = "Run the tests" }
+ci = { depends-on = ["lint", "test"] }
+greet = { cmd = "echo hi {{ who }}", args = [{ arg = "who", default = "world" }] }
+
+[environments]
+default = { features = ["py314", "test", "lint"], solve-group = "main" }
+py315 = ["py315", "test"]
+lint = { features = ["lint"], no-default-feature = true }
+'''
+
+doc = tomllib.loads(MANIFEST)
+ws = doc["workspace"]
+print(f"workspace {ws['name']!r} on {', '.join(ws['platforms'])}\n")
+
+tasks = {name: (spec if isinstance(spec, dict) else {"cmd": spec}) for name, spec in doc.get("tasks", {}).items()}
+print("TASKS")
+for name, spec in tasks.items():
+    deps = spec.get("depends-on", [])
+    args = [a["arg"] if isinstance(a, dict) else a for a in spec.get("args", [])]
+    print(f"  {name:<6} cmd={spec.get('cmd', '-')!r:<16} depends-on={deps} args={args}")
+
+graph = {name: set(spec.get("depends-on", [])) for name, spec in tasks.items()}
+
+def needed(task):                      # the task plus everything it depends on, recursively
+    result = {task}
+    for dep in graph[task]:
+        result |= needed(dep)
+    return result
+
+order = [t for t in TopologicalSorter(graph).static_order() if t in needed("ci")]
+print("\n`pixi run ci` would run:", " -> ".join(order))
+
+print("\nENVIRONMENTS")
+features = doc.get("feature", {})
+for env, spec in doc.get("environments", {}).items():
+    spec = {"features": spec} if isinstance(spec, list) else spec
+    names = ([] if spec.get("no-default-feature") else ["(default)"]) + spec["features"]
+    deps = {} if spec.get("no-default-feature") else dict(doc.get("dependencies", {}))
+    for f in spec["features"]:
+        deps.update(features.get(f, {}).get("dependencies", {}))
+    group = spec.get("solve-group", "-")
+    print(f"  {env:<8} features={names} solve-group={group}")
+    print(f"  {'':<8} packages={deps}")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Translate requirements.txt into pixi add commands">
+<textarea>
+REQUIREMENTS = """
+numpy>=2.1
+pandas==3.0.6
+requests
+# comments are ignored
+some-internal-tool @ git+https://github.com/acme/tool.git
+"""
+
+ON_CONDA_FORGE = {"numpy", "pandas", "requests"}   # check with: pixi search <name>
+
+conda, pypi = [], []
+for line in REQUIREMENTS.splitlines():
+    line = line.split("#", 1)[0].strip()
+    if not line:
+        continue
+    name = line.split("@")[0].split("=")[0].split(">")[0].split("<")[0].strip()
+    (conda if name in ON_CONDA_FORGE and "@" not in line else pypi).append(line.replace("==", "="))
+
+print("pixi add " + " ".join(f'"{c}"' for c in conda))
+for p in pypi:
+    name, _, url = p.partition(" @ ")
+    print(f"pixi add --pypi {name} --git {url.removeprefix('git+')}" if url else f'pixi add --pypi "{p}"')
+</textarea>
+    </div>
+    <aside class="callout note"><p>conda version specs use a single <code>=</code> for "this version, any build"
+      (<code>pandas=3.0.6</code>) and <code>==</code> for an exact match; PyPI specs use <code>==</code>. Both accept
+      <code>&gt;=</code>, <code>&lt;</code>, and comma-separated ranges.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="config">
+    <h2>Configuration and activation</h2>
+<pre data-label="pixi.toml"><code class="language-toml">[activation.env]               # set whenever the environment is active
+APP_ENV = "dev"
+PYTHONWARNINGS = "default"
+
+[pypi-options]
+index-url = "https://pypi.org/simple"
+no-build-isolation = ["my-legacy-package"]</code></pre>
+<pre data-label="Terminal"><code class="language-bash">pixi config list
+pixi config set --local tls-root-certs system   # use the OS certificate store (corporate proxies)
+pixi config set default-channels '["conda-forge"]'
+pixi auth login prefix.dev --token $TOKEN       # private channels</code></pre>
+    <p>Workspace-local settings live in <code>.pixi/config.toml</code>; user-wide ones in
+      <code>~/.pixi/config.toml</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="troubleshooting">
+    <h2>Troubleshooting</h2>
+    <table>
+      <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>pixi: command not found</code></td><td>Shell not restarted after install</td><td>Open a new terminal, or add <code>~/.pixi/bin</code> to <code>PATH</code></td></tr>
+        <tr><td><code>ModuleNotFoundError</code> when running <code>python app.py</code></td><td>You ran the system Python, not the workspace's</td><td><code>pixi run python app.py</code>; check with <code>pixi run which python</code></td></tr>
+        <tr><td>"Cannot solve the request because of ..."</td><td>Conflicting specs (often two Python pins), or a package missing for one platform</td><td>Read the first lines of the message; loosen a spec; move pins into features; check <code>pixi search</code></td></tr>
+        <tr><td><code>lock-file not up-to-date with the workspace</code> in CI</td><td>Manifest changed without committing a new <code>pixi.lock</code></td><td>Run <code>pixi lock</code> locally and commit it</td></tr>
+        <tr><td>TLS / certificate errors behind a corporate proxy</td><td>Custom root certificate</td><td><code>pixi config set tls-root-certs system</code></td></tr>
+        <tr><td>Environment acts strange after an OS or Pixi update</td><td>Stale install</td><td><code>pixi clean</code> then <code>pixi install</code> (or <code>pixi reinstall</code>)</td></tr>
+        <tr><td>Disk filling up</td><td>Package cache</td><td><code>pixi clean cache</code></td></tr>
+        <tr><td>Task works in your shell, fails in CI</td><td>Relies on a variable from your shell profile</td><td>Reproduce with <code>pixi run --clean-env &lt;task&gt;</code>; put the variable in <code>env</code> or <code>[activation.env]</code></td></tr>
+        <tr><td>Need more detail</td><td>-</td><td>Add <code>-v</code>, <code>-vv</code>, or <code>-vvv</code> to any command</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="translation">
+    <h2>pip, venv, and conda → Pixi</h2>
+    <div class="tabs">
+      <div class="tab" data-label="pip + venv">
+        <table>
+          <thead><tr><th>You used to type</th><th>With Pixi</th></tr></thead>
+          <tbody>
+            <tr><td><code>python -m venv .venv</code></td><td><code>pixi init</code> (environments are created automatically)</td></tr>
+            <tr><td><code>source .venv/bin/activate</code></td><td><code>pixi shell</code>, or just prefix commands with <code>pixi run</code></td></tr>
+            <tr><td><code>pip install numpy</code></td><td><code>pixi add numpy</code></td></tr>
+            <tr><td><code>pip install obscure-pkg</code> (not on conda-forge)</td><td><code>pixi add --pypi obscure-pkg</code></td></tr>
+            <tr><td><code>pip install -e .</code></td><td><code>pixi add --pypi --editable --path . my-package</code></td></tr>
+            <tr><td><code>pip install -r requirements.txt</code></td><td><code>pixi install</code> (dependencies live in <code>pixi.toml</code>)</td></tr>
+            <tr><td><code>pip freeze &gt; requirements.txt</code></td><td>Automatic: <code>pixi.lock</code></td></tr>
+            <tr><td><code>pip uninstall numpy</code></td><td><code>pixi remove numpy</code></td></tr>
+            <tr><td><code>pip list</code></td><td><code>pixi list</code></td></tr>
+            <tr><td><code>pip install --upgrade numpy</code></td><td><code>pixi update numpy</code> (or <code>pixi upgrade numpy</code> to raise the spec)</td></tr>
+            <tr><td><code>python script.py</code></td><td><code>pixi run python script.py</code></td></tr>
+            <tr><td><code>pipx install ruff</code></td><td><code>pixi global install ruff</code></td></tr>
+            <tr><td><code>pipx run cowsay</code></td><td><code>pixi exec cowsay</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="conda / mamba">
+        <table>
+          <thead><tr><th>You used to type</th><th>With Pixi</th></tr></thead>
+          <tbody>
+            <tr><td><code>conda create -n proj python=3.14</code></td><td><code>pixi init proj &amp;&amp; pixi add "python=3.14.*"</code></td></tr>
+            <tr><td><code>conda activate proj</code></td><td><code>pixi shell</code> (per folder, not a global name)</td></tr>
+            <tr><td><code>conda install -c conda-forge pandas</code></td><td><code>pixi add pandas</code></td></tr>
+            <tr><td><code>conda env export &gt; environment.yml</code></td><td><code>pixi.toml</code> + <code>pixi.lock</code> are always up to date</td></tr>
+            <tr><td><code>conda env create -f environment.yml</code></td><td><code>pixi import environment.yml</code>, then <code>pixi install</code></td></tr>
+            <tr><td><code>conda env list</code></td><td><code>pixi info</code> (environments of this workspace)</td></tr>
+            <tr><td><code>conda update --all</code></td><td><code>pixi update</code></td></tr>
+            <tr><td><code>conda run -n proj pytest</code></td><td><code>pixi run pytest</code> or <code>pixi run -e test pytest</code></td></tr>
+            <tr><td><code>conda clean --all</code></td><td><code>pixi clean cache</code></td></tr>
+            <tr><td><code>conda install</code> into base for a tool</td><td><code>pixi global install &lt;tool&gt;</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="Makefile / scripts">
+        <table>
+          <thead><tr><th>You used to have</th><th>With Pixi</th></tr></thead>
+          <tbody>
+            <tr><td><code>make test</code></td><td><code>pixi run test</code> with <code>test = "pytest"</code> in <code>[tasks]</code></td></tr>
+            <tr><td><code>ci: lint test</code> target dependencies</td><td><code>ci = { depends-on = ["lint", "test"] }</code></td></tr>
+            <tr><td>Make's timestamp-based skipping</td><td><code>inputs</code> / <code>outputs</code> on a task</td></tr>
+            <tr><td><code>export FOO=1 &amp;&amp; ...</code></td><td><code>env = { FOO = "1" }</code></td></tr>
+            <tr><td>A <code>.ps1</code> and a <code>.sh</code> version of each script</td><td>One task; Pixi's shell is cross-platform</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-pixi-quiz">
+<script type="application/json">
+{"title": "Pixi quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which files should you commit?", "options": ["<code>pixi.toml</code> only", "<code>pixi.toml</code> and <code>pixi.lock</code>", "<code>.pixi/</code> and <code>pixi.lock</code>", "All three"], "answer": 1, "explanation": "<p>The manifest says what you want and the lockfile says exactly what was resolved. <code>.pixi/</code> is a local install, rebuilt from the lockfile.</p>"},
+  {"type": "single", "prompt": "A package exists on PyPI but not on conda-forge. How do you add it?", "options": ["<code>pip install pkg</code>", "<code>pixi add pkg</code>", "<code>pixi add --pypi pkg</code>", "<code>pixi global install pkg</code>"], "answer": 2, "explanation": "<p><code>--pypi</code> writes it to <code>[pypi-dependencies]</code> so it is locked like everything else.</p>"},
+  {"type": "single", "prompt": "What does <code>pixi update</code> do that <code>pixi upgrade</code> does not?", "options": ["Nothing; they are aliases", "It refreshes the lockfile within existing specs without editing <code>pixi.toml</code>", "It updates pixi itself", "It deletes the lockfile"], "answer": 1, "explanation": "<p><code>update</code> keeps your version ranges; <code>upgrade</code> rewrites the ranges in the manifest to allow the newest releases.</p>"},
+  {"type": "text", "prompt": "Which task key lists tasks that must run first?", "answer": ["depends-on"], "explanation": "<p><code>ci = { depends-on = [\"lint\", \"test\"] }</code>.</p>"},
+  {"type": "multi", "prompt": "Which commands run code with Python 3.15 (given a <code>py315</code> environment)?", "options": ["<code>pixi run -e py315 python app.py</code>", "<code>pixi exec --spec \"python=3.15\" python app.py</code>", "<code>pixi shell -e py315</code> then <code>python app.py</code>", "<code>python3.15 app.py</code>"], "answer": [0, 1, 2], "explanation": "<p>All three Pixi forms use a Pixi-managed 3.15. A bare <code>python3.15</code> depends on whatever is on your system.</p>"},
+  {"type": "single", "prompt": "In CI you want the job to fail if someone changed <code>pixi.toml</code> without updating <code>pixi.lock</code>. Which flag?", "options": ["<code>--frozen</code>", "<code>--locked</code>", "<code>--offline</code>", "<code>--no-install</code>"], "answer": 1, "explanation": "<p><code>--locked</code> checks that the lockfile satisfies the manifest and errors otherwise; <code>--frozen</code> installs the lockfile without checking.</p>"},
+  {"type": "single", "prompt": "Top-level <code>python = \"3.14.*\"</code> plus <code>[feature.py315.dependencies] python = \"3.15.*\"</code> in one environment gives:", "options": ["Python 3.15, because features override", "Python 3.14, because the top level wins", "An unsolvable environment, because the specs are combined", "Both Pythons side by side"], "answer": 2, "explanation": "<p>Specs from all features in an environment are intersected. Put each Python pin in its own feature.</p>"},
+  {"type": "text", "prompt": "Which command installs a CLI tool like <code>gh</code> for use in every folder?", "answer": ["pixi global install gh", "pixi global install"], "explanation": "<p><code>pixi global install</code> gives each tool its own isolated environment and exposes its executables on <code>PATH</code>.</p>"},
+  {"type": "single", "prompt": "What do <code>inputs</code> and <code>outputs</code> on a task enable?", "options": ["Parallel execution", "Skipping the task when nothing relevant changed (caching)", "Uploading build artifacts", "Reading stdin"], "answer": 1, "explanation": "<p>Pixi hashes the matched files; if they match the last successful run, the task is a cache hit.</p>"},
+  {"type": "single", "prompt": "What is a solve group for?", "options": ["Running tasks in parallel", "Making several environments share one resolution so common packages have identical versions", "Grouping platforms", "Splitting the lockfile"], "answer": 1, "explanation": "<p>Typical use: <code>prod</code> and <code>test</code> in one solve group, so you test exactly what you ship.</p>"}
+]}
+</script>
+    </div>
+    <div class="flashcards" data-title="Pixi essentials">
+<script type="application/json">
+[{"front": "Run a file", "back": "<code>pixi run python app.py</code>"},
+ {"front": "Add from conda-forge / PyPI", "back": "<code>pixi add pkg</code> / <code>pixi add --pypi pkg</code>"},
+ {"front": "Add to a feature", "back": "<code>pixi add --feature test pytest</code>"},
+ {"front": "Try another Python", "back": "<code>pixi exec --spec \"python=3.15\" python</code>"},
+ {"front": "Environment = ?", "back": "A list of features (plus the default feature unless <code>no-default-feature = true</code>)."},
+ {"front": "<code>update</code> vs <code>upgrade</code>", "back": "update: newer versions within specs. upgrade: raises the specs in pixi.toml."},
+ {"front": "Fix a lockfile merge conflict", "back": "Take either side, then <code>pixi lock</code>."},
+ {"front": "Tools everywhere", "back": "<code>pixi global install gh ripgrep</code>"}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a> and <a href="https://pixi.sh/latest/reference/pixi_manifest/">manifest reference</a></li>
+      <li><a href="https://github.com/prefix-dev/setup-pixi">setup-pixi GitHub Action</a></li>
+      <li>In this course: <a href="../modules/m00-setup.html">M00 Setup</a>, <a href="../modules/m08-modules.html">M08 Modules &amp; Pixi Projects</a>, <a href="../modules/m41-pixi-packaging.html">M41 Packaging &amp; Environments with Pixi</a>, <a href="../modules/m42-tooling.html">M42 Code Quality &amp; Tooling</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

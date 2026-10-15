@@ -1,0 +1,1497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M46 · Software Design &amp; Architecture · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m46">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 46</p>
+    <h1>Software Design &amp; Architecture</h1>
+    <p class="lede">Code that works is the beginning, not the end. Professional code must keep working while a team
+      changes it for years. This module is about the decisions that make change cheap: how pieces depend on each
+      other, which patterns earn their keep in Python, how to layer an application around its domain, and how to
+      improve messy code safely.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m12-inheritance.html">M12</a>, <a href="m13-dataclasses.html">M13</a>, <a href="m16-typing.html">M16</a>, <a href="m17-testing.html">M17</a></span></div>
+    <ul class="objectives">
+      <li>Judge a design by its coupling and cohesion, and apply SOLID in an idiomatic Python way</li>
+      <li>Use the patterns that matter in Python (strategy, factory, adapter, observer, decorator, command, repository)
+        with functions and Protocols, not ceremony</li>
+      <li>Structure an application as layers or ports and adapters, with dependency injection and a composition root</li>
+      <li>Model a domain with dataclasses and enums that make illegal states unrepresentable</li>
+      <li>Choose an error-handling and configuration strategy for a whole application</li>
+      <li>Refactor safely with tests, recognize code smells, and record decisions in ADRs</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="coupling-cohesion">
+    <h2>Why design? Coupling and cohesion</h2>
+    <p>Software design is the art of arranging code so that the changes you will need later are easy and the mistakes
+      you will make are caught early. Nearly all design advice reduces to two measurable ideas.</p>
+    <ul>
+      <li><strong>Coupling</strong> is how much one module depends on the details of another. If changing the database
+        schema forces edits in the report formatter, those two are tightly coupled. Low coupling means a change stays
+        local.</li>
+      <li><strong>Cohesion</strong> is how closely the contents of one module belong together. A module called
+        <code>utils.py</code> holding date parsing, email sending, and a retry helper has low cohesion. High cohesion
+        means each module has one clear purpose, so you know where code goes and where to find it.</li>
+    </ul>
+    <p>The goal is <strong>high cohesion, low coupling</strong>. Here is a function with both problems: it mixes
+      reading, business rules, and output (low cohesion), and it hard-codes where data comes from and goes to (high
+      coupling to the file system and the console).</p>
+    <div class="tabs">
+      <div class="tab" data-label="Tangled">
+<pre><code class="language-python">def monthly_report(path):
+    total = 0
+    for line in open(path):                      # coupled to a file format and the disk
+        name, amount, kind = line.strip().split(",")
+        if kind == "refund":
+            total -= float(amount)
+        else:
+            total += float(amount) * 1.2 if kind == "vat" else float(amount)
+    print(f"Total: {total:.2f}")                 # coupled to the console; returns nothing</code></pre>
+      </div>
+      <div class="tab" data-label="Separated">
+<pre><code class="language-python">from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Entry:
+    name: str
+    amount_cents: int
+    kind: str
+
+def parse_entries(lines):                        # input format, and nothing else
+    for line in lines:
+        name, amount, kind = line.strip().split(",")
+        yield Entry(name, round(float(amount) * 100), kind)
+
+def signed_amount(entry):                        # one business rule, testable alone
+    if entry.kind == "refund":
+        return -entry.amount_cents
+    return entry.amount_cents * 6 // 5 if entry.kind == "vat" else entry.amount_cents
+
+def total_cents(entries):
+    return sum(signed_amount(e) for e in entries)
+
+def format_total(cents):
+    return f"Total: {cents / 100:.2f}"           # presentation; the caller decides where it goes</code></pre>
+      </div>
+    </div>
+    <p>The separated version is longer, but every piece can be understood, tested, and changed alone. Reading from an
+      API instead of a file touches only <code>parse_entries</code>'s caller; a new tax rule touches only
+      <code>signed_amount</code>.</p>
+    <div class="runnable" data-title="Each piece is testable without files or the console">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Entry:
+    name: str
+    amount_cents: int
+    kind: str
+
+def parse_entries(lines):
+    for line in lines:
+        name, amount, kind = line.strip().split(",")
+        yield Entry(name, round(float(amount) * 100), kind)
+
+def signed_amount(entry):
+    if entry.kind == "refund":
+        return -entry.amount_cents
+    return entry.amount_cents * 6 // 5 if entry.kind == "vat" else entry.amount_cents
+
+def total_cents(entries):
+    return sum(signed_amount(e) for e in entries)
+
+lines = ["coffee,3.50,plain", "laptop,1000,vat", "mouse,20,refund"]
+entries = list(parse_entries(lines))
+assert signed_amount(Entry("x", 100, "vat")) == 120
+assert signed_amount(Entry("x", 100, "refund")) == -100
+print(entries[0])
+print(f"Total: {total_cents(entries) / 100:.2f}")
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> ask of every module "what is its one job?" (cohesion) and
+      "what would force me to change it?" (coupling). If the answer to the second is "lots of unrelated things", split
+      it.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="solid">
+    <h2>SOLID, the Pythonic way</h2>
+    <p>SOLID is five principles collected by Robert C. Martin for object-oriented design. They were written with Java
+      and C++ in mind; in Python, first-class functions, duck typing, and <code>typing.Protocol</code> often satisfy
+      them with much less code.</p>
+    <h3>S: Single responsibility</h3>
+    <p>A module or class should have <em>one reason to change</em>. The "Separated" tab above is SRP in action: parsing,
+      rules, and formatting change for different reasons (a new file format, a new tax, a new report layout), so they
+      live apart.</p>
+    <h3>O: Open/closed</h3>
+    <p>Code should be open for extension but closed for modification: adding a new case should not require editing a
+      growing <code>if/elif</code> chain. In Python, a <strong>registry</strong> dict is the lightest way to do it.</p>
+    <div class="runnable" data-title="Open/closed with a registry">
+<textarea>
+EXPORTERS = {}
+
+def exporter(fmt):
+    def register(func):
+        EXPORTERS[fmt] = func
+        return func
+    return register
+
+@exporter("csv")
+def to_csv(rows):
+    return "\n".join(",".join(map(str, r)) for r in rows)
+
+@exporter("md")
+def to_markdown(rows):
+    return "\n".join("| " + " | ".join(map(str, r)) + " |" for r in rows)
+
+def export(rows, fmt):            # never changes when a new format is added
+    try:
+        return EXPORTERS[fmt](rows)
+    except KeyError:
+        raise ValueError(f"unknown format {fmt!r}; choose from {sorted(EXPORTERS)}") from None
+
+# Extension: a new format in new code, without touching export().
+@exporter("tsv")
+def to_tsv(rows):
+    return "\n".join("\t".join(map(str, r)) for r in rows)
+
+rows = [("ada", 36), ("ben", 41)]
+for fmt in ("csv", "md", "tsv"):
+    print(f"--- {fmt}\n{export(rows, fmt)}")
+</textarea>
+    </div>
+    <h3>L: Liskov substitution</h3>
+    <p>A subclass must be usable anywhere its base class is expected, without surprising the caller. The classic
+      violation: a <code>Square</code> that inherits from <code>Rectangle</code> but forces width and height to stay
+      equal. Code written for rectangles breaks.</p>
+    <div class="runnable" data-title="Predict: does the Square behave like a Rectangle?" data-predict>
+<textarea>
+class Rectangle:
+    def __init__(self, w, h):
+        self.w, self.h = w, h
+    def set_width(self, w):
+        self.w = w
+    def area(self):
+        return self.w * self.h
+
+class Square(Rectangle):
+    def __init__(self, side):
+        super().__init__(side, side)
+    def set_width(self, w):          # keeps the square square... and breaks the contract
+        self.w = self.h = w
+
+def stretch(shape):
+    shape.set_width(10)              # a caller reasonably expects height to be unchanged
+    return shape.area()
+
+print(stretch(Rectangle(2, 5)), stretch(Square(5)))
+</textarea>
+    </div>
+    <p>The fix is not cleverer inheritance; it is to stop pretending a mutable square is a mutable rectangle. Make shapes
+      immutable values, or give them a common <code>Shape</code> protocol with just <code>area()</code>.</p>
+    <h3>I: Interface segregation</h3>
+    <p>Clients should not depend on methods they do not use. With <code>typing.Protocol</code> (structural typing from
+      <a href="m16-typing.html">M16</a>), each function declares the <em>smallest</em> interface it needs, and any object
+      with those methods qualifies, no inheritance required.</p>
+<pre><code class="language-python">from typing import Protocol
+
+class Readable(Protocol):
+    def read(self, key: str) -&gt; bytes: ...
+
+class Writable(Protocol):
+    def write(self, key: str, data: bytes) -&gt; None: ...
+
+def checksum(store: Readable, key: str) -&gt; int:      # needs only read(), so asks only for read()
+    return sum(store.read(key)) % 256</code></pre>
+    <h3>D: Dependency inversion</h3>
+    <p>High-level policy should not depend on low-level details; both should depend on abstractions. Concretely: your
+      business logic should not <code>import sqlite3</code> or <code>import httpx</code>. It should depend on a
+      Protocol it owns (<code>OrderRepository</code>, <code>PaymentGateway</code>), and the low-level adapters implement
+      that Protocol. This single principle is the foundation of the architecture section below.</p>
+    <aside class="callout warn"><p>Principles are tools, not laws. Applying every one to a 50-line script produces an
+      over-engineered maze of tiny classes. Introduce an abstraction when you have (or clearly will have) a second
+      implementation, or when you need it for testing. "You aren't gonna need it" (YAGNI) is a design principle
+      too.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="patterns">
+    <h2>Design patterns, the Python way</h2>
+    <p>A <strong>design pattern</strong> is a named, reusable solution to a recurring design problem. The famous 1994
+      "Gang of Four" book catalogued 23 of them for C++ and Smalltalk. Many exist mainly to work around missing language
+      features; in Python, several collapse into a function or a dict. Knowing the names still matters: they are the
+      vocabulary of design discussions.</p>
+
+    <h3>Strategy: pass a function</h3>
+    <p>Strategy means "make an algorithm a swappable parameter". In Python, functions are objects, so a strategy is
+      usually just a callable. You have used this pattern since <code>sorted(key=...)</code>.</p>
+    <div class="runnable" data-title="Strategy with plain functions">
+<textarea>
+from collections.abc import Callable
+
+Pricing = Callable[[int], int]          # cents in, cents out
+
+def regular(cents: int) -> int:
+    return cents
+
+def percent_off(pct: int) -> Pricing:   # a strategy factory: returns a configured strategy
+    def apply(cents: int) -> int:
+        return cents * (100 - pct) // 100
+    return apply
+
+def checkout(items: list[int], pricing: Pricing = regular) -> int:
+    return pricing(sum(items))
+
+cart = [1999, 500, 250]
+print(checkout(cart), checkout(cart, percent_off(10)), checkout(cart, lambda c: max(0, c - 1000)))
+</textarea>
+    </div>
+
+    <h3>Factory: one place that decides what to build</h3>
+    <p>A factory centralizes object creation so callers do not need to know concrete classes. Python's idioms are
+      alternative constructors (<code>@classmethod</code> such as <code>datetime.fromisoformat</code>) and a mapping from
+      names to classes, which is how the registry above works.</p>
+<pre><code class="language-python">class Storage(Protocol):
+    def save(self, key: str, data: bytes) -&gt; None: ...
+
+def make_storage(url: str) -&gt; Storage:            # callers ask for "a Storage", not a class
+    scheme = url.split("://", 1)[0]
+    match scheme:
+        case "file":
+            return FileStorage(url.removeprefix("file://"))
+        case "memory":
+            return MemoryStorage()
+        case _:
+            raise ValueError(f"unsupported storage {scheme!r}")</code></pre>
+
+    <h3>Adapter: make an existing thing fit the interface you need</h3>
+    <p>You have a third-party or legacy class with the wrong interface. Rather than spreading its quirks through your
+      code, wrap it once in an adapter that speaks your interface. Every "adapter" in ports-and-adapters architecture is
+      this pattern.</p>
+<pre><code class="language-python">class LegacyMailer:                                # can't change it: it's vendored
+    def send_mail_v2(self, to_addr, subj, body_text, html=False): ...
+
+class Notifier(Protocol):
+    def notify(self, user_email: str, message: str) -&gt; None: ...
+
+class LegacyMailerAdapter:                         # satisfies Notifier structurally
+    def __init__(self, mailer: LegacyMailer) -&gt; None:
+        self._mailer = mailer
+
+    def notify(self, user_email: str, message: str) -&gt; None:
+        self._mailer.send_mail_v2(user_email, "Notification", message)</code></pre>
+
+    <h3>Observer: tell interested parties that something happened</h3>
+    <p>An observer (publish/subscribe) decouples the code where an event happens from the code that reacts to it. The
+      order service publishes "order placed"; email, analytics, and inventory subscribe, and the order service knows
+      none of them. Step through it:</p>
+    <div class="tracer" data-title="Observer: an event bus">
+<textarea>
+subscribers = {}
+
+def subscribe(event, handler):
+    subscribers.setdefault(event, []).append(handler)
+
+def publish(event, payload):
+    for handler in subscribers.get(event, []):
+        handler(payload)
+
+sent = []
+subscribe("order_placed", lambda order: sent.append(f"email {order}"))
+subscribe("order_placed", lambda order: sent.append(f"stock {order}"))
+publish("order_placed", 42)
+publish("order_cancelled", 7)
+</textarea>
+    </div>
+
+    <h3>Decorator pattern vs <code>@decorator</code></h3>
+    <p>The names collide, so be precise. The <strong>decorator pattern</strong> wraps an <em>object</em> in another
+      object with the same interface to add behavior (caching, logging, retries) without changing the original. Python's
+      <strong><code>@decorator</code> syntax</strong> (<a href="m15-decorators.html">M15</a>) wraps a <em>function</em>
+      at definition time. They share the idea of wrapping; the pattern works on any object at runtime, the syntax on
+      functions and classes at definition time.</p>
+    <div class="runnable" data-title="The decorator pattern: a caching repository">
+<textarea>
+class SlowPriceRepo:
+    def __init__(self):
+        self.calls = 0
+    def price(self, sku):
+        self.calls += 1               # pretend this is a slow network call
+        return {"pen": 150, "mug": 800}[sku]
+
+class CachingPriceRepo:
+    """Same interface as the thing it wraps; adds caching."""
+    def __init__(self, inner):
+        self._inner, self._cache = inner, {}
+    def price(self, sku):
+        if sku not in self._cache:
+            self._cache[sku] = self._inner.price(sku)
+        return self._cache[sku]
+
+slow = SlowPriceRepo()
+repo = CachingPriceRepo(slow)         # callers can't tell the difference
+print([repo.price(s) for s in ["pen", "mug", "pen", "pen", "mug"]], "inner calls:", slow.calls)
+</textarea>
+    </div>
+
+    <h3>Command: actions as objects (and undo)</h3>
+    <p>A command packages a request (what to do, with which arguments) as an object, so you can queue it, log it, send it
+      elsewhere, or undo it. Editors, task queues, and database migrations are all built on commands.</p>
+    <div class="runnable" data-title="Command with undo">
+<textarea>
+from dataclasses import dataclass, field
+
+@dataclass
+class Account:
+    balance: int = 0
+
+@dataclass(frozen=True)
+class Deposit:
+    amount: int
+    def execute(self, acct):
+        acct.balance += self.amount
+    def undo(self, acct):
+        acct.balance -= self.amount
+
+@dataclass
+class History:
+    done: list = field(default_factory=list)
+    def run(self, command, acct):
+        command.execute(acct)
+        self.done.append(command)
+    def undo(self, acct):
+        if self.done:
+            self.done.pop().undo(acct)
+
+acct, history = Account(), History()
+for amount in (100, 50, 25):
+    history.run(Deposit(amount), acct)
+print(acct.balance, history.done)
+history.undo(acct)
+history.undo(acct)
+print(acct.balance)
+</textarea>
+    </div>
+
+    <h3>Repository: hide storage behind a collection-like interface</h3>
+    <p>A repository gives the domain a simple, collection-like interface (<code>add</code>, <code>get</code>,
+      <code>list</code>) and hides SQL, files, or HTTP behind it. The domain and service layers depend on the Protocol;
+      an in-memory implementation makes tests fast, and a SQLite or PostgreSQL implementation runs in production. You
+      will build exactly this in <a href="../projects/p06-habit-tracker.html">Project 6</a>.</p>
+
+    <h3>Dependency injection, without a framework</h3>
+    <p><strong>Dependency injection</strong> (DI) just means: an object receives its collaborators instead of
+      constructing or importing them. In Python you rarely need a DI container. Pass dependencies to
+      <code>__init__</code> (or as function parameters), and wire everything up in one place at startup, the
+      <strong>composition root</strong>.</p>
+    <div class="runnable" data-title="Constructor injection and a composition root">
+<textarea>
+from datetime import date
+from typing import Protocol
+
+class Clock(Protocol):
+    def today(self) -> date: ...
+
+class Mailer(Protocol):
+    def send(self, to: str, text: str) -> None: ...
+
+class RenewalService:
+    def __init__(self, clock: Clock, mailer: Mailer) -> None:     # injected, not created here
+        self._clock, self._mailer = clock, mailer
+
+    def remind(self, members: dict[str, date]) -> int:
+        today = self._clock.today()
+        due = [email for email, expires in members.items() if 0 <= (expires - today).days <= 7]
+        for email in due:
+            self._mailer.send(email, "Your membership expires within a week")
+        return len(due)
+
+# --- fakes for tests ---
+class FixedClock:
+    def __init__(self, day): self.day = day
+    def today(self): return self.day
+
+class OutboxMailer:
+    def __init__(self): self.outbox = []
+    def send(self, to, text): self.outbox.append(to)
+
+# --- the composition root (in production: SystemClock() and SmtpMailer(settings)) ---
+mailer = OutboxMailer()
+service = RenewalService(FixedClock(date(2026, 6, 1)), mailer)
+count = service.remind({"ada@x.io": date(2026, 6, 5), "ben@x.io": date(2026, 9, 1), "cy@x.io": date(2026, 5, 1)})
+print(count, mailer.outbox)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Layered and hexagonal architecture</h2>
+    <p><strong>Architecture</strong> is design at the scale of the whole application: which big parts exist and which
+      way their dependencies point. The traditional <strong>layered architecture</strong> stacks presentation (CLI,
+      web), application/service (use cases), domain (business rules), and infrastructure (database, network), with
+      each layer calling only the one below.</p>
+    <p><strong>Hexagonal architecture</strong> (Alistair Cockburn's "ports and adapters", closely related to "clean
+      architecture") refines this with one rule: <em>dependencies point inward, toward the domain</em>. The core
+      (domain + use cases) defines <strong>ports</strong>, interfaces in its own language, such as "a repository of
+      habits" or "a clock". <strong>Adapters</strong> on the outside implement those ports for specific technologies.
+      <em>Driving</em> adapters (a CLI, an HTTP API, tests) call into the core; <em>driven</em> adapters (SQLite, an
+      SMTP mailer, the system clock) are called by it.</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph driving["Driving adapters"]
+    CLI["CLI (argparse)"]
+    WEB["HTTP API (FastAPI)"]
+    TEST["Tests"]
+  end
+  subgraph core["Application core (no I/O imports)"]
+    UC["Service layer / use cases"]
+    DOM["Domain model<br/>entities, value objects, rules"]
+    P1(["Port: Repository"])
+    P2(["Port: Clock"])
+    P3(["Port: Notifier"])
+  end
+  subgraph driven["Driven adapters"]
+    SQL["SqliteRepository"]
+    MEM["InMemoryRepository"]
+    SYS["SystemClock / FixedClock"]
+    MAIL["SmtpNotifier"]
+  end
+  CLI --> UC
+  WEB --> UC
+  TEST --> UC
+  UC --> DOM
+  UC --> P1
+  UC --> P2
+  UC --> P3
+  SQL -. implements .-> P1
+  MEM -. implements .-> P1
+  SYS -. implements .-> P2
+  MAIL -. implements .-> P3
+    </pre>
+    <p>What this buys you:</p>
+    <ul>
+      <li><strong>Testability</strong>: the core runs in tests with in-memory adapters, in milliseconds, with no
+        database or network.</li>
+      <li><strong>Replaceability</strong>: moving from SQLite to PostgreSQL, or adding a web API next to the CLI, adds
+        an adapter and leaves the core untouched.</li>
+      <li><strong>Clarity</strong>: the most valuable code, the business rules, is not tangled with framework code that
+        goes out of date.</li>
+    </ul>
+<pre data-label="A typical package layout"><code class="language-bash">src/habits/
+  domain.py        # entities, value objects, pure rules: imports only the stdlib
+  ports.py         # Protocols the core needs: HabitRepository, Clock
+  service.py       # use cases: imports domain + ports, never an adapter
+  adapters/
+    memory.py      # InMemoryRepository
+    sqlite.py      # SqliteRepository (sqlite3 lives ONLY here)
+  cli.py           # the composition root: parses args, builds adapters, calls the service</code></pre>
+    <aside class="callout pro"><p>Enforce the dependency rule mechanically. The <code>import-linter</code> tool
+      (<code>pixi add --feature dev import-linter</code>) fails CI when, say, <code>habits.domain</code> imports
+      <code>habits.adapters</code>. Rules that are only written down get broken under deadline pressure.</p></aside>
+    <aside class="callout think"><p>In a hexagonal app, which layer should own the <code>HabitRepository</code>
+      Protocol: the domain/service core, or the SQLite adapter? (The core owns it. The interface is expressed in the
+      core's language and the adapter conforms to it; that is what "inverting" the dependency means.)</p></aside>
+  </section>
+
+  <section class="lesson-section" id="domain-modeling">
+    <h2>Domain modeling with dataclasses</h2>
+    <p>The <strong>domain model</strong> is code that represents the concepts of the problem (habits, orders, invoices)
+      and their rules. Two kinds of objects appear again and again:</p>
+    <ul>
+      <li><strong>Value objects</strong> are defined entirely by their values: two <code>Money(500, "EUR")</code> are
+        interchangeable. Make them immutable: <code>@dataclass(frozen=True)</code>.</li>
+      <li><strong>Entities</strong> have an identity that persists while their attributes change: a customer is the same
+        customer after changing address. They have an <code>id</code>.</li>
+    </ul>
+    <p>A good model <strong>enforces its invariants</strong> (rules that must always hold) at construction, so an
+      invalid object can never exist, and uses types to <strong>make illegal states unrepresentable</strong>: an enum
+      instead of a free-form string, a separate type instead of a flag that is only sometimes meaningful.</p>
+    <div class="runnable" data-title="Value objects with invariants">
+<textarea>
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+
+class Currency(StrEnum):
+    EUR = "EUR"
+    USD = "USD"
+
+@dataclass(frozen=True, slots=True)
+class Money:
+    cents: int
+    currency: Currency
+
+    def __post_init__(self):
+        if not isinstance(self.cents, int):
+            raise TypeError("cents must be an int; never use float for money")
+
+    def __add__(self, other):
+        if self.currency is not other.currency:
+            raise ValueError(f"cannot add {self.currency} to {other.currency}")
+        return Money(self.cents + other.cents, self.currency)
+
+    def __str__(self):
+        return f"{self.cents / 100:.2f} {self.currency}"
+
+class Status(StrEnum):
+    DRAFT = "draft"
+    SENT = "sent"
+    PAID = "paid"
+
+@dataclass(frozen=True)
+class Invoice:
+    number: str
+    lines: tuple[Money, ...]
+    status: Status = Status.DRAFT
+
+    def total(self):
+        return sum(self.lines[1:], start=self.lines[0])
+
+    def send(self):
+        if self.status is not Status.DRAFT:
+            raise ValueError(f"only drafts can be sent, this one is {self.status}")
+        return replace(self, status=Status.SENT)          # immutable: return a new version
+
+inv = Invoice("2026-001", (Money(1999, Currency.EUR), Money(501, Currency.EUR)))
+sent = inv.send()
+print(inv.status, sent.status, sent.total())
+for bad in (lambda: Money(1.5, Currency.EUR), lambda: Money(1, Currency.EUR) + Money(1, Currency.USD), sent.send):
+    try:
+        bad()
+    except (TypeError, ValueError) as exc:
+        print(type(exc).__name__, exc)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Keep the domain <strong>pure</strong>: no I/O, no clock reads, no logging
+      configuration. Pass in "today" and the data it needs. Pure code is the easiest code in the world to test, reason
+      about, and reuse.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="errors">
+    <h2>An error-handling strategy</h2>
+    <p>Error handling should be designed once for the whole application, not improvised in each function. A strategy
+      that works well in layered Python apps:</p>
+    <ol>
+      <li><strong>Define a domain exception hierarchy</strong> with one base class (<code>class AppError(Exception)</code>)
+        and specific subclasses (<code>NotFoundError</code>, <code>ValidationError</code>, <code>ConflictError</code>).
+        Callers can catch one family or one case.</li>
+      <li><strong>Fail fast</strong> on invalid input at the boundary (parse, don't validate: turn raw input into typed
+        domain objects immediately).</li>
+      <li><strong>Translate at the edges.</strong> Adapters convert technology errors into domain errors
+        (<code>sqlite3.IntegrityError</code> becomes <code>DuplicateError</code>, using <code>raise ... from exc</code> to
+        keep the cause). The driving adapter converts domain errors into its own language: an exit code for a CLI, a
+        status code for HTTP.</li>
+      <li><strong>Never swallow errors.</strong> <code>except Exception: pass</code> hides bugs forever. Catch what you
+        can handle; let the rest propagate to a top-level handler that logs it with structlog and fails visibly.</li>
+      <li><strong>Distinguish expected outcomes from errors.</strong> "Not found" in a lookup may be a normal
+        <code>None</code>; a corrupted file is an exception.</li>
+    </ol>
+    <div class="runnable" data-title="Translate errors at each boundary">
+<textarea>
+class AppError(Exception):
+    """Base for errors the application raises on purpose."""
+
+class NotFoundError(AppError):
+    pass
+
+class ValidationError(AppError):
+    pass
+
+# Driven adapter: technology error -> domain error.
+class DictRepo:
+    def __init__(self):
+        self._rows = {"ada": {"email": "ada@x.io"}}
+    def get(self, user_id):
+        try:
+            return self._rows[user_id]
+        except KeyError:
+            raise NotFoundError(f"user {user_id!r} does not exist") from None
+
+# Use case: domain rules raise domain errors.
+def change_email(repo, user_id, email):
+    if "@" not in email:
+        raise ValidationError(f"invalid email {email!r}")
+    repo.get(user_id)["email"] = email
+
+# Driving adapter (an HTTP-ish front end): domain error -> status code.
+STATUS = {NotFoundError: 404, ValidationError: 422}
+
+def handle(repo, user_id, email):
+    try:
+        change_email(repo, user_id, email)
+        return 204
+    except AppError as exc:
+        return STATUS.get(type(exc), 400)
+
+repo = DictRepo()
+print(handle(repo, "ada", "ada@new.io"), handle(repo, "zed", "z@x.io"), handle(repo, "ada", "nope"))
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14 (PEP 758) allows <code>except NotFoundError, ValidationError:</code>
+      without parentheses when you do not bind the exception with <code>as</code>. With <code>as exc</code>, the
+      parentheses are still required: <code>except (NotFoundError, ValidationError) as exc:</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="configuration">
+    <h2>Configuration</h2>
+    <p>Configuration is everything that varies between deployments (development, CI, production): database URLs, API
+      keys, log levels, feature flags. The widely adopted "twelve-factor app" rule is to <strong>read configuration from
+      environment variables</strong>, keep secrets out of the repository, and keep code identical across
+      environments.</p>
+    <p>Read and validate configuration <strong>once</strong>, at startup, into an immutable, typed settings object, then
+      inject it. Never sprinkle <code>os.environ["..."]</code> through the codebase: that couples everything to the
+      process environment and makes tests depend on global state.</p>
+    <div class="runnable" data-title="Typed settings from the environment">
+<textarea>
+from dataclasses import dataclass
+from collections.abc import Mapping
+
+@dataclass(frozen=True)
+class Settings:
+    database_url: str = "sqlite:///app.db"
+    log_level: str = "info"
+    max_retries: int = 3
+    debug: bool = False
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str], prefix: str = "APP_") -> "Settings":
+        def get(name, default):
+            return env.get(prefix + name.upper(), default)
+        level = get("log_level", cls.log_level).lower()
+        if level not in {"debug", "info", "warning", "error"}:
+            raise ValueError(f"APP_LOG_LEVEL must be debug/info/warning/error, got {level!r}")
+        return cls(
+            database_url=get("database_url", cls.database_url),
+            log_level=level,
+            max_retries=int(get("max_retries", cls.max_retries)),
+            debug=str(get("debug", cls.debug)).lower() in {"1", "true", "yes"},
+        )
+
+# In production: Settings.from_env(os.environ). In tests: any dict.
+print(Settings.from_env({}))
+print(Settings.from_env({"APP_DATABASE_URL": "postgresql://db/prod", "APP_MAX_RETRIES": "5", "APP_DEBUG": "true"}))
+</textarea>
+    </div>
+    <p>For larger apps, <strong>pydantic-settings</strong> does this declaratively, with type conversion, validation,
+      <code>.env</code> file support, and nested settings:</p>
+    <div class="runnable" data-local="pydantic-settings is not available in the browser. Run `pixi add pydantic-settings`, then `pixi run python settings.py`." data-title="pydantic-settings">
+<textarea>
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env")
+
+    database_url: str = "sqlite:///app.db"
+    api_token: SecretStr                  # required; repr() shows '**********'
+    max_retries: int = 3
+    debug: bool = False
+
+
+settings = Settings()                     # reads APP_* variables and .env, validates types
+print(settings.max_retries, settings.api_token)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Add <code>.env</code> to <code>.gitignore</code> on day one. Commit a
+      <code>.env.example</code> with dummy values instead, so others know which variables exist.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="refactoring">
+    <h2>Refactoring with confidence</h2>
+    <p><strong>Refactoring</strong> is changing the structure of code without changing its behavior, in small steps,
+      with tests passing after each one (Martin Fowler's definition). The tests are what make it refactoring rather than
+      rewriting. If the code has no tests, first write <strong>characterization tests</strong>: tests that pin down what
+      the code does today, even the odd parts, so you will notice if you change it.</p>
+    <h3>Extract function</h3>
+    <div class="tabs">
+      <div class="tab" data-label="Before">
+<pre><code class="language-python">def print_invoice(invoice):
+    print(f"Invoice {invoice.number}")
+    total = 0
+    for line in invoice.lines:
+        amount = line.qty * line.unit_cents
+        if line.qty &gt;= 10:
+            amount = amount * 90 // 100
+        total += amount
+    print(f"Total: {total / 100:.2f}")</code></pre>
+      </div>
+      <div class="tab" data-label="After">
+<pre><code class="language-python">def line_amount(line):
+    amount = line.qty * line.unit_cents
+    return amount * 90 // 100 if line.qty &gt;= 10 else amount   # bulk discount, now nameable and testable
+
+def invoice_total(invoice):
+    return sum(line_amount(line) for line in invoice.lines)
+
+def render_invoice(invoice):
+    return f"Invoice {invoice.number}\nTotal: {invoice_total(invoice) / 100:.2f}"</code></pre>
+      </div>
+    </div>
+    <h3>Introduce parameter object</h3>
+    <div class="tabs">
+      <div class="tab" data-label="Before">
+<pre><code class="language-python">def search(query, start_date, end_date, min_amount, max_amount, page, per_page):
+    ...
+
+search("coffee", d1, d2, 0, 5000, 1, 50)          # which number is which?</code></pre>
+      </div>
+      <div class="tab" data-label="After">
+<pre><code class="language-python">@dataclass(frozen=True)
+class DateRange:
+    start: date
+    end: date
+    def __post_init__(self):
+        if self.end &lt; self.start:
+            raise ValueError("end before start")    # the invariant now lives in one place
+
+@dataclass(frozen=True)
+class Page:
+    number: int = 1
+    size: int = 50
+
+def search(query: str, period: DateRange, amount: range, page: Page = Page()):
+    ...
+
+search("coffee", DateRange(d1, d2), range(0, 5001))</code></pre>
+      </div>
+    </div>
+    <h3>Replace conditional with polymorphism</h3>
+    <div class="tabs">
+      <div class="tab" data-label="Before">
+<pre><code class="language-python">def shipping_cost(order):
+    if order.method == "standard":
+        return 499
+    elif order.method == "express":
+        return 999 + 100 * order.weight_kg
+    elif order.method == "pickup":
+        return 0
+    raise ValueError(order.method)   # and the same if/elif appears in eta() and label()...</code></pre>
+      </div>
+      <div class="tab" data-label="After">
+<pre><code class="language-python">class Shipping(Protocol):
+    def cost(self, order: Order) -&gt; int: ...
+    def eta_days(self) -&gt; int: ...
+
+class Standard:
+    def cost(self, order): return 499
+    def eta_days(self): return 5
+
+class Express:
+    def cost(self, order): return 999 + 100 * order.weight_kg
+    def eta_days(self): return 1
+
+class Pickup:
+    def cost(self, order): return 0
+    def eta_days(self): return 0
+
+SHIPPING: dict[str, Shipping] = {"standard": Standard(), "express": Express(), "pickup": Pickup()}
+
+def shipping_cost(order):
+    return SHIPPING[order.method].cost(order)        # a new method = a new class, no edits here</code></pre>
+      </div>
+    </div>
+    <p>Polymorphism pays off when the <em>same</em> switch on a type code appears in several places. A single, stable
+      <code>match</code> statement is often clearer than a class hierarchy; refactor when the duplication appears.</p>
+    <div class="runnable" data-title="Characterization test, then refactor">
+<textarea>
+from dataclasses import dataclass
+
+@dataclass
+class Line:
+    qty: int
+    unit_cents: int
+
+def legacy_total(lines):                       # the code we inherited
+    t = 0
+    for l in lines:
+        a = l.qty * l.unit_cents
+        if l.qty >= 10:
+            a = a * 90 // 100
+        t += a
+    return t
+
+def line_amount(line):                          # the refactored version
+    amount = line.qty * line.unit_cents
+    return amount * 90 // 100 if line.qty >= 10 else amount
+
+def total(lines):
+    return sum(map(line_amount, lines))
+
+# Characterization: compare old and new on many inputs, including edge cases.
+import random
+rng = random.Random(0)
+for _ in range(1000):
+    lines = [Line(rng.randint(0, 20), rng.randint(0, 999)) for _ in range(rng.randint(0, 5))]
+    assert total(lines) == legacy_total(lines), lines
+print("behavior preserved on 1000 random invoices")
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="smells">
+    <h2>Code smells</h2>
+    <p>A <strong>code smell</strong> is a surface symptom that often (not always) indicates a deeper design problem.
+      Learn to notice them; each has standard refactorings.</p>
+    <table>
+      <thead><tr><th>Smell</th><th>What it looks like</th><th>Typical refactoring</th></tr></thead>
+      <tbody>
+        <tr><td>Long function</td><td>Scrolling to read one function; comments separating "sections"</td><td>Extract function</td></tr>
+        <tr><td>Long parameter list</td><td>Five or more positional parameters; calls full of bare numbers</td><td>Introduce parameter object; keyword-only args</td></tr>
+        <tr><td>Primitive obsession</td><td>Money as float, emails and ids as bare <code>str</code>, status as magic strings</td><td>Value objects, enums, <code>NewType</code></td></tr>
+        <tr><td>Duplicated code</td><td>The same logic pasted in several places, slowly diverging</td><td>Extract function; pull up to a shared module</td></tr>
+        <tr><td>Repeated switch</td><td>The same <code>if kind == ...</code> chain in many functions</td><td>Replace conditional with polymorphism or a registry</td></tr>
+        <tr><td>Feature envy</td><td>A function that mostly manipulates another object's data</td><td>Move the function onto that object</td></tr>
+        <tr><td>Shotgun surgery</td><td>One change requires edits in many files</td><td>Move related code together (raise cohesion)</td></tr>
+        <tr><td>God object</td><td>A <code>Manager</code> or <code>Utils</code> class that does everything</td><td>Split by responsibility</td></tr>
+        <tr><td>Flag arguments</td><td><code>save(data, True, False)</code></td><td>Separate functions, or an enum parameter</td></tr>
+        <tr><td>Hidden dependencies</td><td><code>datetime.now()</code>, globals, or <code>os.environ</code> deep inside logic</td><td>Inject a clock, settings, or a port</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout pixi"><p>Tooling catches some smells automatically: <code>pixi run ruff check --select C90,PLR</code>
+      flags overly complex functions (McCabe complexity) and too many arguments, branches, or statements. Use the
+      numbers as prompts for a conversation, not as hard rules.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="adrs">
+    <h2>Architecture decision records</h2>
+    <p>Six months from now, someone (often you) will ask "why on earth did we use SQLite?" An <strong>architecture
+      decision record</strong> (ADR) is a short document, kept in the repository (for example
+      <code>docs/adr/0003-use-sqlite.md</code>), that captures one significant decision: the context, the decision, and
+      its consequences. ADRs are numbered and never edited after acceptance; a later ADR <em>supersedes</em> an earlier
+      one. The format, proposed by Michael Nygard, fits on one screen:</p>
+<pre data-label="docs/adr/0003-use-sqlite-for-storage.md"><code># 3. Use SQLite for habit storage
+
+Date: 2026-03-14
+Status: Accepted (supersedes ADR 1, "store habits in a JSON file")
+
+## Context
+The JSON file is rewritten on every check-in, and two CLI processes running at once lost data
+(issue #41). We need atomic writes, simple queries for streak statistics, and zero setup for users.
+We expect one user per database and fewer than 100k rows.
+
+## Decision
+Store data in SQLite via the stdlib sqlite3 module, behind the HabitRepository port.
+Schema changes are versioned migrations recorded in a schema_version table.
+
+## Consequences
++ Atomic transactions; no lost updates; no new dependency.
++ The port keeps a future PostgreSQL adapter possible without touching the domain.
+- Only one writer at a time; acceptable for a single-user CLI, revisit for the web version.
+- We must maintain migrations ourselves (see ADR 4 if we adopt Alembic).</code></pre>
+    <aside class="callout pro"><p>Write an ADR when a decision is expensive to reverse, surprising, or was debated:
+      choosing a database, a framework, an architecture style, an API versioning scheme. Link ADRs from pull requests
+      so reviewers see the reasoning.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="testability">
+    <h2>Designing for testability</h2>
+    <p>Hard-to-test code is almost always badly designed code; the test is just the first client to notice. Design
+      choices that make testing easy:</p>
+    <ul>
+      <li><strong>Functional core, imperative shell</strong>: put decisions in pure functions (the core) and keep I/O in
+        a thin outer layer (the shell). The core gets fast, exhaustive unit tests; the shell gets a few integration
+        tests.</li>
+      <li><strong>Seams</strong>: a seam is a place where you can substitute behavior without editing code. Constructor
+        parameters, function parameters, and Protocols are seams. A hard-coded <code>datetime.now()</code> is not.</li>
+      <li><strong>Prefer fakes to mocks.</strong> A fake is a small working implementation (an
+        <code>InMemoryRepository</code>, a <code>FixedClock</code>). Mocks that assert "method X was called with Y" test
+        implementation details and break on every refactor. Assert on outcomes instead.</li>
+      <li><strong>Contract tests</strong>: when several adapters implement one port, run the same test suite against
+        each (a parametrized pytest fixture) to prove they are interchangeable.</li>
+    </ul>
+    <div class="runnable" data-title="Functional core, imperative shell">
+<textarea>
+from dataclasses import dataclass
+
+# ---- functional core: pure, deterministic, trivially testable ----
+@dataclass(frozen=True)
+class Reading:
+    sensor: str
+    celsius: float
+
+def alerts(readings: list[Reading], limit: float) -> list[str]:
+    return [f"{r.sensor} is {r.celsius:.1f}°C (limit {limit:.1f})" for r in readings if r.celsius > limit]
+
+# ---- imperative shell: gathers input, calls the core, performs output ----
+def run(read_sensors, send, limit=30.0):
+    for message in alerts(read_sensors(), limit):
+        send(message)
+
+# Unit tests hit the core directly...
+assert alerts([Reading("a", 31.0), Reading("b", 20.0)], 30.0) == ["a is 31.0°C (limit 30.0)"]
+assert alerts([], 30.0) == []
+# ...and one small test drives the shell with fakes.
+outbox = []
+run(lambda: [Reading("server-room", 34.2), Reading("lobby", 21.0)], outbox.append)
+print(outbox)
+</textarea>
+    </div>
+    <aside class="callout note"><p>Put it all together and you have the architecture of
+      <a href="../projects/p06-habit-tracker.html">Project 6</a>: a pure domain (streak rules), Protocol ports
+      (<code>HabitRepository</code>, <code>Clock</code>), in-memory and SQLite adapters checked by one contract suite,
+      a service layer of use cases tested with a fake clock, and a thin CLI composition root.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m46-e1" data-title="Strategies as functions">
+      <div class="exercise-prompt">
+        <p>Write three pricing strategies (each takes a total in cents and returns cents): <code>no_discount</code>,
+          <code>percent_off(pct)</code> (a <em>factory</em> returning a strategy; round down with <code>//</code>), and
+          <code>bulk(threshold, off_cents)</code> (a factory: subtract <code>off_cents</code> when the total is at least
+          <code>threshold</code>, never going below 0). Then write <code>best_price(total, strategies)</code> returning
+          the lowest price any strategy gives.</p>
+      </div>
+<textarea class="starter">
+def no_discount(cents):
+    ...
+
+def percent_off(pct):
+    ...
+
+def bulk(threshold, off_cents):
+    ...
+
+def best_price(total, strategies):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_no_discount():
+    assert no_discount(1234) == 1234
+
+def test_percent_off_is_a_factory():
+    ten = percent_off(10)
+    assert callable(ten), "percent_off(10) must return a function"
+    assert ten(1000) == 900 and ten(999) == 899, "use integer division to round down"
+
+def test_bulk():
+    deal = bulk(5000, 700)
+    assert deal(4999) == 4999, "below the threshold nothing changes"
+    assert deal(5000) == 4300, "the threshold is inclusive"
+    assert bulk(0, 700)(500) == 0, "never below zero"
+
+def test_best_price():
+    assert best_price(6000, [no_discount, percent_off(10), bulk(5000, 700)]) == 5300
+    assert best_price(1000, [no_discount, percent_off(10), bulk(5000, 700)]) == 900
+    assert best_price(42, [no_discount]) == 42
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A factory defines an inner function that uses the outer arguments
+        (a closure) and returns it. <code>best_price</code> is
+        <code>min(s(total) for s in strategies)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def no_discount(cents):
+    return cents
+
+def percent_off(pct):
+    def apply(cents):
+        return cents * (100 - pct) // 100
+    return apply
+
+def bulk(threshold, off_cents):
+    def apply(cents):
+        return max(0, cents - off_cents) if cents &gt;= threshold else cents
+    return apply
+
+def best_price(total, strategies):
+    return min(strategy(total) for strategy in strategies)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46-e2" data-title="An event bus (observer)">
+      <div class="exercise-prompt">
+        <p>Write a class <code>EventBus</code> with <code>subscribe(event, handler)</code>,
+          <code>unsubscribe(event, handler)</code> (a no-op if not subscribed), and <code>publish(event, payload)</code>
+          which calls each handler for that event <em>in subscription order</em> with the payload and returns how many
+          handlers ran. Subscribing the same handler twice to the same event registers it once.</p>
+      </div>
+<textarea class="starter">
+class EventBus:
+    def __init__(self):
+        ...
+
+    def subscribe(self, event, handler):
+        ...
+
+    def unsubscribe(self, event, handler):
+        ...
+
+    def publish(self, event, payload):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_publish_in_order():
+    bus, log = EventBus(), []
+    bus.subscribe("saved", lambda p: log.append(("a", p)))
+    bus.subscribe("saved", lambda p: log.append(("b", p)))
+    assert bus.publish("saved", 1) == 2, "two handlers ran"
+    assert log == [("a", 1), ("b", 1)], "handlers run in subscription order"
+
+def test_unknown_event():
+    assert EventBus().publish("nothing", None) == 0
+
+def test_unsubscribe():
+    bus, log = EventBus(), []
+    handler = log.append
+    bus.subscribe("e", handler)
+    bus.unsubscribe("e", handler)
+    bus.unsubscribe("e", handler)
+    bus.unsubscribe("other", handler)
+    assert bus.publish("e", 1) == 0 and log == [], "an unsubscribed handler must not run"
+
+def test_no_duplicates():
+    bus, log = EventBus(), []
+    bus.subscribe("e", log.append)
+    bus.subscribe("e", log.append)
+    assert bus.publish("e", "x") == 1 and log == ["x"], "the same handler is registered once"
+
+def test_events_are_independent():
+    bus, log = EventBus(), []
+    bus.subscribe("a", log.append)
+    bus.publish("b", 1)
+    assert log == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a <code>dict[str, list]</code>; check
+        <code>handler not in handlers</code> before appending. Bound methods such as <code>log.append</code> compare
+        equal when they wrap the same object and function.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class EventBus:
+    def __init__(self):
+        self._handlers = {}
+
+    def subscribe(self, event, handler):
+        handlers = self._handlers.setdefault(event, [])
+        if handler not in handlers:
+            handlers.append(handler)
+
+    def unsubscribe(self, event, handler):
+        handlers = self._handlers.get(event, [])
+        if handler in handlers:
+            handlers.remove(handler)
+
+    def publish(self, event, payload):
+        handlers = list(self._handlers.get(event, []))
+        for handler in handlers:
+            handler(payload)
+        return len(handlers)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46-e3" data-title="Commands with undo">
+      <div class="exercise-prompt">
+        <p>A <code>Document</code> holds <code>text</code>. Write two command classes, each with
+          <code>execute(doc)</code> and <code>undo(doc)</code>: <code>Append(text)</code> and
+          <code>DeleteLast(n)</code> (removes the last <code>n</code> characters; its undo must restore exactly what was
+          removed, even if fewer than <code>n</code> characters existed). Then write <code>Editor(doc)</code> with
+          <code>run(command)</code>, <code>undo()</code>, and <code>redo()</code>, each of the last two returning
+          <code>False</code> when there is nothing to undo or redo. Running a new command clears the redo stack.</p>
+      </div>
+<textarea class="starter">
+class Document:
+    def __init__(self, text=""):
+        self.text = text
+
+class Append:
+    ...
+
+class DeleteLast:
+    ...
+
+class Editor:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_run_and_undo():
+    doc = Document()
+    ed = Editor(doc)
+    ed.run(Append("hello"))
+    ed.run(Append(" world"))
+    ed.run(DeleteLast(6))
+    assert doc.text == "hello"
+    assert ed.undo() is True and doc.text == "hello world"
+    assert ed.undo() and ed.undo() and doc.text == ""
+    assert ed.undo() is False, "nothing left to undo"
+
+def test_delete_more_than_exists():
+    doc = Document("ab")
+    ed = Editor(doc)
+    ed.run(DeleteLast(5))
+    assert doc.text == ""
+    ed.undo()
+    assert doc.text == "ab", "undo restores exactly what was removed"
+
+def test_redo():
+    doc = Document()
+    ed = Editor(doc)
+    ed.run(Append("a"))
+    ed.run(Append("b"))
+    ed.undo()
+    assert ed.redo() is True and doc.text == "ab"
+    assert ed.redo() is False, "nothing left to redo"
+
+def test_new_command_clears_redo():
+    doc = Document()
+    ed = Editor(doc)
+    ed.run(Append("a"))
+    ed.undo()
+    ed.run(Append("z"))
+    assert ed.redo() is False and doc.text == "z", "a new command discards the redo history"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>DeleteLast</code> must remember what it removed in
+        <code>execute</code> (<code>self.removed = doc.text[len(doc.text) - n:]</code>, careful with
+        <code>n</code> larger than the text). The editor keeps two lists: done and undone.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Document:
+    def __init__(self, text=""):
+        self.text = text
+
+class Append:
+    def __init__(self, text):
+        self.text = text
+
+    def execute(self, doc):
+        doc.text += self.text
+
+    def undo(self, doc):
+        doc.text = doc.text[: len(doc.text) - len(self.text)]
+
+class DeleteLast:
+    def __init__(self, n):
+        self.n = n
+        self.removed = ""
+
+    def execute(self, doc):
+        cut = max(0, len(doc.text) - self.n)
+        self.removed = doc.text[cut:]
+        doc.text = doc.text[:cut]
+
+    def undo(self, doc):
+        doc.text += self.removed
+
+class Editor:
+    def __init__(self, doc):
+        self.doc = doc
+        self.done = []
+        self.undone = []
+
+    def run(self, command):
+        command.execute(self.doc)
+        self.done.append(command)
+        self.undone.clear()
+
+    def undo(self):
+        if not self.done:
+            return False
+        command = self.done.pop()
+        command.undo(self.doc)
+        self.undone.append(command)
+        return True
+
+    def redo(self):
+        if not self.undone:
+            return False
+        command = self.undone.pop()
+        command.execute(self.doc)
+        self.done.append(command)
+        return True</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46-e4" data-title="Adapter and dependency injection">
+      <div class="exercise-prompt">
+        <p>You cannot change <code>LegacyThermometer</code> (given), which reports Fahrenheit. Write
+          <code>CelsiusAdapter(thermometer)</code> with a method <code>celsius()</code> returning the temperature
+          rounded to one decimal. Then write <code>HeatingController(sensor, target)</code> whose
+          <code>decide()</code> returns <code>"heat"</code> if the sensor's <code>celsius()</code> is more than 0.5
+          below <code>target</code>, <code>"idle"</code> otherwise. The controller must work with <em>any</em> object
+          that has <code>celsius()</code> (the tests use a fake).</p>
+      </div>
+<textarea class="starter">
+class LegacyThermometer:
+    def __init__(self, fahrenheit):
+        self._f = fahrenheit
+    def read_fahrenheit(self):
+        return self._f
+
+class CelsiusAdapter:
+    ...
+
+class HeatingController:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+class _FakeSensor:
+    def __init__(self, c):
+        self.c = c
+    def celsius(self):
+        return self.c
+
+def test_adapter_converts():
+    assert CelsiusAdapter(LegacyThermometer(212)).celsius() == 100.0
+    assert CelsiusAdapter(LegacyThermometer(70)).celsius() == 21.1, "(70 - 32) * 5 / 9 rounds to 21.1"
+
+def test_adapter_reads_live():
+    t = LegacyThermometer(32)
+    adapter = CelsiusAdapter(t)
+    t._f = 50
+    assert adapter.celsius() == 10.0, "read the thermometer on every call, don't cache"
+
+def test_controller_with_fake():
+    assert HeatingController(_FakeSensor(19.0), 20.0).decide() == "heat"
+    assert HeatingController(_FakeSensor(19.5), 20.0).decide() == "idle", "exactly 0.5 below is still idle"
+    assert HeatingController(_FakeSensor(25.0), 20.0).decide() == "idle"
+
+def test_controller_with_adapter():
+    assert HeatingController(CelsiusAdapter(LegacyThermometer(50)), 21).decide() == "heat"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Celsius is <code>(f - 32) * 5 / 9</code>. Store the injected
+        objects in <code>__init__</code>; never create a thermometer inside the controller.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class LegacyThermometer:
+    def __init__(self, fahrenheit):
+        self._f = fahrenheit
+    def read_fahrenheit(self):
+        return self._f
+
+class CelsiusAdapter:
+    def __init__(self, thermometer):
+        self._thermometer = thermometer
+
+    def celsius(self):
+        return round((self._thermometer.read_fahrenheit() - 32) * 5 / 9, 1)
+
+class HeatingController:
+    def __init__(self, sensor, target):
+        self._sensor = sensor
+        self._target = target
+
+    def decide(self):
+        return "heat" if self._sensor.celsius() &lt; self._target - 0.5 else "idle"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46-e5" data-title="Validated settings">
+      <div class="exercise-prompt">
+        <p>Write a frozen dataclass <code>Settings</code> with fields <code>db_path: str = "app.db"</code>,
+          <code>workers: int = 2</code>, <code>debug: bool = False</code>, and a classmethod
+          <code>from_env(env)</code> that reads <code>APP_DB_PATH</code>, <code>APP_WORKERS</code>, and
+          <code>APP_DEBUG</code> from the mapping <code>env</code>. <code>workers</code> must be an integer from 1 to
+          32; <code>debug</code> accepts <code>true/false/1/0/yes/no</code> in any case. Anything invalid raises
+          <code>ValueError</code> whose message names the variable.</p>
+      </div>
+<textarea class="starter">
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Settings:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import dataclasses
+
+def test_defaults():
+    assert Settings.from_env({}) == Settings("app.db", 2, False)
+
+def test_reads_values():
+    s = Settings.from_env({"APP_DB_PATH": "/data/x.db", "APP_WORKERS": "8", "APP_DEBUG": "YES", "OTHER": "1"})
+    assert (s.db_path, s.workers, s.debug) == ("/data/x.db", 8, True)
+    assert Settings.from_env({"APP_DEBUG": "0"}).debug is False
+
+def test_frozen():
+    try:
+        Settings().workers = 9
+    except dataclasses.FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("Settings must be frozen")
+
+def _raises_naming(env, name):
+    try:
+        Settings.from_env(env)
+    except ValueError as exc:
+        assert name in str(exc), f"the error message should name {name}, got {exc}"
+    else:
+        raise AssertionError(f"{env} should raise ValueError")
+
+def test_invalid_values():
+    _raises_naming({"APP_WORKERS": "many"}, "APP_WORKERS")
+    _raises_naming({"APP_WORKERS": "0"}, "APP_WORKERS")
+    _raises_naming({"APP_WORKERS": "33"}, "APP_WORKERS")
+    _raises_naming({"APP_DEBUG": "maybe"}, "APP_DEBUG")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Convert with <code>int()</code> inside <code>try</code>, and
+        re-raise <code>ValueError(f"APP_WORKERS must be ...")</code> <code>from None</code>. Map debug strings through
+        two sets of accepted words.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass
+
+TRUE = {"true", "1", "yes"}
+FALSE = {"false", "0", "no"}
+
+@dataclass(frozen=True)
+class Settings:
+    db_path: str = "app.db"
+    workers: int = 2
+    debug: bool = False
+
+    @classmethod
+    def from_env(cls, env):
+        raw_workers = env.get("APP_WORKERS", str(cls.workers))
+        try:
+            workers = int(raw_workers)
+        except ValueError:
+            raise ValueError(f"APP_WORKERS must be an integer, got {raw_workers!r}") from None
+        if not 1 &lt;= workers &lt;= 32:
+            raise ValueError(f"APP_WORKERS must be between 1 and 32, got {workers}")
+        raw_debug = env.get("APP_DEBUG", "false").lower()
+        if raw_debug not in TRUE | FALSE:
+            raise ValueError(f"APP_DEBUG must be true/false, got {raw_debug!r}")
+        return cls(env.get("APP_DB_PATH", cls.db_path), workers, raw_debug in TRUE)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: untangle a big ball of mud</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">From script to layered app</span></div>
+      <div class="widget-body">
+        <p>A "big ball of mud" is a system with no discernible structure. Below is a realistic one: a 40-line script that
+          reads a CSV of library loans, computes late fees, emails reminders, and writes a report, all in one function
+          with globals, <code>datetime.now()</code>, string status codes, and <code>print()</code>. Refactor it, step by
+          step, into a layered application, keeping its behavior.</p>
+<pre data-label="mud.py (the starting point)"><code class="language-python">import csv, smtplib, datetime
+
+RATE = 25
+def main():
+    rows = list(csv.reader(open("loans.csv")))
+    total = 0
+    for r in rows[1:]:
+        days = (datetime.datetime.now().date() - datetime.date.fromisoformat(r[3])).days
+        if r[4] == "R":                     # returned
+            continue
+        if days &gt; 14:
+            fee = (days - 14) * RATE
+            if r[5] == "staff":
+                fee = fee // 2
+            total += fee
+            s = smtplib.SMTP("localhost")
+            s.sendmail("lib@x.org", r[2], f"You owe {fee/100}")
+            print("emailed", r[2], fee)
+    open("report.txt", "w").write(f"total fees {total/100}\n")
+    print("done")
+main()</code></pre>
+        <ol>
+          <li><code>pixi init library-fees</code>; <code>pixi add structlog</code>;
+            <code>pixi add --feature dev pytest ruff mypy</code>.</li>
+          <li>Write characterization tests first: run the script logic against a sample CSV with a fixed date and record
+            the fees it computes.</li>
+          <li>Model the domain: a <code>Loan</code> dataclass, a <code>Borrower</code> kind enum, a
+            <code>LoanStatus</code> enum, and a pure <code>late_fee(loan, today, policy)</code>.</li>
+          <li>Define ports: <code>LoanSource</code>, <code>Notifier</code>, <code>ReportSink</code>, <code>Clock</code>.
+            Write adapters: <code>CsvLoanSource</code>, <code>SmtpNotifier</code> plus a fake <code>OutboxNotifier</code>,
+            <code>FileReportSink</code>, and clocks.</li>
+          <li>Write a <code>FeeService</code> use case that takes the ports in its constructor.</li>
+          <li>Write <code>cli.py</code> as the composition root, with settings from environment variables and structlog
+            logging instead of <code>print()</code>.</li>
+          <li>Record one ADR explaining your layering, then run <code>pixi run pytest</code> and
+            <code>pixi run mypy --strict src</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m46-mini">
+          <li>Characterization tests pass before and after the refactor</li>
+          <li>The domain module imports nothing outside the standard library and does no I/O</li>
+          <li>The service depends only on Protocols; no <code>smtplib</code>, <code>csv</code>, or <code>datetime.now()</code> inside it</li>
+          <li>Tests use a fixed clock and an outbox notifier: no real email, no sleeping, no real date</li>
+          <li>Configuration (rate, SMTP host, paths) comes from a validated, frozen settings object</li>
+          <li>Logs are structlog events; there is no <code>print()</code> outside the CLI</li>
+          <li>An ADR in <code>docs/adr/0001-layered-architecture.md</code> explains the structure</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add a second driving adapter (a FastAPI endpoint, from
+          <a href="m45-web-apis.html">M45</a>) that reuses <code>FeeService</code> unchanged; add a
+          <code>SqliteLoanSource</code> (<a href="m44-data-databases.html">M44</a>) and run one contract test suite
+          against both sources; enforce the layering with import-linter in CI.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m46-quiz">
+<script type="application/json">
+{"title": "Software design quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "A module named <code>helpers.py</code> contains date parsing, PDF rendering, and a retry decorator. What is its main problem?", "options": ["High coupling", "Low cohesion", "Too much inheritance", "It violates LSP"], "answer": 1, "explanation": "<p>Its contents have nothing to do with each other: low cohesion. Split it by purpose so each module has one clear job.</p>"},
+  {"type": "single", "prompt": "Which change best applies the open/closed principle to a growing <code>if fmt == 'csv' ... elif fmt == 'json' ...</code> chain?", "options": ["Add another elif", "Use a registry dict mapping formats to functions, so new formats are added without editing the dispatcher", "Put the chain in a class", "Convert it to a while loop"], "answer": 1, "explanation": "<p>A registry lets you extend behavior by adding code (a new function registered under a key) rather than modifying the existing dispatcher.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class Rect:\n    def __init__(self, w, h): self.w, self.h = w, h\n    def set_w(self, w): self.w = w\n    def area(self): return self.w * self.h\nclass Square(Rect):\n    def __init__(self, s): super().__init__(s, s)\n    def set_w(self, w): self.w = self.h = w\ns = Square(3)\ns.set_w(4)\nprint(s.area())", "answer": "16", "explanation": "<p>The square sets both sides to 4. A caller expecting rectangle behavior (height still 3, area 12) is surprised: a Liskov substitution violation.</p>"},
+  {"type": "single", "prompt": "In Python, what is usually the simplest implementation of the strategy pattern?", "options": ["An abstract base class with one subclass per strategy", "Passing a function (or other callable) as a parameter", "A singleton", "A metaclass"], "answer": 1, "explanation": "<p>Functions are first-class objects, so a strategy is just a callable parameter, as in <code>sorted(key=...)</code>.</p>"},
+  {"type": "single", "prompt": "What distinguishes the decorator <em>pattern</em> from Python's <code>@decorator</code> syntax?", "options": ["Nothing; they are identical", "The pattern wraps an object with another object of the same interface at runtime; the syntax wraps a function or class at definition time", "The syntax only works on classes", "The pattern requires inheritance from the wrapped class"], "answer": 1, "explanation": "<p>Both wrap to add behavior, but the pattern composes objects behind a shared interface (for example a caching repository), while <code>@</code> rebinds a function or class name when it is defined.</p>"},
+  {"type": "multi", "prompt": "Which patterns describe this code? <code>class CachingRepo: def __init__(self, inner): ...; def get(self, k): ... self._inner.get(k)</code>", "options": ["Decorator (pattern)", "Observer", "Repository", "Command"], "answer": [0, 2], "explanation": "<p>It is a repository (a collection-like data access interface) wrapped by another object with the same interface that adds caching: the decorator pattern.</p>"},
+  {"type": "single", "prompt": "In hexagonal architecture, which way do dependencies point?", "options": ["From the domain outward to adapters", "Inward: adapters depend on ports defined by the core; the core imports no adapters", "Both ways equally", "Only from the database to the UI"], "answer": 1, "explanation": "<p>The core defines ports (Protocols) in its own terms; adapters implement them. The domain never imports sqlite3, httpx, or a framework.</p>"},
+  {"type": "text", "prompt": "What is the name for the one place at startup where concrete adapters are created and wired into the services? (two words)", "answer": ["composition root"], "explanation": "<p>The composition root (for example <code>main()</code> in the CLI) is the only code that knows which concrete classes are used. Everything else receives its dependencies.</p>"},
+  {"type": "single", "prompt": "Which is a value object?", "options": ["A Customer with an id whose address can change", "Money(500, 'EUR'), immutable and equal to any other Money(500, 'EUR')", "A database connection", "A Logger"], "answer": 1, "explanation": "<p>Value objects are defined by their values and are interchangeable when equal; make them frozen dataclasses. Entities have identity that persists through changes.</p>"},
+  {"type": "single", "prompt": "Where should <code>sqlite3.IntegrityError</code> be translated into a domain <code>DuplicateError</code>?", "options": ["In the domain model", "In the SQLite adapter, using raise ... from exc", "In every caller of the service", "Nowhere; let it propagate as is"], "answer": 1, "explanation": "<p>Translate at the boundary where the technology lives. The core then sees only domain errors, and the original cause is preserved by <code>from exc</code>.</p>"},
+  {"type": "single", "prompt": "What is the recommended way to handle configuration?", "options": ["Read os.environ wherever a value is needed", "Read environment variables once at startup into a validated, immutable settings object and inject it", "Hard-code values and edit them per deployment", "Store secrets in the repository for convenience"], "answer": 1, "explanation": "<p>One validated settings object (a frozen dataclass or pydantic-settings model) fails fast on bad config and keeps global state out of your logic and tests.</p>"},
+  {"type": "single", "prompt": "What makes a change a <em>refactoring</em> rather than a rewrite?", "options": ["It is done in one large commit", "Behavior is preserved, verified by tests after each small step", "It adds new features", "It changes the public API"], "answer": 1, "explanation": "<p>Refactoring changes structure, not behavior, in small verified steps. Without tests (characterization tests if needed), you cannot know behavior was preserved.</p>"},
+  {"type": "multi", "prompt": "Which are code smells?", "options": ["A function with seven positional parameters", "datetime.now() called deep inside business logic", "A frozen dataclass value object", "The same if kind == ... chain repeated in four functions"], "answer": [0, 1, 3], "explanation": "<p>Long parameter lists, hidden dependencies, and repeated switches are classic smells. A frozen value object is a cure, not a smell.</p>"},
+  {"type": "single", "prompt": "What belongs in an architecture decision record?", "options": ["The full source code of the feature", "The context, the decision, and its consequences for one significant choice", "Meeting minutes for every sprint", "A list of open bugs"], "answer": 1, "explanation": "<p>An ADR is a short, numbered, immutable record of one decision: why it was needed, what was chosen, and what it costs. Later ADRs supersede earlier ones.</p>"},
+  {"type": "single", "prompt": "Why prefer fakes (such as InMemoryRepository) over mocks that assert on method calls?", "options": ["Fakes are always faster to write", "Fakes let tests assert on outcomes, so they survive refactoring; call-assertion mocks couple tests to implementation details", "Mocks cannot be used with pytest", "Fakes need no code"], "answer": 1, "explanation": "<p>Tests should check behavior. A fake is a working substitute, so the test checks results, not the exact sequence of internal calls.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Aim for high cohesion (one job per module) and low coupling (changes stay local).</li>
+      <li>SOLID in Python: single responsibility, registries for open/closed, honest subtypes (LSP), small Protocols
+        (ISP), and depending on abstractions you own (DIP). Do not over-apply them.</li>
+      <li>Patterns are vocabulary. In Python a strategy is a function, a factory is a dict or classmethod, an observer
+        is a list of callables, and DI is constructor parameters plus a composition root.</li>
+      <li>Hexagonal architecture: a pure core defines ports; adapters on the outside implement them; dependencies point
+        inward.</li>
+      <li>Model the domain with frozen dataclasses and enums that enforce invariants.</li>
+      <li>Design error handling and configuration once: domain exceptions translated at the edges; validated, immutable
+        settings from the environment.</li>
+      <li>Refactor in small, tested steps; notice smells; record big decisions in ADRs; design seams for testability.</li>
+    </ul>
+    <div class="flashcards" data-title="Software design">
+<script type="application/json">
+[{"front": "Coupling vs cohesion", "back": "Coupling: how much modules depend on each other's details (want low). Cohesion: how well a module's contents belong together (want high)."},
+ {"front": "SOLID", "back": "Single responsibility, Open/closed, Liskov substitution, Interface segregation, Dependency inversion."},
+ {"front": "Liskov substitution", "back": "A subtype must work anywhere its base type is expected, without surprising callers."},
+ {"front": "Dependency inversion", "back": "Business logic depends on abstractions it owns (Protocols); low-level adapters implement them."},
+ {"front": "Strategy in Python", "back": "Pass a callable. A strategy factory returns a configured closure."},
+ {"front": "Adapter", "back": "Wraps an object with the wrong interface to present the one your code expects."},
+ {"front": "Observer", "back": "Publishers emit events; subscribers register callbacks; neither knows the other."},
+ {"front": "Command", "back": "A request as an object with execute() (and often undo()), so it can be queued, logged, or undone."},
+ {"front": "Port and adapter", "back": "A port is an interface defined by the core; an adapter implements it for a technology (SQLite, SMTP, HTTP)."},
+ {"front": "Composition root", "back": "The single place at startup that builds concrete objects and wires them together."},
+ {"front": "Characterization test", "back": "A test that records what legacy code does now, so a refactor can prove it changed nothing."},
+ {"front": "ADR", "back": "Architecture decision record: context, decision, consequences. Numbered, kept in the repo, superseded not edited."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://www.cosmicpython.com/book/preface.html">Architecture Patterns with Python</a> (Percival and Gregory, free online): repositories, unit of work, and hexagonal design in Python</li>
+      <li><a href="https://refactoring.com/catalog/">Martin Fowler's refactoring catalog</a></li>
+      <li><a href="https://alistair.cockburn.us/hexagonal-architecture/">Hexagonal architecture</a> (Alistair Cockburn)</li>
+      <li><a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Documenting architecture decisions</a> (Michael Nygard) and <a href="https://adr.github.io/">adr.github.io</a></li>
+      <li><a href="https://python-patterns.guide/">Python Design Patterns</a> (Brandon Rhodes)</li>
+      <li><a href="https://typing.python.org/en/latest/spec/protocol.html">Protocols in the typing specification</a> and <a href="https://docs.python.org/3/library/dataclasses.html">dataclasses</a></li>
+      <li><a href="https://12factor.net/config">The Twelve-Factor App: config</a> and <a href="https://docs.pydantic.dev/latest/concepts/pydantic_settings/">pydantic-settings</a></li>
+      <li>Now apply it all: <a href="../projects/p06-habit-tracker.html">Project 6 · Habit Tracker Service</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

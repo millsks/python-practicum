@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M61 · Analytical SQL &amp; DuckDB · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m61">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 9 · Data Engineering · Module 61</p>
+    <h1>Analytical SQL &amp; DuckDB</h1>
+    <p class="lede">SQL is the lingua franca of data. Basic <code>SELECT … GROUP BY</code> gets you started; analytical SQL
+      (CTEs, recursive queries, window functions, conditional aggregation, upserts) is what lets you answer real business
+      questions in one readable query. You will practice it all with Python's built-in <code>sqlite3</code>, right here in
+      the browser, then meet DuckDB, an in-process analytical engine that runs the same SQL over Parquet files at
+      remarkable speed.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m60-data-engineering.html">M60 · Data Engineering Foundations</a>, <a href="m44-data-databases.html">M44 · Data &amp; Databases</a></span></div>
+    <ul class="objectives">
+      <li>Explain SQL's logical evaluation order and structure queries with CTEs</li>
+      <li>Walk hierarchies with recursive CTEs</li>
+      <li>Use window functions for ranking, period-over-period change, running totals, and moving averages</li>
+      <li>Pivot with CASE and conditional aggregation; write idempotent upserts with <code>ON CONFLICT</code></li>
+      <li>Handle dates in SQL, read query plans, and add the right index</li>
+      <li>Query CSV and Parquet with DuckDB and move data between DuckDB, pandas, and Polars</li>
+      <li>Write SQL that is readable and tested</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="foundations">
+    <h2>How a query is evaluated</h2>
+    <p>You write SQL in the order <code>SELECT … FROM … WHERE … GROUP BY … HAVING … ORDER BY … LIMIT</code>, but the
+      database evaluates it (logically) in a different order. Knowing that order explains most "why can't I use that alias
+      here?" errors:</p>
+    <ol>
+      <li><code>FROM</code> and <code>JOIN</code>: build the input rows.</li>
+      <li><code>WHERE</code>: filter individual rows (no aggregates yet, no <code>SELECT</code> aliases).</li>
+      <li><code>GROUP BY</code>: collapse rows into groups.</li>
+      <li><code>HAVING</code>: filter groups (aggregates allowed).</li>
+      <li><strong>Window functions</strong> are computed here, over the rows that survived.</li>
+      <li><code>SELECT</code>: compute output columns and aliases.</li>
+      <li><code>DISTINCT</code>, then <code>ORDER BY</code> (aliases allowed), then <code>LIMIT</code>/<code>OFFSET</code>.</li>
+    </ol>
+    <p>Throughout this module we use a small shop dataset. Run the cell to create it and look at it.</p>
+    <div class="runnable" data-title="The shop dataset">
+<textarea>
+import sqlite3
+
+def make_shop():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+    CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, region TEXT);
+    CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, order_date TEXT, amount REAL, status TEXT);
+    INSERT INTO customers VALUES (1,'Ada','north'), (2,'Ben','south'), (3,'Cy','north'), (4,'Di','south');
+    INSERT INTO orders VALUES
+      (1,1,'2026-03-01',120,'paid'), (2,2,'2026-03-01', 80,'paid'), (3,1,'2026-03-02', 40,'refunded'),
+      (4,3,'2026-03-02',200,'paid'), (5,2,'2026-03-03', 60,'paid'), (6,4,'2026-03-03', 90,'paid'),
+      (7,1,'2026-03-04', 75,'paid'), (8,3,'2026-03-05', 30,'paid'), (9,4,'2026-03-05',110,'refunded'),
+      (10,2,'2026-03-06',150,'paid');
+    """)
+    return conn
+
+conn = make_shop()
+print("sqlite", sqlite3.sqlite_version)
+for row in conn.execute("SELECT * FROM orders LIMIT 4"):
+    print(row)
+for row in conn.execute("""
+    SELECT c.region, COUNT(*) AS n, SUM(o.amount) AS revenue
+    FROM orders o JOIN customers c ON c.id = o.customer_id
+    WHERE o.status = 'paid'
+    GROUP BY c.region
+    HAVING SUM(o.amount) > 100
+    ORDER BY revenue DESC"""):
+    print(row)
+</textarea>
+    </div>
+    <aside class="callout note"><p>SQLite feature versions matter: window functions need SQLite 3.25+, <code>INSERT … ON
+      CONFLICT</code> upserts 3.24+, the aggregate <code>FILTER</code> clause 3.30+, and <code>RETURNING</code> 3.35+. Python
+      3.14 builds (including the browser one and Pixi's conda-forge Python) ship far newer versions; check with
+      <code>sqlite3.sqlite_version</code>.</p></aside>
+    <div class="runnable" data-title="Predict: can WHERE see a SELECT alias?" data-predict>
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE t (x INTEGER)")
+conn.executemany("INSERT INTO t VALUES (?)", [(1,), (2,), (3,)])
+try:
+    print(conn.execute("SELECT x * 10 AS big FROM t ORDER BY big DESC").fetchall())
+    print(conn.execute("SELECT x, COUNT(*) FROM t WHERE COUNT(*) > 0 GROUP BY x").fetchall())
+except sqlite3.OperationalError as exc:
+    print("error:", exc)
+</textarea>
+    </div>
+    <details class="reveal"><summary>Explanation</summary><p><code>ORDER BY</code> runs after <code>SELECT</code>, so it
+      can use the alias. <code>WHERE</code> runs before grouping, so an aggregate there is an error ("misuse of aggregate");
+      that filter belongs in <code>HAVING</code>. (SQLite is lenient and also lets <code>WHERE</code> use a
+      <code>SELECT</code> alias, but standard SQL and most engines do not, so don't rely on it.)</p></details>
+    <p><strong>Remember:</strong> FROM → WHERE → GROUP BY → HAVING → windows → SELECT → ORDER BY → LIMIT.</p>
+  </section>
+
+  <section class="lesson-section" id="ctes">
+    <h2>Common table expressions</h2>
+    <p>A <strong>CTE</strong> (<code>WITH name AS (…)</code>) names a subquery so later parts of the query can use it like a
+      table. CTEs turn a nested, inside-out query into a top-to-bottom story of small steps, each with a name that says
+      what it is. That is their real value: readability and testability, not speed.</p>
+    <div class="runnable" data-title="Customers above their region's average">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, region TEXT);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, order_date TEXT, amount REAL, status TEXT);
+INSERT INTO customers VALUES (1,'Ada','north'), (2,'Ben','south'), (3,'Cy','north'), (4,'Di','south');
+INSERT INTO orders VALUES
+  (1,1,'2026-03-01',120,'paid'), (2,2,'2026-03-01', 80,'paid'), (3,1,'2026-03-02', 40,'refunded'),
+  (4,3,'2026-03-02',200,'paid'), (5,2,'2026-03-03', 60,'paid'), (6,4,'2026-03-03', 90,'paid'),
+  (7,1,'2026-03-04', 75,'paid'), (8,3,'2026-03-05', 30,'paid'), (9,4,'2026-03-05',110,'refunded'),
+  (10,2,'2026-03-06',150,'paid');
+""")
+query = """
+WITH paid AS (                      -- step 1: only real revenue
+    SELECT * FROM orders WHERE status = 'paid'
+),
+customer_revenue AS (               -- step 2: one row per customer
+    SELECT c.id, c.name, c.region, SUM(p.amount) AS revenue
+    FROM paid p JOIN customers c ON c.id = p.customer_id
+    GROUP BY c.id
+),
+region_avg AS (                     -- step 3: one row per region
+    SELECT region, AVG(revenue) AS avg_revenue FROM customer_revenue GROUP BY region
+)
+SELECT cr.name, cr.region, cr.revenue, ROUND(ra.avg_revenue, 1) AS region_avg
+FROM customer_revenue cr JOIN region_avg ra USING (region)
+WHERE cr.revenue > ra.avg_revenue
+ORDER BY cr.revenue DESC
+"""
+for row in conn.execute(query):
+    print(row)
+</textarea>
+    </div>
+
+    <h3>Recursive CTEs: walking a hierarchy</h3>
+    <p>A <strong>recursive CTE</strong> refers to itself. It has an <em>anchor</em> member (the starting rows) and a
+      <em>recursive</em> member joined to the CTE's previous output, combined with <code>UNION ALL</code>. The database
+      repeats the recursive step until it produces no new rows. Classic uses: org charts, bill-of-materials, category
+      trees, and generating series of dates.</p>
+    <pre class="mermaid">
+flowchart TD
+  A[1 Grace, CEO] --> B[2 Alan, CTO]
+  A --> C[3 Ada, CFO]
+  B --> D[4 Linus, Eng Manager]
+  B --> E[5 Barbara, Architect]
+  D --> F[6 Guido, Engineer]
+  D --> G[7 Margaret, Engineer]
+  C --> H[8 Katherine, Analyst]
+    </pre>
+    <div class="runnable" data-title="An org chart with depth and path">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT, title TEXT, manager_id INTEGER);
+INSERT INTO employees VALUES
+ (1,'Grace','CEO',NULL), (2,'Alan','CTO',1), (3,'Ada','CFO',1), (4,'Linus','Eng Manager',2),
+ (5,'Barbara','Architect',2), (6,'Guido','Engineer',4), (7,'Margaret','Engineer',4), (8,'Katherine','Analyst',3);
+""")
+query = """
+WITH RECURSIVE chain(id, name, depth, path) AS (
+    SELECT id, name, 0, name FROM employees WHERE manager_id IS NULL     -- anchor: the root
+    UNION ALL
+    SELECT e.id, e.name, c.depth + 1, c.path || ' > ' || e.name          -- recursive step
+    FROM employees e JOIN chain c ON e.manager_id = c.id
+)
+SELECT printf('%.*c', depth * 2, ' ') || name AS org, depth, path FROM chain ORDER BY path
+"""
+for org, depth, path in conn.execute(query):
+    print(f"{org:<14} depth={depth}  {path}")
+
+# Everyone under Alan (id 2), at any depth
+under = conn.execute("""
+WITH RECURSIVE reports(id) AS (
+    SELECT id FROM employees WHERE manager_id = 2
+    UNION ALL
+    SELECT e.id FROM employees e JOIN reports r ON e.manager_id = r.id
+)
+SELECT name FROM employees WHERE id IN reports ORDER BY name""").fetchall()
+print("Alan's org:", [n for (n,) in under])
+</textarea>
+    </div>
+    <div class="runnable" data-title="Generate a calendar with a recursive CTE">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+rows = conn.execute("""
+WITH RECURSIVE days(d) AS (
+    SELECT date('2026-03-01')
+    UNION ALL
+    SELECT date(d, '+1 day') FROM days WHERE d < '2026-03-07'
+)
+SELECT d, strftime('%w', d) AS weekday_num FROM days
+""").fetchall()
+print(rows)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Always give recursion a stopping condition. A cycle in the data (A manages B, B manages A)
+      makes a naive recursive CTE loop forever. Guard with a depth limit (<code>WHERE c.depth &lt; 50</code>) or by checking
+      that the path does not already contain the id.</p></aside>
+    <p><strong>Remember:</strong> CTEs name steps; recursive CTEs = anchor <code>UNION ALL</code> recursive step, with a
+      termination condition.</p>
+  </section>
+
+  <section class="lesson-section" id="windows">
+    <h2>Window functions</h2>
+    <p>An aggregate with <code>GROUP BY</code> collapses rows: ten orders become two region totals. A <strong>window
+      function</strong> computes across a set of related rows <em>without collapsing them</em>: every order keeps its row
+      and gains a column such as "rank within its region" or "running total so far". The syntax is
+      <code>function(...) OVER (PARTITION BY … ORDER BY … frame)</code>:</p>
+    <ul>
+      <li><code>PARTITION BY</code> splits rows into independent groups (like <code>GROUP BY</code>, but without collapsing).</li>
+      <li><code>ORDER BY</code> orders rows inside each partition (needed for ranking, <code>LAG</code>, running totals).</li>
+      <li>The <strong>frame</strong> (<code>ROWS BETWEEN 2 PRECEDING AND CURRENT ROW</code>) picks which rows around the
+        current one an aggregate sees.</li>
+    </ul>
+    <h3>Ranking</h3>
+    <div class="runnable" data-title="ROW_NUMBER vs RANK vs DENSE_RANK" data-predict>
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE scores (player TEXT, points INTEGER)")
+conn.executemany("INSERT INTO scores VALUES (?, ?)", [("a", 90), ("b", 85), ("c", 90), ("d", 70)])
+for row in conn.execute("""
+    SELECT player, points,
+           ROW_NUMBER() OVER (ORDER BY points DESC, player) AS rn,
+           RANK()       OVER (ORDER BY points DESC) AS rnk,
+           DENSE_RANK() OVER (ORDER BY points DESC) AS dense
+    FROM scores ORDER BY rn"""):
+    print(row)
+</textarea>
+    </div>
+    <details class="reveal"><summary>Explanation</summary><p><code>ROW_NUMBER</code> always counts 1, 2, 3, 4 (ties broken
+      by the extra <code>player</code> sort). <code>RANK</code> gives ties the same rank and then <em>skips</em>: 1, 1, 3, 4.
+      <code>DENSE_RANK</code> gives ties the same rank without gaps: 1, 1, 2, 3.</p></details>
+    <p>The most common pattern in analytics is "top N per group": rank inside a partition, then filter in an outer query
+      (you cannot filter on a window function in <code>WHERE</code>, because windows are computed after <code>WHERE</code>).</p>
+    <div class="runnable" data-title="Each customer's biggest paid order (top 1 per group)">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, order_date TEXT, amount REAL, status TEXT);
+INSERT INTO orders VALUES
+  (1,1,'2026-03-01',120,'paid'), (2,2,'2026-03-01', 80,'paid'), (3,1,'2026-03-02', 40,'refunded'),
+  (4,3,'2026-03-02',200,'paid'), (5,2,'2026-03-03', 60,'paid'), (6,4,'2026-03-03', 90,'paid'),
+  (7,1,'2026-03-04', 75,'paid'), (8,3,'2026-03-05', 30,'paid'), (9,4,'2026-03-05',110,'refunded'),
+  (10,2,'2026-03-06',150,'paid');
+""")
+for row in conn.execute("""
+    WITH ranked AS (
+        SELECT customer_id, id AS order_id, amount,
+               ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY amount DESC) AS rn
+        FROM orders WHERE status = 'paid'
+    )
+    SELECT customer_id, order_id, amount FROM ranked WHERE rn = 1 ORDER BY customer_id"""):
+    print(row)
+</textarea>
+    </div>
+
+    <h3>LAG and LEAD: comparing with neighbours</h3>
+    <p><code>LAG(x, n, default)</code> reads <code>x</code> from <code>n</code> rows earlier in the window order;
+      <code>LEAD</code> reads later rows. They make period-over-period comparisons a one-liner.</p>
+    <div class="runnable" data-title="Day-over-day revenue change">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE daily (day TEXT, revenue REAL)")
+conn.executemany("INSERT INTO daily VALUES (?, ?)",
+                 [("2026-03-01", 200), ("2026-03-02", 240), ("2026-03-03", 150), ("2026-03-04", 75), ("2026-03-05", 30)])
+for row in conn.execute("""
+    SELECT day, revenue,
+           LAG(revenue) OVER (ORDER BY day)                    AS prev,
+           revenue - LAG(revenue) OVER (ORDER BY day)          AS change,
+           ROUND(100.0 * (revenue - LAG(revenue) OVER w) / LAG(revenue) OVER w, 1) AS pct,
+           LEAD(revenue) OVER w                                AS next_day
+    FROM daily
+    WINDOW w AS (ORDER BY day)
+    ORDER BY day"""):
+    print(row)
+</textarea>
+    </div>
+    <p>The <code>WINDOW w AS (…)</code> clause names a window definition so you can reuse it.</p>
+
+    <h3>Frames: running totals and moving averages</h3>
+    <p>With <code>ORDER BY</code> inside <code>OVER</code>, an aggregate's default frame is "from the start of the partition
+      up to the current row (and its ties)", which gives a running total. An explicit <code>ROWS BETWEEN</code> frame gives
+      a moving window.</p>
+    <div class="runnable" data-title="Running totals per region and a 3-day moving average">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE sales (day TEXT, region TEXT, revenue REAL)")
+conn.executemany("INSERT INTO sales VALUES (?, ?, ?)", [
+    ("2026-03-01", "north", 120), ("2026-03-01", "south", 80), ("2026-03-02", "north", 200),
+    ("2026-03-03", "south", 150), ("2026-03-04", "north", 75), ("2026-03-05", "north", 30),
+    ("2026-03-05", "south", 60)])
+for row in conn.execute("""
+    SELECT day, region, revenue,
+           SUM(revenue) OVER (PARTITION BY region ORDER BY day)                         AS running_total,
+           ROUND(AVG(revenue) OVER (PARTITION BY region ORDER BY day
+                                    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), 1)       AS moving_avg_3,
+           ROUND(100.0 * revenue / SUM(revenue) OVER (PARTITION BY region), 1)          AS pct_of_region
+    FROM sales ORDER BY region, day"""):
+    print(row)
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>ROWS BETWEEN 2 PRECEDING</code> counts <em>rows</em>, not days. If a day has no
+      sales row, the "3-day" average silently spans more than three days. Fill gaps first by joining to a calendar (the
+      recursive CTE above), or use <code>RANGE</code> frames on a numeric day number where the engine supports them.</p></aside>
+    <p><strong>Remember:</strong> windows keep rows; <code>PARTITION BY</code> groups, <code>ORDER BY</code> orders, the
+      frame chooses neighbours; filter on window results in an outer query.</p>
+  </section>
+
+  <section class="lesson-section" id="case-aggregation">
+    <h2>CASE and conditional aggregation</h2>
+    <p><code>CASE WHEN … THEN … ELSE … END</code> is SQL's if/else expression. Inside an aggregate it becomes
+      <strong>conditional aggregation</strong>, the standard way to pivot rows into columns: one pass over the data computes
+      many filtered totals at once.</p>
+    <div class="runnable" data-title="Pivot status into columns">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, order_date TEXT, amount REAL, status TEXT);
+INSERT INTO orders VALUES
+  (1,1,'2026-03-01',120,'paid'), (2,2,'2026-03-01', 80,'paid'), (3,1,'2026-03-02', 40,'refunded'),
+  (4,3,'2026-03-02',200,'paid'), (5,2,'2026-03-03', 60,'paid'), (6,4,'2026-03-03', 90,'paid'),
+  (7,1,'2026-03-04', 75,'paid'), (8,3,'2026-03-05', 30,'paid'), (9,4,'2026-03-05',110,'refunded'),
+  (10,2,'2026-03-06',150,'paid');
+""")
+for row in conn.execute("""
+    SELECT customer_id,
+           SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END)     AS paid,
+           SUM(CASE WHEN status = 'refunded' THEN amount ELSE 0 END) AS refunded,
+           COUNT(*) FILTER (WHERE amount >= 100)                     AS big_orders,
+           CASE WHEN SUM(amount) >= 250 THEN 'gold'
+                WHEN SUM(amount) >= 150 THEN 'silver'
+                ELSE 'bronze' END                                    AS tier
+    FROM orders GROUP BY customer_id ORDER BY customer_id"""):
+    print(row)
+</textarea>
+    </div>
+    <p><code>COUNT(*) FILTER (WHERE …)</code> is the standard SQL shorthand for conditional aggregation (SQLite 3.30+,
+      PostgreSQL, DuckDB). <code>CASE</code> works everywhere.</p>
+    <aside class="callout tip"><p>Watch out for <code>NULL</code>. <code>SUM(CASE WHEN … THEN amount END)</code> without
+      <code>ELSE 0</code> returns <code>NULL</code> for a group with no matches, and <code>NULL</code> plus anything is
+      <code>NULL</code>. Use <code>ELSE 0</code> or <code>COALESCE(…, 0)</code> for totals.</p></aside>
+    <p><strong>Remember:</strong> one <code>GROUP BY</code> plus several <code>SUM(CASE …)</code> columns is a pivot.</p>
+  </section>
+
+  <section class="lesson-section" id="upserts">
+    <h2>Upserts and idempotent loads</h2>
+    <p>Pipelines re-run: after a crash, during a backfill, or because a file arrived twice. A load that uses plain
+      <code>INSERT</code> duplicates rows on every re-run. An <strong>upsert</strong> ("update or insert") makes the load
+      <strong>idempotent</strong>: running it twice leaves the same table as running it once. SQLite and PostgreSQL spell it
+      <code>INSERT … ON CONFLICT (key) DO UPDATE SET …</code>; the special table <code>excluded</code> holds the row you
+      tried to insert.</p>
+    <div class="runnable" data-title="Plain INSERT vs upsert on re-run">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE log_append (product TEXT, qty INTEGER)")
+conn.execute("CREATE TABLE stock (product TEXT PRIMARY KEY, qty INTEGER, updated TEXT)")
+batch = [("apple", 10, "2026-03-01"), ("pear", 4, "2026-03-01")]
+
+for run in range(2):                                   # the job runs twice
+    conn.executemany("INSERT INTO log_append VALUES (?, ?)", [(p, q) for p, q, _ in batch])
+    conn.executemany("""
+        INSERT INTO stock (product, qty, updated) VALUES (?, ?, ?)
+        ON CONFLICT (product) DO UPDATE SET qty = excluded.qty, updated = excluded.updated
+    """, batch)
+
+print("append rows:", conn.execute("SELECT COUNT(*) FROM log_append").fetchone()[0])
+print("upsert rows:", conn.execute("SELECT * FROM stock ORDER BY product").fetchall())
+
+# Only update when the incoming row is newer; ignore stale data
+conn.execute("""
+    INSERT INTO stock VALUES ('apple', 99, '2026-02-01')
+    ON CONFLICT (product) DO UPDATE SET qty = excluded.qty, updated = excluded.updated
+    WHERE excluded.updated > stock.updated
+""")
+print("after stale update:", conn.execute("SELECT * FROM stock WHERE product = 'apple'").fetchone())
+
+# DO NOTHING keeps the first version; RETURNING shows what was written (SQLite 3.35+)
+print(conn.execute("INSERT INTO stock VALUES ('kiwi', 7, '2026-03-02') ON CONFLICT DO NOTHING RETURNING product").fetchall())
+</textarea>
+    </div>
+    <p>The conflict target must be backed by a <code>PRIMARY KEY</code> or <code>UNIQUE</code> constraint. Other engines use
+      <code>MERGE INTO … WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT</code> (standard SQL, supported by
+      PostgreSQL 15+, Snowflake, BigQuery, DuckDB 1.4+, Delta, Iceberg) for the same job.</p>
+    <aside class="callout warn"><p><code>INSERT OR REPLACE</code> looks similar but deletes the old row and inserts a new one.
+      Columns you didn't supply reset to defaults, and <code>ON DELETE</code> foreign-key actions fire. Prefer
+      <code>ON CONFLICT … DO UPDATE</code>.</p></aside>
+    <p><strong>Remember:</strong> idempotent loads = a natural key + upsert. You will rely on this in
+      <a href="m62-pipelines.html">M62</a> and <a href="../projects/p09-etl-pipeline.html">Project 9</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="dates">
+    <h2>Working with dates</h2>
+    <p>SQLite has no date type. Store timestamps as ISO-8601 text in UTC (<code>'2026-03-05T13:00:00+00:00'</code> or
+      <code>'2026-03-05 13:00:00'</code>): ISO strings sort correctly as text, and the date functions understand them. The
+      core functions are <code>date()</code>, <code>time()</code>, <code>datetime()</code>, <code>julianday()</code>,
+      <code>unixepoch()</code> (3.38+), and <code>strftime(format, value, modifiers…)</code>. Modifiers shift values:
+      <code>'+1 day'</code>, <code>'-7 days'</code>, <code>'start of month'</code>, <code>'weekday 1'</code> (next Monday).</p>
+    <div class="runnable" data-title="Date arithmetic and bucketing">
+<textarea>
+import sqlite3
+conn = sqlite3.connect(":memory:")
+q = lambda sql: conn.execute(sql).fetchone()
+print(q("SELECT date('2026-03-31', '+1 month')"))                 # SQLite normalizes overflow: 2026-05-01
+print(q("SELECT date('2026-03-31', 'start of month', '+1 month', '-1 day')"))   # last day of March
+print(q("SELECT strftime('%Y-%m', '2026-03-05'), strftime('%W', '2026-03-05'), strftime('%w', '2026-03-05')"))
+print(q("SELECT julianday('2026-03-08 10:30') - julianday('2026-03-05 08:00')"))  # days between, fractional
+print(q("SELECT CAST((unixepoch('2026-03-05 08:20:30') - unixepoch('2026-03-05 08:00:00')) AS INTEGER)"))  # seconds
+print(q("SELECT date('2026-03-05', 'weekday 1')"))               # the following Monday
+
+conn.execute("CREATE TABLE events (ts TEXT)")
+conn.executemany("INSERT INTO events VALUES (?)", [("2026-03-02 09:00",), ("2026-03-04 18:00",), ("2026-03-10 07:00",)])
+print(conn.execute("""SELECT date(ts, 'weekday 0', '-6 days') AS week_start, COUNT(*)
+                      FROM events GROUP BY week_start ORDER BY week_start""").fetchall())
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Time zones are where date bugs live. SQLite's <code>'localtime'</code> modifier uses the
+      <em>server's</em> zone, which differs between your laptop and production. Convert to UTC in Python with
+      <code>zoneinfo</code> before loading, and derive local business dates explicitly (Project 9 does this for a city
+      that switches to daylight saving time mid-week).</p></aside>
+    <p><strong>Remember:</strong> store UTC ISO-8601 text, bucket with <code>strftime</code>/<code>date</code> modifiers, and
+      keep time-zone logic in one well-tested place.</p>
+  </section>
+
+  <section class="lesson-section" id="plans-indexes">
+    <h2>Query plans and indexes</h2>
+    <p>SQL is declarative: you say <em>what</em>, the <strong>query planner</strong> decides <em>how</em>. To see its
+      decision, prefix a query with <code>EXPLAIN QUERY PLAN</code>. The two words to look for in SQLite are
+      <code>SCAN</code> (read every row of the table, O(n)) and <code>SEARCH … USING INDEX</code> (jump to matching rows via a
+      B-tree, O(log n) per lookup).</p>
+    <div class="runnable" data-title="SCAN vs SEARCH, and a covering index">
+<textarea>
+import random, sqlite3, time
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, order_date TEXT, amount REAL)")
+rng = random.Random(0)
+conn.executemany("INSERT INTO orders (customer_id, order_date, amount) VALUES (?, ?, ?)",
+                 [(rng.randrange(5000), f"2026-03-{rng.randint(1, 28):02d}", rng.random() * 100) for _ in range(200_000)])
+
+sql = "SELECT SUM(amount) FROM orders WHERE customer_id = 42"
+def plan(s):
+    return [row[-1] for row in conn.execute("EXPLAIN QUERY PLAN " + s)]
+def timed(s, n=50):
+    t = time.perf_counter()
+    for _ in range(n):
+        conn.execute(s).fetchone()
+    return (time.perf_counter() - t) / n * 1000
+
+print(plan(sql), f"{timed(sql):.2f} ms")
+conn.execute("CREATE INDEX ix_orders_customer ON orders (customer_id)")
+print(plan(sql), f"{timed(sql):.3f} ms")
+conn.execute("CREATE INDEX ix_orders_customer_amount ON orders (customer_id, amount)")
+print(plan(sql), f"{timed(sql):.3f} ms")   # COVERING: answered from the index alone
+print(plan("SELECT * FROM orders WHERE amount > 99"))   # no usable index -> SCAN
+</textarea>
+    </div>
+    <p>Index guidelines for analytical work:</p>
+    <ul>
+      <li>Index columns used in selective <code>WHERE</code> filters and join keys. A filter matching half the table gains
+        nothing from an index; a scan is cheaper.</li>
+      <li>A composite index <code>(a, b)</code> helps filters on <code>a</code>, or <code>a</code> and <code>b</code>, but not
+        on <code>b</code> alone (leftmost-prefix rule).</li>
+      <li>A <strong>covering</strong> index includes every column the query needs, so the table is never touched.</li>
+      <li>Indexes cost write speed and disk space. Columnar OLAP engines like DuckDB rarely need them: they rely on fast
+        scans plus min/max <em>zone maps</em> to skip data.</li>
+      <li>Run <code>ANALYZE</code> after bulk loads so the planner has statistics.</li>
+    </ul>
+    <p><strong>Remember:</strong> read the plan before guessing; SCAN on a big table behind a selective filter means an
+      index is missing.</p>
+  </section>
+
+  <section class="lesson-section" id="duckdb">
+    <h2>DuckDB: in-process OLAP</h2>
+    <p><strong>DuckDB</strong> is "SQLite for analytics": an embedded database that runs inside your Python process (no
+      server), but with a columnar, vectorized, multi-threaded engine built for scans and aggregations. It reads CSV, JSON,
+      and Parquet files directly (locally or from S3/HTTP), speaks a rich PostgreSQL-like SQL dialect, and exchanges data
+      with pandas, Polars, and Arrow with little or no copying. For data up to hundreds of gigabytes on one machine, it often
+      replaces a cluster.</p>
+    <aside class="callout pixi"><p>DuckDB and Polars aren't available in the browser, so the cells below run locally. Add
+      them to a project with <code>pixi add duckdb polars pyarrow</code> (all on conda-forge), then
+      <code>pixi run python duck.py</code>. For the command-line shell: <code>pixi global install duckdb-cli</code> (or
+      <code>pixi add duckdb-cli</code>).</p></aside>
+    <div class="runnable" data-local="duckdb is not available in the browser. Locally: pixi add duckdb pyarrow" data-title="Query files directly">
+<textarea>
+import duckdb
+
+# Make some sample data: DuckDB can write files too
+duckdb.sql("""
+    COPY (SELECT range AS ride_id,
+                 DATE '2026-01-01' + (range % 90)::INTEGER AS ride_date,
+                 ['Boston', 'Austin', 'Denver'][1 + range % 3] AS city,
+                 round(5 + random() * 40, 2) AS fare
+          FROM range(5_000_000))
+    TO 'rides.parquet' (FORMAT parquet, COMPRESSION zstd)
+""")
+
+# Query a Parquet file as if it were a table: only the needed columns are read
+print(duckdb.sql("""
+    SELECT city, count(*) AS rides, round(avg(fare), 2) AS avg_fare
+    FROM 'rides.parquet'
+    WHERE ride_date >= DATE '2026-03-01'
+    GROUP BY city ORDER BY rides DESC
+"""))
+
+# CSV with automatic type sniffing; globs read many files at once
+duckdb.sql("COPY (FROM 'rides.parquet' LIMIT 1000) TO 'sample.csv'")
+print(duckdb.sql("DESCRIBE SELECT * FROM read_csv('sample.csv')"))
+# Hive-partitioned folders: read_parquet('lake/trips/*/*/*.parquet', hive_partitioning = true)
+</textarea>
+    </div>
+    <div class="runnable" data-local="duckdb, pandas, and polars must be installed locally: pixi add duckdb polars pyarrow pandas" data-title="DuckDB ↔ pandas ↔ Polars round trip">
+<textarea>
+import duckdb
+import pandas as pd
+import polars as pl
+
+orders = pd.DataFrame({"customer": ["a", "b", "a", "c"], "amount": [10.0, 5.5, 7.25, 3.0]})
+
+# 1. SQL over a pandas DataFrame in scope, by variable name (a "replacement scan")
+top = duckdb.sql("SELECT customer, sum(amount) AS total FROM orders GROUP BY ALL ORDER BY total DESC")
+print(top.df())                # -> pandas
+pl_top = top.pl()              # -> Polars (via Arrow, no copy for most types)
+print(pl_top)
+
+# 2. SQL over a Polars frame works the same way
+events = pl.DataFrame({"customer": ["a", "c"], "segment": ["vip", "new"]})
+print(duckdb.sql("SELECT * FROM pl_top JOIN events USING (customer)").pl())
+
+# 3. A persistent database file, with a real table
+con = duckdb.connect("shop.duckdb")
+con.execute("CREATE OR REPLACE TABLE orders AS SELECT * FROM orders")
+print(con.execute("SELECT count(*) FROM orders").fetchone())
+con.close()
+</textarea>
+    </div>
+    <div class="runnable" data-local="Compares sqlite3 and duckdb on 5 million rows; needs duckdb locally and takes a few seconds." data-title="Why columnar engines win at scans">
+<textarea>
+import sqlite3, time
+import duckdb
+
+n = 5_000_000
+duck = duckdb.connect()
+duck.execute(f"CREATE TABLE t AS SELECT range AS id, range % 1000 AS k, random() AS v FROM range({n})")
+lite = sqlite3.connect(":memory:")
+lite.execute("CREATE TABLE t (id INTEGER, k INTEGER, v REAL)")
+lite.executemany("INSERT INTO t VALUES (?, ?, ?)", duck.execute("SELECT * FROM t").fetchall())
+
+sql = "SELECT k, avg(v), count(*) FROM t GROUP BY k"
+for name, con in [("sqlite3", lite), ("duckdb", duck)]:
+    start = time.perf_counter()
+    con.execute(sql).fetchall()
+    print(f"{name:8} {time.perf_counter() - start:.3f} s")
+print(duck.sql("EXPLAIN ANALYZE " + sql))    # operator tree with timings and row counts
+</textarea>
+    </div>
+    <p>DuckDB's SQL has friendly extensions worth knowing: <code>GROUP BY ALL</code>, <code>SELECT * EXCLUDE (col)</code>,
+      <code>FROM tbl</code> without <code>SELECT</code>, <code>QUALIFY</code> to filter on window functions directly
+      (<code>QUALIFY row_number() OVER (…) = 1</code>), <code>PIVOT</code>/<code>UNPIVOT</code>, and list/struct types. Every
+      window-function query you wrote for SQLite runs unchanged.</p>
+    <aside class="callout pro"><p>A common modern stack: raw files land in object storage, DuckDB (or Polars) transforms them
+      into Parquet, and dbt-duckdb manages the SQL models. When data outgrows one machine, the same SQL moves to a
+      warehouse or Spark (<a href="m63-big-data-streaming.html">M63</a>).</p></aside>
+    <p><strong>Remember:</strong> DuckDB = embedded, columnar, vectorized; query files in place; hand results to pandas or
+      Polars with <code>.df()</code> / <code>.pl()</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="style-testing">
+    <h2>SQL style and testing</h2>
+    <p>Analytical SQL lives for years and is read far more than written. Professional conventions:</p>
+    <ul>
+      <li>One clause per line; uppercase keywords (or consistently lowercase); <code>snake_case</code> names.</li>
+      <li>CTEs over nested subqueries, each named for what it holds (<code>paid_orders</code>, not <code>t2</code>).</li>
+      <li>Explicit <code>JOIN … ON</code>, never comma joins; qualify columns with short table aliases.</li>
+      <li>No <code>SELECT *</code> in production queries: name the columns, so upstream additions can't change your output.</li>
+      <li>Always bind values with parameters (<code>?</code> or <code>:name</code>), never f-strings: that prevents SQL
+        injection and lets the database reuse plans.</li>
+      <li>Lint and format automatically: <code>pixi add sqlfluff</code>, then <code>pixi run sqlfluff lint queries/</code>.</li>
+    </ul>
+    <p>Test SQL like code: build a tiny dataset where you know the right answer by hand, run the query, assert the result.
+      Keep queries in <code>.sql</code> files or module constants so tests and production run the same text.</p>
+    <pre><code class="language-python"># test_reports.py  (run with: pixi run pytest)
+import sqlite3
+import pytest
+from reports import TOP_CUSTOMER_PER_REGION   # the production query string
+
+@pytest.fixture
+def conn():
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, region TEXT);
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, amount REAL, status TEXT);
+        INSERT INTO customers VALUES (1, 'Ada', 'north'), (2, 'Cy', 'north'), (3, 'Ben', 'south');
+        INSERT INTO orders VALUES (1, 1, 50, 'paid'), (2, 2, 70, 'paid'), (3, 2, 500, 'refunded'), (4, 3, 10, 'paid');
+    """)
+    yield c
+    c.close()
+
+def test_refunds_do_not_count(conn):
+    rows = conn.execute(TOP_CUSTOMER_PER_REGION).fetchall()
+    assert rows == [("north", "Cy", 70.0), ("south", "Ben", 10.0)]
+
+def test_empty_tables_return_nothing(conn):
+    conn.execute("DELETE FROM orders")
+    assert conn.execute(TOP_CUSTOMER_PER_REGION).fetchall() == []</code></pre>
+    <p>Include edge cases in the fixture on purpose: ties, NULLs, refunds, a region with no orders, a day with no sales.
+      In dbt the same idea appears as <em>data tests</em> (<code>unique</code>, <code>not_null</code>, relationships) and
+      <em>unit tests</em> with mocked inputs.</p>
+    <p><strong>Remember:</strong> readable CTEs, named columns, bound parameters, and a hand-checked fixture for every query.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise asks you to assign a SQL string to a variable. The tests build the dataset shown in the prompt in an
+      in-memory SQLite database, run your query, and compare the rows. Column names don't matter; column order and row order do.</p>
+
+    <div class="exercise" data-id="m61-e1" data-title="Conditional aggregation by day">
+      <div class="exercise-prompt">
+        <p>Table <code>orders(id, order_date TEXT, amount REAL, status TEXT)</code> where status is
+          <code>'paid'</code> or <code>'refunded'</code>. Write <code>QUERY</code> returning one row per
+          <code>order_date</code> (ascending) with: the date, the number of paid orders, paid revenue, and refunded revenue
+          (use 0, not NULL, when there is none).</p>
+      </div>
+<textarea class="starter">
+QUERY = """
+SELECT ...
+FROM orders
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def _db():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE orders (id INTEGER, order_date TEXT, amount REAL, status TEXT)")
+    c.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", [
+        (1, "2026-03-01", 120, "paid"), (2, "2026-03-01", 80, "paid"), (3, "2026-03-01", 40, "refunded"),
+        (4, "2026-03-02", 200, "paid"), (5, "2026-03-03", 60, "refunded")])
+    return c
+
+def test_rows():
+    got = _db().execute(QUERY).fetchall()
+    assert got == [("2026-03-01", 2, 200.0, 40.0), ("2026-03-02", 1, 200.0, 0.0), ("2026-03-03", 0, 0.0, 60.0)], f"got {got}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END)</code> counts;
+        <code>SUM(CASE WHEN … THEN amount ELSE 0 END)</code> totals. Integer 0 vs 0.0: SQLite sums a REAL column to a
+        float.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">QUERY = """
+SELECT order_date,
+       SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END)          AS paid_orders,
+       SUM(CASE WHEN status = 'paid' THEN amount ELSE 0.0 END)     AS paid_revenue,
+       SUM(CASE WHEN status = 'refunded' THEN amount ELSE 0.0 END) AS refunded_revenue
+FROM orders
+GROUP BY order_date
+ORDER BY order_date
+"""</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m61-e2" data-title="Latest order per customer">
+      <div class="exercise-prompt">
+        <p>Table <code>orders(id, customer_id, order_date TEXT, amount REAL)</code>. Write <code>QUERY</code> returning each
+          customer's most recent order as <code>(customer_id, id, order_date, amount)</code>, ordered by
+          <code>customer_id</code>. If a customer has two orders on the same latest date, pick the one with the larger
+          <code>id</code>. Use <code>ROW_NUMBER()</code>.</p>
+      </div>
+<textarea class="starter">
+QUERY = """
+WITH ranked AS (
+    SELECT ...
+)
+SELECT ...
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def _db():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE orders (id INTEGER, customer_id INTEGER, order_date TEXT, amount REAL)")
+    c.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", [
+        (1, 1, "2026-03-01", 10), (2, 1, "2026-03-04", 20), (3, 2, "2026-03-02", 30),
+        (4, 2, "2026-03-02", 40), (5, 3, "2026-03-05", 50), (6, 1, "2026-03-03", 60)])
+    return c
+
+def test_latest():
+    got = _db().execute(QUERY).fetchall()
+    assert got == [(1, 2, "2026-03-04", 20.0), (2, 4, "2026-03-02", 40.0), (3, 5, "2026-03-05", 50.0)], f"got {got}"
+
+def test_uses_window_function():
+    assert "row_number" in QUERY.lower(), "use ROW_NUMBER() OVER (PARTITION BY ...)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date
+        DESC, id DESC)</code>, then keep <code>rn = 1</code> in the outer query.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">QUERY = """
+WITH ranked AS (
+    SELECT customer_id, id, order_date, amount,
+           ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC, id DESC) AS rn
+    FROM orders
+)
+SELECT customer_id, id, order_date, amount
+FROM ranked
+WHERE rn = 1
+ORDER BY customer_id
+"""</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m61-e3" data-title="Running total and 3-row moving average">
+      <div class="exercise-prompt">
+        <p>Table <code>daily(day TEXT, revenue REAL)</code>, one row per day. Write <code>QUERY</code> returning
+          <code>(day, revenue, running_total, moving_avg)</code> ordered by day, where <code>moving_avg</code> is the average
+          of the current and up to two previous rows, rounded to 2 decimals with <code>ROUND</code>.</p>
+      </div>
+<textarea class="starter">
+QUERY = """
+SELECT day, revenue, ...
+FROM daily
+ORDER BY day
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def _db():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE daily (day TEXT, revenue REAL)")
+    c.executemany("INSERT INTO daily VALUES (?, ?)", [
+        ("2026-03-04", 40), ("2026-03-01", 10), ("2026-03-02", 20), ("2026-03-03", 25), ("2026-03-05", 100)])
+    return c
+
+def test_values():
+    got = _db().execute(QUERY).fetchall()
+    assert got == [
+        ("2026-03-01", 10.0, 10.0, 10.0),
+        ("2026-03-02", 20.0, 30.0, 15.0),
+        ("2026-03-03", 25.0, 55.0, 18.33),
+        ("2026-03-04", 40.0, 95.0, 28.33),
+        ("2026-03-05", 100.0, 195.0, 55.0),
+    ], f"got {got}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>SUM(revenue) OVER (ORDER BY day)</code> and
+        <code>AVG(revenue) OVER (ORDER BY day ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">QUERY = """
+SELECT day,
+       revenue,
+       SUM(revenue) OVER (ORDER BY day) AS running_total,
+       ROUND(AVG(revenue) OVER (ORDER BY day ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), 2) AS moving_avg
+FROM daily
+ORDER BY day
+"""</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m61-e4" data-title="Month-over-month growth per region">
+      <div class="exercise-prompt">
+        <p>Table <code>sales(region TEXT, month TEXT, revenue REAL)</code>. Write <code>QUERY</code> returning
+          <code>(region, month, revenue, prev_revenue, growth_pct)</code> ordered by region then month.
+          <code>prev_revenue</code> is the previous month's revenue <em>in the same region</em> (NULL for the first month), and
+          <code>growth_pct</code> is <code>ROUND(100.0 * (revenue - prev) / prev, 1)</code> (NULL when there is no previous month).</p>
+      </div>
+<textarea class="starter">
+QUERY = """
+SELECT ...
+FROM sales
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def _db():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE sales (region TEXT, month TEXT, revenue REAL)")
+    c.executemany("INSERT INTO sales VALUES (?, ?, ?)", [
+        ("north", "2026-01", 100), ("north", "2026-02", 150), ("north", "2026-03", 120),
+        ("south", "2026-02", 80), ("south", "2026-01", 50)])
+    return c
+
+def test_growth():
+    got = _db().execute(QUERY).fetchall()
+    assert got == [
+        ("north", "2026-01", 100.0, None, None),
+        ("north", "2026-02", 150.0, 100.0, 50.0),
+        ("north", "2026-03", 120.0, 150.0, -20.0),
+        ("south", "2026-01", 50.0, None, None),
+        ("south", "2026-02", 80.0, 50.0, 60.0),
+    ], f"got {got}"
+
+def test_uses_lag():
+    assert "lag" in QUERY.lower(), "use LAG(...) OVER (PARTITION BY region ORDER BY month)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute <code>LAG(revenue) OVER (PARTITION BY region ORDER BY month)</code>
+        in a CTE, then do the arithmetic in the outer query. Arithmetic with NULL gives NULL, which is what you want.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">QUERY = """
+WITH with_prev AS (
+    SELECT region, month, revenue,
+           LAG(revenue) OVER (PARTITION BY region ORDER BY month) AS prev_revenue
+    FROM sales
+)
+SELECT region, month, revenue, prev_revenue,
+       ROUND(100.0 * (revenue - prev_revenue) / prev_revenue, 1) AS growth_pct
+FROM with_prev
+ORDER BY region, month
+"""</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m61-e5" data-title="Recursive org chart">
+      <div class="exercise-prompt">
+        <p>Table <code>employees(id, name, manager_id)</code>; the CEO has <code>manager_id</code> NULL. Write
+          <code>QUERY</code> with a recursive CTE that returns <code>(name, depth)</code> for every employee who reports,
+          directly or indirectly, to the employee with <strong>id 2</strong>, where depth is 1 for direct reports, 2 for
+          their reports, and so on. Order by depth, then name. Employee 2 is not included.</p>
+      </div>
+<textarea class="starter">
+QUERY = """
+WITH RECURSIVE reports(id, name, depth) AS (
+    ...
+)
+SELECT name, depth FROM reports ORDER BY depth, name
+"""
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def _db():
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT, manager_id INTEGER)")
+    c.executemany("INSERT INTO employees VALUES (?, ?, ?)", [
+        (1, "Grace", None), (2, "Alan", 1), (3, "Ada", 1), (4, "Linus", 2), (5, "Barbara", 2),
+        (6, "Guido", 4), (7, "Margaret", 4), (8, "Katherine", 3), (9, "Ken", 6)])
+    return c
+
+def test_reports():
+    got = _db().execute(QUERY).fetchall()
+    assert got == [("Barbara", 1), ("Linus", 1), ("Guido", 2), ("Margaret", 2), ("Ken", 3)], f"got {got}"
+
+def test_is_recursive():
+    assert "recursive" in QUERY.lower(), "use WITH RECURSIVE"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Anchor: <code>SELECT id, name, 1 FROM employees WHERE manager_id = 2</code>.
+        Recursive step: join <code>employees e</code> to <code>reports r</code> on <code>e.manager_id = r.id</code> with
+        <code>r.depth + 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">QUERY = """
+WITH RECURSIVE reports(id, name, depth) AS (
+    SELECT id, name, 1 FROM employees WHERE manager_id = 2
+    UNION ALL
+    SELECT e.id, e.name, r.depth + 1
+    FROM employees e JOIN reports r ON e.manager_id = r.id
+)
+SELECT name, depth FROM reports ORDER BY depth, name
+"""</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m61-e6" data-title="An idempotent inventory upsert">
+      <div class="exercise-prompt">
+        <p>Write <code>load_inventory(conn, rows)</code> where <code>rows</code> is a list of
+          <code>(sku, qty, as_of)</code> tuples (as_of is an ISO date string). Create the table
+          <code>inventory(sku TEXT PRIMARY KEY, qty INTEGER, as_of TEXT)</code> if it doesn't exist, then upsert every row so
+          that an incoming row replaces the stored one <strong>only if its <code>as_of</code> is newer</strong>. Loading the
+          same batch twice must leave the same table. Commit at the end.</p>
+      </div>
+<textarea class="starter">
+def load_inventory(conn, rows):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+def test_insert_and_idempotent():
+    c = sqlite3.connect(":memory:")
+    batch = [("A", 5, "2026-03-01"), ("B", 2, "2026-03-01")]
+    load_inventory(c, batch)
+    load_inventory(c, batch)
+    assert c.execute("SELECT * FROM inventory ORDER BY sku").fetchall() == [("A", 5, "2026-03-01"), ("B", 2, "2026-03-01")]
+
+def test_newer_wins_older_ignored():
+    c = sqlite3.connect(":memory:")
+    load_inventory(c, [("A", 5, "2026-03-02")])
+    load_inventory(c, [("A", 9, "2026-03-01"), ("A", 7, "2026-03-03")])
+    assert c.execute("SELECT qty, as_of FROM inventory").fetchall() == [(7, "2026-03-03")], "stale rows must not overwrite"
+
+def test_committed():
+    c = sqlite3.connect(":memory:")
+    load_inventory(c, [("Z", 1, "2026-03-01")])
+    assert not c.in_transaction, "call conn.commit() so the data is durable"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>ON CONFLICT (sku) DO UPDATE SET qty = excluded.qty, as_of =
+        excluded.as_of WHERE excluded.as_of &gt; inventory.as_of</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def load_inventory(conn, rows):
+    conn.execute("CREATE TABLE IF NOT EXISTS inventory (sku TEXT PRIMARY KEY, qty INTEGER, as_of TEXT)")
+    conn.executemany("""
+        INSERT INTO inventory (sku, qty, as_of) VALUES (?, ?, ?)
+        ON CONFLICT (sku) DO UPDATE SET qty = excluded.qty, as_of = excluded.as_of
+        WHERE excluded.as_of &gt; inventory.as_of
+    """, rows)
+    conn.commit()</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a sales analytics SQL report</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Monthly sales report in SQL</span></div>
+      <div class="widget-body">
+        <p>Build a small reporting package whose every number comes from a tested SQL query. Generate a year of sales for
+          a fictional store (products, categories, regions, salespeople) with a fixed seed, load it into SQLite, and
+          produce a Markdown report.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init sales-report &amp;&amp; cd sales-report
+pixi add python pytest
+pixi add duckdb polars          # for the stretch goals
+pixi run python generate.py     # writes sales.db
+pixi run python report.py &gt; report.md
+pixi run pytest</code></pre>
+        <p>Queries to write (each a constant in <code>queries.py</code>):</p>
+        <ol>
+          <li>Monthly revenue with month-over-month growth (<code>LAG</code>).</li>
+          <li>Running year-to-date revenue and a 3-month moving average.</li>
+          <li>Top 3 products per category by revenue (<code>DENSE_RANK</code>, ties included).</li>
+          <li>Each salesperson's share of their region's revenue (window <code>SUM</code> over a partition).</li>
+          <li>A region × quarter pivot with conditional aggregation.</li>
+          <li>Customers whose order count dropped by half or more versus the previous quarter.</li>
+        </ol>
+        <ul class="checklist" data-id="m61-mini">
+          <li>Queries are CTE-structured, use named columns, and bind every parameter</li>
+          <li>Each query has a pytest test against a small hand-checked fixture (including a tie and an empty month)</li>
+          <li>The report renders as a Markdown table per query</li>
+          <li><code>EXPLAIN QUERY PLAN</code> output is checked for the two slowest queries, with an index added where it helps</li>
+          <li>Re-running <code>generate.py</code> produces identical data (fixed seed, upserts)</li>
+        </ul>
+        <p><strong>Stretch:</strong> export the tables to Parquet with DuckDB and run the same queries with DuckDB, replacing the
+          top-N subquery with <code>QUALIFY</code>; compare timings on 10 million rows; return results as Polars frames.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m61-quiz">
+<script type="application/json">
+{"title": "Analytical SQL and DuckDB", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "In SQL's logical evaluation order, which runs first?", "options": ["SELECT", "HAVING", "WHERE", "ORDER BY"], "answer": 2, "explanation": "<p>FROM/JOIN, then WHERE, GROUP BY, HAVING, window functions, SELECT, ORDER BY, LIMIT. That is why WHERE cannot use aggregates.</p>"},
+  {"type": "single", "prompt": "What is the main benefit of a (non-recursive) CTE?", "options": ["It always makes queries faster", "It names intermediate steps so a query reads top to bottom", "It creates a permanent table", "It disables the query planner"], "answer": 1, "explanation": "<p>CTEs are about readability and reuse within a query. Performance is usually the same as the equivalent subquery.</p>"},
+  {"type": "multi", "prompt": "Which parts does a recursive CTE need?", "options": ["An anchor member", "UNION ALL (or UNION) joining a recursive member", "A recursive member that references the CTE", "A GROUP BY clause"], "answer": [0, 1, 2], "explanation": "<p>The anchor seeds the rows; the recursive member, combined with UNION ALL, joins to the previous iteration until no new rows appear.</p>"},
+  {"type": "output", "prompt": "Scores are 90, 90, 80. What does <code>DENSE_RANK() OVER (ORDER BY score DESC)</code> give for 80?", "answer": "2", "explanation": "<p>DENSE_RANK gives ties the same rank with no gaps: 1, 1, 2. RANK would give 3.</p>"},
+  {"type": "single", "prompt": "How do window functions differ from GROUP BY aggregates?", "options": ["They are slower but identical", "They compute across related rows without collapsing them into one row per group", "They only work on dates", "They cannot use ORDER BY"], "answer": 1, "explanation": "<p>Each input row keeps its own output row and gains the window result, such as a rank or running total.</p>"},
+  {"type": "single", "prompt": "Why can't you write <code>WHERE ROW_NUMBER() OVER (...) = 1</code>?", "options": ["ROW_NUMBER is not standard", "Window functions are computed after WHERE, so filter in an outer query (or QUALIFY in DuckDB)", "WHERE only accepts columns", "It works in every database"], "answer": 1, "explanation": "<p>Windows run after WHERE/GROUP BY/HAVING. Wrap the query in a CTE and filter outside, or use QUALIFY where supported.</p>"},
+  {"type": "single", "prompt": "<code>AVG(x) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)</code> computes…", "options": ["A 6-row average", "An average over the current row and up to six previous rows", "The average over the whole table", "A 7-day average even if some days are missing"], "answer": 1, "explanation": "<p>ROWS frames count rows: up to 7 rows. If days are missing it spans more than 7 days, so fill gaps with a calendar first.</p>"},
+  {"type": "single", "prompt": "What does <code>LAG(revenue, 1, 0) OVER (ORDER BY month)</code> return for the first month?", "options": ["NULL", "0", "The first month's revenue", "An error"], "answer": 1, "explanation": "<p>The third argument is the default used when there is no previous row.</p>"},
+  {"type": "multi", "prompt": "Which make a daily load idempotent?", "options": ["INSERT ... ON CONFLICT (natural_key) DO UPDATE", "Plain INSERT of every row", "Delete the day's partition then insert it, in one transaction", "MERGE INTO on the natural key"], "answer": [0, 2, 3], "explanation": "<p>Upserts, MERGE, and delete-then-insert of a whole partition all leave the same result when re-run. Plain INSERT duplicates rows.</p>"},
+  {"type": "text", "prompt": "In <code>ON CONFLICT ... DO UPDATE SET qty = ???.qty</code>, what is the name of the pseudo-table holding the row you tried to insert?", "answer": ["excluded"], "explanation": "<p><code>excluded</code> refers to the proposed row; the table's own name refers to the existing row.</p>"},
+  {"type": "single", "prompt": "EXPLAIN QUERY PLAN shows <code>SCAN orders</code> for <code>WHERE customer_id = 42</code> on 10 million rows. What usually helps?", "options": ["Adding an index on customer_id", "Running VACUUM", "Using SELECT *", "Adding ORDER BY"], "answer": 0, "explanation": "<p>A selective equality filter on an unindexed column forces a full scan. An index turns it into a B-tree SEARCH.</p>"},
+  {"type": "single", "prompt": "A composite index on <code>(region, day)</code> helps which filter most?", "options": ["WHERE day = '2026-03-01'", "WHERE region = 'north' AND day >= '2026-03-01'", "WHERE amount > 10", "None"], "answer": 1, "explanation": "<p>The leftmost-prefix rule: the index is ordered by region first, then day, so it serves filters starting with region.</p>"},
+  {"type": "single", "prompt": "What best describes DuckDB?", "options": ["A client-server OLTP database", "An embedded, columnar, vectorized analytical database that runs in your process", "A Python dataframe library", "A Kafka client"], "answer": 1, "explanation": "<p>DuckDB is in-process like SQLite but designed for OLAP: columnar storage, vectorized multi-threaded execution, and direct file querying.</p>"},
+  {"type": "single", "prompt": "Which statement queries a Parquet file directly with DuckDB?", "options": ["<code>duckdb.sql(\"SELECT * FROM 'rides.parquet'\")</code>", "<code>duckdb.load('rides.parquet')</code>", "<code>sqlite3.connect('rides.parquet')</code>", "<code>pd.sql('rides.parquet')</code>"], "answer": 0, "explanation": "<p>DuckDB treats a quoted file path (or read_parquet(...)) as a table and reads only the needed columns and row groups.</p>"},
+  {"type": "single", "prompt": "Why bind values with <code>?</code> placeholders instead of f-strings?", "options": ["It is shorter", "It prevents SQL injection and handles quoting and types correctly", "f-strings don't work with sqlite3", "Placeholders make queries recursive"], "answer": 1, "explanation": "<p>Parameters are sent separately from the SQL text, so user input can never change the query's structure.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Logical order: FROM → WHERE → GROUP BY → HAVING → windows → SELECT → ORDER BY → LIMIT.</li>
+      <li>CTEs make queries readable; recursive CTEs walk hierarchies and generate series, with a termination condition.</li>
+      <li>Window functions keep rows: ranking, LAG/LEAD, running totals, and moving averages via PARTITION BY, ORDER BY, and frames.</li>
+      <li>Conditional aggregation pivots rows into columns; mind NULLs.</li>
+      <li>Upserts on a natural key make loads idempotent; prefer ON CONFLICT DO UPDATE over INSERT OR REPLACE.</li>
+      <li>Store UTC ISO text, bucket with date functions; read query plans and index selective filters.</li>
+      <li>DuckDB brings columnar OLAP into your process, queries files directly, and swaps data with pandas and Polars.</li>
+      <li>Treat SQL as code: style, named columns, parameters, and tests with hand-checked fixtures.</li>
+    </ul>
+    <div class="flashcards" data-title="Analytical SQL">
+<script type="application/json">
+[{"front": "CTE", "back": "WITH name AS (subquery): a named step usable later in the same query."},
+ {"front": "Recursive CTE parts", "back": "Anchor rows UNION ALL a recursive member that joins the CTE to itself; stops when no new rows appear."},
+ {"front": "ROW_NUMBER vs RANK vs DENSE_RANK", "back": "Unique 1,2,3 / ties share and skip (1,1,3) / ties share without gaps (1,1,2)."},
+ {"front": "PARTITION BY in a window", "back": "Splits rows into independent groups for the window without collapsing them."},
+ {"front": "Running total", "back": "SUM(x) OVER (ORDER BY t): default frame is start of partition to current row."},
+ {"front": "Moving average frame", "back": "AVG(x) OVER (ORDER BY t ROWS BETWEEN n-1 PRECEDING AND CURRENT ROW)."},
+ {"front": "LAG / LEAD", "back": "Read a value from a previous / following row in the window order; optional offset and default."},
+ {"front": "Conditional aggregation", "back": "SUM(CASE WHEN cond THEN x ELSE 0 END) or COUNT(*) FILTER (WHERE cond): pivots in one pass."},
+ {"front": "Upsert in SQLite", "back": "INSERT ... ON CONFLICT (key) DO UPDATE SET col = excluded.col [WHERE ...]."},
+ {"front": "SCAN vs SEARCH in a plan", "back": "SCAN reads every row; SEARCH ... USING INDEX jumps to matches via a B-tree."},
+ {"front": "DuckDB", "back": "In-process columnar OLAP engine: SQL over Parquet/CSV, .df() to pandas, .pl() to Polars."},
+ {"front": "QUALIFY (DuckDB)", "back": "Filters on window function results directly, like HAVING for windows."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/sqlite3.html">sqlite3</a> in the Python docs</li>
+      <li>SQLite: <a href="https://www.sqlite.org/windowfunctions.html">window functions</a>, <a href="https://www.sqlite.org/lang_with.html">WITH clause</a>, <a href="https://www.sqlite.org/lang_upsert.html">upsert</a>, <a href="https://www.sqlite.org/lang_datefunc.html">date functions</a>, <a href="https://www.sqlite.org/eqp.html">EXPLAIN QUERY PLAN</a></li>
+      <li><a href="https://duckdb.org/docs/">DuckDB documentation</a>, including the <a href="https://duckdb.org/docs/stable/clients/python/overview">Python client</a></li>
+      <li><a href="https://modern-sql.com/">modern-sql.com</a> (Markus Winand) and <a href="https://use-the-index-luke.com/">Use The Index, Luke</a></li>
+      <li>Next: <a href="m62-pipelines.html">M62 · Pipelines, Orchestration &amp; Data Quality</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

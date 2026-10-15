@@ -1,0 +1,1230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M44 · Databases &amp; SQL · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m44">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 44</p>
+    <h1>Databases &amp; SQL</h1>
+    <p class="lede">Almost every professional program stores data that must outlive the process, be shared safely, and
+      be queried in ways nobody planned for. Relational databases and SQL have done that job for fifty years. In this
+      module you design schemas properly, learn SQL from zero with a real database running in your browser, and use it
+      from Python the way production code does.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m40-stdlib.html">M40</a>, <a href="m13-dataclasses.html">M13</a>, <a href="m09-files-io.html">M09</a></span></div>
+    <ul class="objectives">
+      <li>Explain tables, rows, primary and foreign keys, and normalize a messy table to third normal form</li>
+      <li>Write SQL to create, insert, filter, sort, group, join, and nest queries</li>
+      <li>Read <code>EXPLAIN QUERY PLAN</code> and decide when an index helps</li>
+      <li>Use <code>sqlite3</code> safely: parameterized queries, row factories, and transactions with commit and rollback</li>
+      <li>Describe ACID, migrations (Alembic), connection pooling, and when to choose SQLite or PostgreSQL</li>
+      <li>Compare raw SQL with SQLAlchemy 2.0 and know the trade-offs of an ORM</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="relational-model">
+    <h2>The relational model</h2>
+    <p>Suppose you keep your app's data in a JSON file. It works until two processes write at once (one overwrites the
+      other), until the file is 2 GB and you need "all orders over $100 from last March" (you must load everything),
+      or until a crash halfway through a write leaves the file corrupt. A <strong>database management system</strong>
+      (DBMS) solves exactly these problems: concurrent access, fast queries over data larger than memory, and
+      durability across crashes.</p>
+    <p>A <strong>relational</strong> database, proposed by Edgar Codd in 1970, stores data in <strong>tables</strong>
+      (formally <em>relations</em>). Each table has named, typed <strong>columns</strong> (attributes) and any number of
+      <strong>rows</strong> (tuples). The rows have no inherent order; you ask for an order when you query.</p>
+    <ul>
+      <li>A <strong>primary key</strong> (PK) is a column, or set of columns, whose value uniquely identifies each row.
+        It can never be NULL and never repeats.</li>
+      <li>A <strong>foreign key</strong> (FK) is a column whose values must match a primary key in another table. It is
+        how rows in different tables refer to each other, the database equivalent of a pointer, but checked.</li>
+      <li>A <strong>natural key</strong> is a real-world identifier (an ISBN, an email). A <strong>surrogate key</strong>
+        is an invented one, usually an auto-incrementing integer or a UUID. Surrogate keys are the common default
+        because real-world identifiers change (people change emails).</li>
+      <li><strong>SQL</strong> (Structured Query Language) is the declarative language for all of this: you describe
+        <em>what</em> you want, and the database's <em>query planner</em> decides <em>how</em> to get it.</li>
+    </ul>
+    <p>Python ships with <code>sqlite3</code>, a binding to SQLite, a complete relational database that lives in a
+      single file (or in memory) with no server. It is the most widely deployed database in the world: it is in every
+      phone and every browser. It runs right here in the page, too.</p>
+    <div class="runnable" data-title="Your first database">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")       # a private database that lives in RAM
+conn.execute("CREATE TABLE greetings (id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+conn.execute("INSERT INTO greetings (text) VALUES ('hello'), ('hola'), ('bonjour')")
+for row in conn.execute("SELECT id, text FROM greetings ORDER BY text"):
+    print(row)
+print("SQLite version:", sqlite3.sqlite_version)
+conn.close()
+</textarea>
+    </div>
+    <p>Each row comes back as a tuple. <code>INTEGER PRIMARY KEY</code> is special in SQLite: it becomes an alias for
+      the internal row id and fills itself in automatically, which is why we never supplied <code>id</code>.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> a table is a set of rows with typed columns; a primary key
+      identifies a row; a foreign key references another table's primary key; SQL says what, the planner decides how.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="normalization">
+    <h2>Designing tables: normalization to 3NF</h2>
+    <p>The hardest part of databases is not SQL; it is deciding which tables to have. A bad design causes
+      <strong>anomalies</strong>, bugs that come from storing the same fact in more than one place. Here is a typical
+      spreadsheet someone exported from an online shop:</p>
+    <table>
+      <thead><tr><th>order_id</th><th>date</th><th>customer</th><th>customer_email</th><th>items</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>2026-03-01</td><td>Ada</td><td>ada@example.com</td><td>Pen x2 ($1.50), Notebook x1 ($4.00)</td></tr>
+        <tr><td>2</td><td>2026-03-02</td><td>Ben</td><td>ben@example.com</td><td>Pen x10 ($1.50)</td></tr>
+        <tr><td>3</td><td>2026-03-05</td><td>Ada</td><td>ada@NEW.com</td><td>Stapler x1 ($9.00)</td></tr>
+      </tbody>
+    </table>
+    <p>Three anomalies are hiding here:</p>
+    <ul>
+      <li><strong>Update anomaly</strong>: Ada's email appears in several rows. Change one and forget another, and the data
+        now disagrees with itself (row 3 already does).</li>
+      <li><strong>Insertion anomaly</strong>: you cannot record a new product (or a customer who has not ordered yet)
+        without inventing an order.</li>
+      <li><strong>Deletion anomaly</strong>: delete Ben's only order and you lose the fact that Ben exists.</li>
+    </ul>
+    <p><strong>Normalization</strong> is a step-by-step method for removing these by splitting tables so that each fact
+      lives in exactly one place. The first three <em>normal forms</em> cover almost all practical cases.</p>
+    <h3>First normal form (1NF): one value per cell</h3>
+    <p>Every column holds a single, atomic value, and there are no repeating groups. The <code>items</code> column
+      breaks this: it packs a list into a string, so you cannot ask "how many pens did we sell?" without parsing text.
+      Fix it by giving each order line its own row:</p>
+    <table>
+      <thead><tr><th>order_id</th><th>product</th><th>unit_price</th><th>qty</th><th>date</th><th>customer</th><th>customer_email</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Pen</td><td>1.50</td><td>2</td><td>2026-03-01</td><td>Ada</td><td>ada@example.com</td></tr>
+        <tr><td>1</td><td>Notebook</td><td>4.00</td><td>1</td><td>2026-03-01</td><td>Ada</td><td>ada@example.com</td></tr>
+        <tr><td>2</td><td>Pen</td><td>1.50</td><td>10</td><td>2026-03-02</td><td>Ben</td><td>ben@example.com</td></tr>
+      </tbody>
+    </table>
+    <h3>Second normal form (2NF): depend on the whole key</h3>
+    <p>The key of that table is now the pair <code>(order_id, product)</code>. 2NF says every non-key column must depend
+      on the <em>whole</em> key, not part of it. But <code>date</code> and <code>customer</code> depend only on
+      <code>order_id</code>, and <code>unit_price</code> depends only on <code>product</code>. Those are
+      <strong>partial dependencies</strong>. Split them out: an <code>orders</code> table keyed by
+      <code>order_id</code>, a <code>products</code> table keyed by product, and an <code>order_items</code> table
+      keyed by <code>(order_id, product_id)</code> that keeps only <code>qty</code>.</p>
+    <h3>Third normal form (3NF): nothing but the key</h3>
+    <p>3NF removes <strong>transitive dependencies</strong>: a non-key column that depends on another non-key column.
+      In <code>orders</code>, <code>customer_email</code> depends on <code>customer</code>, which depends on
+      <code>order_id</code>. Move customer facts into a <code>customers</code> table and store only
+      <code>customer_id</code> in <code>orders</code>. The classic summary: every non-key attribute must depend on
+      "the key, the whole key, and nothing but the key".</p>
+    <pre class="mermaid">
+erDiagram
+  CUSTOMERS ||--o{ ORDERS : places
+  ORDERS ||--|{ ORDER_ITEMS : contains
+  PRODUCTS ||--o{ ORDER_ITEMS : "appears in"
+  CUSTOMERS {
+    INTEGER id PK
+    TEXT name
+    TEXT email UK
+  }
+  ORDERS {
+    INTEGER id PK
+    INTEGER customer_id FK
+    TEXT ordered_on
+  }
+  PRODUCTS {
+    INTEGER id PK
+    TEXT name UK
+    INTEGER price_cents
+  }
+  ORDER_ITEMS {
+    INTEGER order_id PK, FK
+    INTEGER product_id PK, FK
+    INTEGER qty
+  }
+    </pre>
+    <p>Read the crow's-foot notation as "one customer places zero or more orders; one order contains one or more items".
+      Now every fact appears once: changing Ada's email is a single-row update, and products and customers exist on
+      their own.</p>
+    <aside class="callout pro"><p>Money is stored as integer cents (<code>price_cents</code>), never as a float, for the
+      same rounding reasons you saw with <code>0.1 + 0.2</code>. And note one deliberate exception to "store each fact
+      once": an order line often copies the price <em>at the time of sale</em>, because the product's current price
+      will change later. That is not duplication; it is a different fact (the historical price).</p></aside>
+    <aside class="callout think"><p>Is <code>age</code> a good column for a <code>customers</code> table? What would
+      you store instead, and why does it relate to normalization? (Age depends on today's date; store
+      <code>birth_date</code> and compute age when you need it.)</p></aside>
+    <p>Sometimes teams <strong>denormalize</strong> on purpose, keeping a redundant copy (say, an order's total) to make a
+      hot query fast. That is a performance trade-off made after measuring, and it comes with the duty to keep the copy
+      in sync. Start normalized.</p>
+  </section>
+
+  <section class="lesson-section" id="sql-basics">
+    <h2>SQL from zero: CREATE, INSERT, SELECT</h2>
+    <p>SQL statements fall into families. <strong>DDL</strong> (data definition) shapes the schema:
+      <code>CREATE TABLE</code>, <code>ALTER TABLE</code>, <code>DROP TABLE</code>. <strong>DML</strong> (data
+      manipulation) changes rows: <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>. And
+      <strong>queries</strong> read rows: <code>SELECT</code>. Keywords are case-insensitive; writing them in capitals is
+      just a convention that helps them stand out.</p>
+<pre><code class="language-sql">CREATE TABLE products (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL UNIQUE,
+    price_cents INTEGER NOT NULL CHECK (price_cents &gt;= 0),
+    category    TEXT    NOT NULL DEFAULT 'misc'
+);</code></pre>
+    <p><strong>Constraints</strong> are rules the database enforces for you, on every write, from every program:
+      <code>NOT NULL</code> (a value is required), <code>UNIQUE</code> (no duplicates), <code>CHECK</code> (an arbitrary
+      condition), <code>DEFAULT</code> (a value when none is given), <code>PRIMARY KEY</code>, and
+      <code>REFERENCES</code> (a foreign key). Put rules in the schema whenever you can: application bugs come and go,
+      but the constraint is always there.</p>
+    <p>A basic query has this shape. Only <code>SELECT</code> and <code>FROM</code> are required:</p>
+<pre><code class="language-sql">SELECT name, price_cents / 100.0 AS price   -- which columns (and computed expressions)
+FROM products                                -- which table
+WHERE category = 'office' AND price_cents &lt; 500   -- which rows
+ORDER BY price_cents DESC, name              -- in what order
+LIMIT 3;                                     -- how many</code></pre>
+    <div class="runnable" data-title="Create, insert, and query">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE products (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL UNIQUE,
+    price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+    category    TEXT    NOT NULL DEFAULT 'misc'
+);
+INSERT INTO products (name, price_cents, category) VALUES
+    ('Pen', 150, 'office'), ('Notebook', 400, 'office'), ('Stapler', 900, 'office'),
+    ('Mug', 800, 'kitchen'), ('Kettle', 2500, 'kitchen');
+INSERT INTO products (name, price_cents) VALUES ('Sticker', 50);   -- category gets its DEFAULT
+""")
+
+query = """
+SELECT name, price_cents / 100.0 AS price
+FROM products
+WHERE category = 'office' AND price_cents < 500
+ORDER BY price_cents DESC, name
+"""
+for row in conn.execute(query):
+    print(row)
+
+# Constraints in action: try to break the rules.
+for bad in ["INSERT INTO products (name, price_cents) VALUES ('Pen', 100)",
+            "INSERT INTO products (name, price_cents) VALUES ('Free', -5)",
+            "INSERT INTO products (name) VALUES ('Nothing')"]:
+    try:
+        conn.execute(bad)
+    except sqlite3.IntegrityError as exc:
+        print("rejected:", exc)
+</textarea>
+    </div>
+    <h3>NULL: the absence of a value</h3>
+    <p><code>NULL</code> means "unknown" or "missing". It is not zero and not the empty string, and it uses
+      <strong>three-valued logic</strong>: any comparison with NULL is itself NULL (unknown), and <code>WHERE</code> keeps
+      only rows where the condition is true. So <code>WHERE x = NULL</code> matches nothing. Use <code>IS NULL</code>
+      and <code>IS NOT NULL</code>, and <code>COALESCE(x, default)</code> to substitute a value.</p>
+    <div class="runnable" data-title="Predict: how many rows match?" data-predict>
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE t (x INTEGER)")
+conn.executemany("INSERT INTO t VALUES (?)", [(1,), (None,), (3,), (None,)])
+print(conn.execute("SELECT COUNT(*) FROM t WHERE x = NULL").fetchone()[0])
+print(conn.execute("SELECT COUNT(*) FROM t WHERE x IS NULL").fetchone()[0])
+print(conn.execute("SELECT COUNT(*) FROM t WHERE x != 1").fetchone()[0])
+print(conn.execute("SELECT COUNT(x), COUNT(*) FROM t").fetchone())
+</textarea>
+    </div>
+    <p>The third line surprises people: <code>x != 1</code> is unknown for the two NULL rows, so only the row with 3
+      matches. <code>COUNT(x)</code> counts non-NULL values; <code>COUNT(*)</code> counts rows.</p>
+    <h3>UPDATE and DELETE</h3>
+<pre><code class="language-sql">UPDATE products SET price_cents = price_cents + 50 WHERE category = 'kitchen';
+DELETE FROM products WHERE name = 'Sticker';</code></pre>
+    <aside class="callout danger"><p>An <code>UPDATE</code> or <code>DELETE</code> without a <code>WHERE</code> clause
+      changes <em>every row</em>. Before running one by hand, run the same <code>WHERE</code> as a
+      <code>SELECT COUNT(*)</code> to see how many rows you are about to touch.</p></aside>
+    <aside class="callout note" data-title="SQLite's types"><p>SQLite uses <em>type affinity</em>: a column's declared
+      type is a preference, and by default it will store a string in an <code>INTEGER</code> column if the string does
+      not look like a number. Add <code>STRICT</code> after the closing parenthesis (<code>CREATE TABLE t (...)
+      STRICT;</code>) to get real type checking, as PostgreSQL always does. SQLite has no date type; store dates as ISO
+      8601 text (<code>'2026-03-01'</code>), which sorts correctly as text.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="grouping">
+    <h2>Aggregation: GROUP BY and HAVING</h2>
+    <p><strong>Aggregate functions</strong> collapse many rows into one value: <code>COUNT</code>, <code>SUM</code>,
+      <code>AVG</code>, <code>MIN</code>, <code>MAX</code>. With <code>GROUP BY</code>, they collapse each
+      <em>group</em> of rows that share the grouping columns, producing one output row per group.
+      <code>HAVING</code> then filters <em>groups</em>, the way <code>WHERE</code> filters rows.</p>
+    <p>The key to understanding SQL is the <strong>logical order</strong> in which a query is evaluated, which is not the
+      order it is written in:</p>
+    <ol>
+      <li><code>FROM</code> (and joins): build the working set of rows</li>
+      <li><code>WHERE</code>: keep rows that match (no aggregates allowed here; groups do not exist yet)</li>
+      <li><code>GROUP BY</code>: form groups</li>
+      <li><code>HAVING</code>: keep groups that match (aggregates allowed)</li>
+      <li><code>SELECT</code>: compute output columns and aliases</li>
+      <li><code>ORDER BY</code>: sort (can use the aliases)</li>
+      <li><code>LIMIT</code>/<code>OFFSET</code>: cut</li>
+    </ol>
+    <div class="runnable" data-title="Sales per region">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE sales (region TEXT, rep TEXT, amount INTEGER)")
+conn.executemany("INSERT INTO sales VALUES (?, ?, ?)", [
+    ("north", "ana", 120), ("north", "bo", 80), ("north", "ana", 200),
+    ("south", "cy", 50), ("south", "cy", 40),
+    ("east", "di", 300), ("east", "ed", 10), ("east", "di", 90),
+])
+
+query = """
+SELECT region, COUNT(*) AS n, SUM(amount) AS total, ROUND(AVG(amount), 1) AS avg_sale
+FROM sales
+WHERE amount >= 20            -- drops the 10 before grouping
+GROUP BY region
+HAVING SUM(amount) > 100      -- drops whole groups after grouping
+ORDER BY total DESC
+"""
+for row in conn.execute(query):
+    print(row)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: group by two columns" data-predict>
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE sales (region TEXT, rep TEXT, amount INTEGER)")
+conn.executemany("INSERT INTO sales VALUES (?, ?, ?)", [
+    ("north", "ana", 120), ("north", "bo", 80), ("north", "ana", 200), ("south", "cy", 50),
+])
+rows = conn.execute("""
+    SELECT region, rep, SUM(amount) FROM sales
+    GROUP BY region, rep ORDER BY region, rep
+""").fetchall()
+print(len(rows))
+print(rows[0])
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Every column in the <code>SELECT</code> list of a grouped query should be either a
+      grouping column or inside an aggregate. PostgreSQL rejects <code>SELECT region, rep, SUM(amount) ... GROUP BY
+      region</code> because <code>rep</code> is ambiguous within a group. SQLite allows it and picks a value from an
+      arbitrary row, which hides bugs. Write portable SQL.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="joins">
+    <h2>JOINs: combining tables</h2>
+    <p>Normalization splits data into tables; <strong>joins</strong> put it back together for a query. A join pairs rows
+      from two tables according to a condition, usually "this foreign key equals that primary key".</p>
+    <ul>
+      <li><strong>INNER JOIN</strong> keeps only pairs that match. A customer with no orders disappears; a customer with
+        two orders appears twice.</li>
+      <li><strong>LEFT (OUTER) JOIN</strong> keeps every row of the left table. Where there is no match, the right
+        table's columns are filled with NULL.</li>
+      <li><code>RIGHT</code> and <code>FULL OUTER</code> joins also exist (SQLite supports them since 3.39), and
+        <code>CROSS JOIN</code> pairs every row with every row.</li>
+    </ul>
+    <p>Venn diagrams are a popular but misleading picture of joins (they describe set operations on <em>one</em> kind of
+      thing, and they hide the fact that one row can match many). Think in rows instead:</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 760 300" role="img" aria-label="Row diagram of inner and left joins between customers and orders">
+        <text x="10" y="22" font-weight="700">customers</text>
+        <g class="mono" font-size="13">
+          <rect x="10" y="32" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="50">1  Ada</text>
+          <rect x="10" y="58" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="76">2  Ben</text>
+          <rect x="10" y="84" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="102">3  Cy</text>
+        </g>
+        <text x="10" y="150" font-weight="700">orders</text>
+        <g class="mono" font-size="13">
+          <rect x="10" y="160" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="178">101  cust 1</text>
+          <rect x="10" y="186" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="204">102  cust 1</text>
+          <rect x="10" y="212" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="230">103  cust 3</text>
+          <rect x="10" y="238" width="150" height="26" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="18" y="256">104  cust 9</text>
+        </g>
+        <text x="260" y="22" font-weight="700">INNER JOIN ON o.customer_id = c.id</text>
+        <g class="mono" font-size="13">
+          <rect x="260" y="32" width="210" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="268" y="50">Ada  101</text>
+          <rect x="260" y="58" width="210" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="268" y="76">Ada  102</text>
+          <rect x="260" y="84" width="210" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="268" y="102">Cy   103</text>
+        </g>
+        <text x="260" y="134" font-size="12" fill="var(--fg-muted)">Ben (no orders) and order 104 (no customer) vanish.</text>
+        <text x="520" y="22" font-weight="700">LEFT JOIN orders</text>
+        <g class="mono" font-size="13">
+          <rect x="520" y="32" width="220" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="528" y="50">Ada  101</text>
+          <rect x="520" y="58" width="220" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="528" y="76">Ada  102</text>
+          <rect x="520" y="84" width="220" height="26" fill="var(--warn-soft)" stroke="var(--warn)"/><text x="528" y="102">Ben  NULL</text>
+          <rect x="520" y="110" width="220" height="26" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="528" y="128">Cy   103</text>
+        </g>
+        <text x="520" y="160" font-size="12" fill="var(--fg-muted)">Every customer is kept; Ben gets NULLs.</text>
+        <path d="M160 45 C 210 45, 210 45, 260 45" stroke="var(--viz-1)" fill="none" stroke-width="1.5"/>
+        <path d="M160 173 C 215 150, 215 60, 260 45" stroke="var(--viz-1)" fill="none" stroke-width="1.5"/>
+        <path d="M160 199 C 215 170, 215 80, 260 71" stroke="var(--viz-1)" fill="none" stroke-width="1.5"/>
+        <path d="M160 225 C 215 200, 215 110, 260 97" stroke="var(--viz-2)" fill="none" stroke-width="1.5"/>
+        <path d="M160 97 C 210 97, 210 97, 260 97" stroke="var(--viz-2)" fill="none" stroke-width="1.5"/>
+      </svg>
+      <figcaption>A join produces one output row per matching <em>pair</em>. Ada matches two orders, so she appears
+        twice. A LEFT JOIN keeps unmatched left rows and pads them with NULL.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Inner join, left join, and the anti-join">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total INTEGER);
+INSERT INTO customers VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy');
+INSERT INTO orders VALUES (101, 1, 30), (102, 1, 12), (103, 3, 50), (104, 9, 7);
+""")
+
+print("INNER:", conn.execute("""
+    SELECT c.name, o.id FROM customers AS c
+    JOIN orders AS o ON o.customer_id = c.id ORDER BY o.id""").fetchall())
+
+print("LEFT: ", conn.execute("""
+    SELECT c.name, o.id FROM customers AS c
+    LEFT JOIN orders AS o ON o.customer_id = c.id ORDER BY c.name, o.id""").fetchall())
+
+# Anti-join: customers with NO orders = left join, then keep the NULL-padded rows.
+print("NONE: ", conn.execute("""
+    SELECT c.name FROM customers AS c
+    LEFT JOIN orders AS o ON o.customer_id = c.id
+    WHERE o.id IS NULL""").fetchall())
+
+# Join + group: total spent per customer, including zero for Ben.
+print("SPEND:", conn.execute("""
+    SELECT c.name, COALESCE(SUM(o.total), 0) AS spent FROM customers AS c
+    LEFT JOIN orders AS o ON o.customer_id = c.id
+    GROUP BY c.id ORDER BY spent DESC""").fetchall())
+</textarea>
+    </div>
+    <p>Order 104 points at customer 9, who does not exist. That is an <em>orphan</em>, and it was only possible because
+      this demo table has no foreign key constraint. With <code>customer_id INTEGER REFERENCES customers(id)</code> and
+      foreign keys switched on, the insert would have been rejected.</p>
+    <aside class="callout warn" data-title="SQLite foreign keys are off by default"><p>For backward compatibility, SQLite
+      ignores <code>REFERENCES</code> unless each connection runs <code>PRAGMA foreign_keys = ON</code>. Do it right
+      after connecting. PostgreSQL always enforces them.</p></aside>
+    <h3>How does a database actually join?</h3>
+    <p>Conceptually, the simplest strategy is a <strong>nested loop</strong>: for each left row, scan the right rows for
+      matches. That is O(n·m). Real planners use an index on the join column (O(n log m)) or build a hash table of one
+      side (a <strong>hash join</strong>, O(n + m), the same idea as the dictionary-based grouping you know from
+      <a href="m23-hash-tables.html">M23</a>). Step through a left join written in plain Python:</p>
+    <div class="tracer" data-title="A left join as a hash join">
+<textarea>
+customers = [(1, "Ada"), (2, "Ben")]
+orders = [(101, 1), (102, 1)]
+by_customer = {}
+for order_id, cust_id in orders:
+    by_customer.setdefault(cust_id, []).append(order_id)
+result = []
+for cust_id, name in customers:
+    matches = by_customer.get(cust_id) or [None]
+    for order_id in matches:
+        result.append((name, order_id))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="subqueries">
+    <h2>Subqueries and CTEs</h2>
+    <p>A <strong>subquery</strong> is a query nested inside another. It can produce a single value (a <em>scalar</em>
+      subquery), a list for <code>IN</code>, or a yes/no for <code>EXISTS</code>. A <strong>correlated</strong> subquery
+      refers to the outer query's current row, so conceptually it runs once per outer row.</p>
+<pre><code class="language-sql">-- scalar: products more expensive than average
+SELECT name FROM products WHERE price_cents &gt; (SELECT AVG(price_cents) FROM products);
+
+-- IN: customers who bought a kettle
+SELECT name FROM customers WHERE id IN (
+    SELECT o.customer_id FROM orders o JOIN order_items i ON i.order_id = o.id
+    JOIN products p ON p.id = i.product_id WHERE p.name = 'Kettle');
+
+-- correlated EXISTS: customers with at least one order over 40
+SELECT name FROM customers c WHERE EXISTS (
+    SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.total &gt; 40);</code></pre>
+    <p>A <strong>common table expression</strong> (CTE), introduced with <code>WITH</code>, names a subquery so you can
+      read the query top to bottom, like assigning intermediate variables. CTEs are the best tool for keeping complex
+      SQL readable.</p>
+    <div class="runnable" data-title="Subqueries and a CTE">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total INTEGER);
+INSERT INTO customers VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Di');
+INSERT INTO orders VALUES (1, 1, 30), (2, 1, 45), (3, 2, 10), (4, 3, 80), (5, 3, 5);
+""")
+
+above_avg = conn.execute("""
+    SELECT id, total FROM orders
+    WHERE total > (SELECT AVG(total) FROM orders)""").fetchall()
+print("orders above average:", above_avg)
+
+big_spenders = conn.execute("""
+    SELECT name FROM customers c
+    WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.total > 40)
+    ORDER BY name""").fetchall()
+print("has an order over 40:", big_spenders)
+
+report = conn.execute("""
+    WITH spend AS (
+        SELECT customer_id, SUM(total) AS spent FROM orders GROUP BY customer_id
+    )
+    SELECT c.name, s.spent
+    FROM spend s JOIN customers c ON c.id = s.customer_id
+    WHERE s.spent >= (SELECT AVG(spent) FROM spend)
+    ORDER BY s.spent DESC""").fetchall()
+print("customers spending at least the average customer:", report)
+</textarea>
+    </div>
+    <aside class="callout note"><p>Ranking within groups ("each customer's biggest order"), running totals, and moving
+      averages are the job of <strong>window functions</strong> (<code>ROW_NUMBER() OVER (PARTITION BY ...)</code>).
+      They, and the analytical database DuckDB, are covered in depth in
+      <a href="m61-sql-duckdb.html">M61 · Analytical SQL &amp; DuckDB</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="indexes">
+    <h2>Indexes and EXPLAIN QUERY PLAN</h2>
+    <p>Without help, <code>WHERE email = 'ada@example.com'</code> must look at every row: a <strong>full table
+      scan</strong>, O(n). An <strong>index</strong> is a separate, sorted data structure (a <strong>B-tree</strong>, a
+      wide, shallow cousin of the binary search tree from <a href="m24-trees.html">M24</a>) that maps column values to
+      row locations, turning the lookup into O(log n). With a million rows, that is about 20 steps instead of a million.
+      Explore how a search tree narrows the search at each level:</p>
+    <div class="viz" data-viz="bst" data-config='{"values": [50, 30, 70, 20, 40, 60, 80, 35, 45, 65]}'></div>
+    <p>Primary keys and <code>UNIQUE</code> columns get an index automatically. You add others with
+      <code>CREATE INDEX</code>. To see what the planner will do, prefix a query with <code>EXPLAIN QUERY PLAN</code>:
+      <code>SCAN</code> means reading the whole table, <code>SEARCH ... USING INDEX</code> means a B-tree lookup.</p>
+    <div class="runnable" data-title="Watch a scan become a search">
+<textarea>
+import sqlite3
+import time
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, country TEXT, age INTEGER)")
+conn.executemany(
+    "INSERT INTO users (email, country, age) VALUES (?, ?, ?)",
+    ((f"user{i}@example.com", ["us", "de", "jp", "br"][i % 4], 18 + i % 60) for i in range(200_000)),
+)
+
+def plan(sql, *params):
+    return [row[-1] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params)]
+
+def timed(sql, *params):
+    start = time.perf_counter()
+    result = conn.execute(sql, params).fetchall()
+    return result, f"{(time.perf_counter() - start) * 1000:.2f} ms"
+
+q = "SELECT id FROM users WHERE email = ?"
+print("before:", plan(q, "user123456@example.com"), timed(q, "user123456@example.com")[1])
+conn.execute("CREATE INDEX idx_users_email ON users(email)")
+print("after: ", plan(q, "user123456@example.com"), timed(q, "user123456@example.com")[1])
+
+# A composite index serves queries on its LEFTMOST columns.
+conn.execute("CREATE INDEX idx_users_country_age ON users(country, age)")
+print(plan("SELECT COUNT(*) FROM users WHERE country = ? AND age > ?", "jp", 60))
+print(plan("SELECT COUNT(*) FROM users WHERE age > ?", 60))   # age alone is not a prefix: SCAN, not SEARCH
+</textarea>
+    </div>
+    <p>Notice the last plan: <code>SCAN users USING COVERING INDEX</code>. Because <code>age</code> is not the leftmost
+      column, SQLite cannot <em>search</em> the index; it still reads all of it, just the smaller index instead of the
+      table (a <strong>covering index</strong> contains every column the query needs). That is cheaper than a table
+      scan but still O(n).</p>
+    <p>Indexes are not free. Each one takes space and must be updated on every <code>INSERT</code>,
+      <code>UPDATE</code>, and <code>DELETE</code>, so a write-heavy table with ten indexes gets slow. Index the columns
+      you filter, join, and sort on frequently, and verify with the query plan rather than guessing.</p>
+    <aside class="callout pro"><p>Rules of thumb: always index foreign key columns (joins and cascading deletes use
+      them); order composite index columns from equality filters to range filters; and remember that wrapping a column
+      in a function (<code>WHERE lower(email) = ?</code>) prevents a plain index on it from being used.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="python-sqlite3">
+    <h2>sqlite3 from Python: parameters and row factories</h2>
+    <p>The <a href="https://peps.python.org/pep-0249/">DB-API 2.0</a> (PEP 249) is the common interface for database
+      drivers in Python, so what you learn with <code>sqlite3</code> carries over to PostgreSQL drivers such as
+      psycopg. The core objects are a <strong>connection</strong> (a session with the database) and a
+      <strong>cursor</strong> (the result of a statement, which you iterate or call <code>fetchone()</code>,
+      <code>fetchmany(n)</code>, or <code>fetchall()</code> on). <code>conn.execute(...)</code> is a shortcut that
+      creates a cursor for you.</p>
+    <h3>Parameterized queries: never build SQL with f-strings</h3>
+    <p>Pasting user input into SQL text lets the input <em>become code</em>. That is <strong>SQL injection</strong>, one
+      of the most exploited vulnerabilities in history. The fix is <strong>parameters</strong>: put a placeholder in
+      the SQL and pass the values separately. The driver sends them as data, so they can never change the statement's
+      structure. sqlite3 supports <code>?</code> (positional) and <code>:name</code> (named) placeholders.</p>
+    <div class="runnable" data-title="SQL injection, then the fix">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE users (name TEXT, is_admin INTEGER)")
+conn.executemany("INSERT INTO users VALUES (?, ?)", [("ada", 1), ("ben", 0)])
+
+evil = "nobody' OR '1'='1"
+
+# WRONG: the input becomes part of the SQL.
+unsafe = f"SELECT name FROM users WHERE name = '{evil}'"
+print("unsafe SQL:", unsafe)
+print("unsafe result:", conn.execute(unsafe).fetchall())    # every user leaks!
+
+# RIGHT: the input is only ever a value.
+print("safe result:", conn.execute("SELECT name FROM users WHERE name = ?", (evil,)).fetchall())
+print("named style:", conn.execute("SELECT name FROM users WHERE name = :n", {"n": "ada"}).fetchall())
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Placeholders work for <em>values</em> only, not for table or column names. If you
+      must choose a column dynamically (say, a sort key from a URL), check it against an allow-list of known names
+      first: <code>if column not in {"name", "price"}: raise ValueError(...)</code>. Note that a one-element parameter
+      tuple needs its comma: <code>(evil,)</code>.</p></aside>
+    <h3>Row factories: rows you can read by name</h3>
+    <p>By default rows are tuples, so code says <code>row[2]</code> and breaks when someone reorders the columns. Set
+      <code>conn.row_factory</code> to change what each row becomes. <code>sqlite3.Row</code> is a fast built-in that
+      supports both index and name access; a custom factory can build dataclasses directly.</p>
+    <div class="runnable" data-title="sqlite3.Row and a dataclass factory">
+<textarea>
+import sqlite3
+from dataclasses import dataclass
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, year INTEGER)")
+conn.executemany("INSERT INTO books (title, year) VALUES (?, ?)",
+                 [("Dune", 1965), ("Neuromancer", 1984), ("Piranesi", 2020)])
+
+conn.row_factory = sqlite3.Row
+row = conn.execute("SELECT * FROM books WHERE year > ?", (1980,)).fetchone()
+print(row["title"], row[2], row.keys(), dict(row))
+
+@dataclass(frozen=True)
+class Book:
+    id: int
+    title: str
+    year: int
+
+def book_factory(cursor, values):
+    names = [col[0] for col in cursor.description]
+    return Book(**dict(zip(names, values)))
+
+conn.row_factory = book_factory
+for book in conn.execute("SELECT id, title, year FROM books ORDER BY year DESC"):
+    print(book)
+</textarea>
+    </div>
+    <aside class="callout note" data-title="Dates and sqlite3"><p>Since Python 3.12 the default adapters that silently
+      converted <code>datetime.date</code> objects are deprecated. Be explicit: store
+      <code>day.isoformat()</code> and read back with <code>date.fromisoformat(text)</code>, or register your own with
+      <code>sqlite3.register_adapter</code> and <code>register_converter</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="transactions">
+    <h2>Transactions and ACID</h2>
+    <p>A <strong>transaction</strong> groups statements into one unit that either happens completely or not at all.
+      Moving $50 from Alice to Bob is two updates; a crash between them must never leave the money in neither account.
+      Databases promise <strong>ACID</strong>:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Atomicity</h4><p>All statements commit, or none do. A failure rolls the whole transaction
+        back.</p></div>
+      <div class="card"><h4>Consistency</h4><p>A transaction moves the database from one valid state to another; every
+        constraint holds at commit.</p></div>
+      <div class="card"><h4>Isolation</h4><p>Concurrent transactions do not see each other's half-finished work. Levels
+        such as READ COMMITTED and SERIALIZABLE trade strictness for throughput.</p></div>
+      <div class="card"><h4>Durability</h4><p>Once committed, the change survives a crash or power loss (it has reached
+        disk, typically via a write-ahead log).</p></div>
+    </div>
+    <p>In <code>sqlite3</code>, a connection used as a <strong>context manager</strong> manages this for you:
+      <code>with conn:</code> commits when the block finishes normally and rolls back if an exception escapes. (It does
+      <em>not</em> close the connection; use <code>contextlib.closing(conn)</code> or call <code>conn.close()</code> for
+      that.)</p>
+    <div class="runnable" data-title="Commit on success, rollback on error">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE accounts (name TEXT PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0))")
+with conn:
+    conn.executemany("INSERT INTO accounts VALUES (?, ?)", [("alice", 100), ("bob", 20)])
+
+def transfer(conn, src, dst, amount):
+    with conn:   # one transaction: both updates or neither
+        conn.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (amount, dst))
+        conn.execute("UPDATE accounts SET balance = balance - ? WHERE name = ?", (amount, src))
+
+def balances():
+    return dict(conn.execute("SELECT name, balance FROM accounts ORDER BY name"))
+
+transfer(conn, "alice", "bob", 30)
+print("after good transfer:", balances())
+
+try:
+    transfer(conn, "alice", "bob", 500)      # bob is credited first, then CHECK fails on alice
+except sqlite3.IntegrityError as exc:
+    print("failed:", exc)
+print("after failed transfer:", balances(), "<- bob's credit was rolled back")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: what survives without a commit?" data-predict>
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE t (x INTEGER)")
+conn.execute("INSERT INTO t VALUES (1)")
+conn.commit()
+conn.execute("INSERT INTO t VALUES (2)")
+conn.rollback()
+with conn:
+    conn.execute("INSERT INTO t VALUES (3)")
+print([x for (x,) in conn.execute("SELECT x FROM t ORDER BY x")])
+</textarea>
+    </div>
+    <aside class="callout py314" data-title="Transaction control in modern Python"><p>Python 3.12 added the
+      <code>autocommit</code> parameter to <code>sqlite3.connect()</code>. The default,
+      <code>sqlite3.LEGACY_TRANSACTION_CONTROL</code>, keeps the historical behavior: the module silently opens a
+      transaction before <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> (but not before DDL such as
+      <code>CREATE TABLE</code>). With <code>autocommit=False</code> a transaction is always open, PEP 249 style, and
+      <code>commit()</code>/<code>rollback()</code> start a new one. Many teams choose <code>autocommit=False</code>
+      for new code because the behavior has no special cases.</p></aside>
+    <p>Two more tools: <code>SAVEPOINT name</code> / <code>ROLLBACK TO name</code> undo part of a transaction, and
+      <code>PRAGMA journal_mode = WAL</code> (write-ahead logging) lets SQLite readers proceed while one writer writes,
+      which is the setting to use for a web app on SQLite.</p>
+  </section>
+
+  <section class="lesson-section" id="production">
+    <h2>Migrations, ORMs, pooling, and choosing a database</h2>
+    <h3>Migrations</h3>
+    <p>Your schema will change: new columns, new tables, new indexes. A <strong>migration</strong> is a versioned,
+      ordered script that moves a database from schema version N to N+1. The database records which version it is at
+      (often in a one-row table), and on startup or deploy you apply every pending migration in order, each in a
+      transaction. Never edit a migration that has already run somewhere; write a new one. You will implement exactly
+      this pattern with a <code>schema_version</code> table in
+      <a href="../projects/p06-habit-tracker.html">Project 6</a>.</p>
+    <p>In the SQLAlchemy world the standard tool is <strong>Alembic</strong>. It generates migration files (with
+      <code>upgrade()</code> and <code>downgrade()</code> functions) by comparing your models to the database, and
+      tracks the current revision in an <code>alembic_version</code> table.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi add alembic
+pixi run alembic init migrations
+pixi run alembic revision --autogenerate -m "add recipes.servings"
+pixi run alembic upgrade head      # apply all pending migrations
+pixi run alembic downgrade -1      # undo the last one</code></pre>
+    <h3>ORMs: SQLAlchemy 2.0</h3>
+    <p>An <strong>object-relational mapper</strong> (ORM) maps classes to tables and objects to rows, so you work with
+      Python objects and the ORM writes the SQL. SQLAlchemy is the standard in Python; its 2.0 style uses typed
+      <code>Mapped[...]</code> annotations and an explicit <code>select()</code> construct.</p>
+    <div class="runnable" data-local="SQLAlchemy is not available in the browser. Run `pixi add sqlalchemy`, then `pixi run python orm_demo.py`." data-title="SQLAlchemy 2.0 ORM">
+<textarea>
+from sqlalchemy import ForeignKey, String, create_engine, func, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Author(Base):
+    __tablename__ = "authors"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    books: Mapped[list["Book"]] = relationship(back_populates="author")
+
+
+class Book(Base):
+    __tablename__ = "books"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str]
+    year: Mapped[int]
+    author_id: Mapped[int] = mapped_column(ForeignKey("authors.id"))
+    author: Mapped[Author] = relationship(back_populates="books")
+
+
+engine = create_engine("sqlite:///library.db", echo=True)   # echo=True logs the SQL it writes
+Base.metadata.create_all(engine)
+
+with Session(engine) as session, session.begin():           # begin() commits or rolls back
+    le_guin = Author(name="Ursula K. Le Guin")
+    session.add_all([Book(title="The Dispossessed", year=1974, author=le_guin),
+                     Book(title="A Wizard of Earthsea", year=1968, author=le_guin)])
+
+with Session(engine) as session:
+    stmt = select(Book).where(Book.year < 1970).order_by(Book.title)
+    for book in session.scalars(stmt):
+        print(book.title, "by", book.author.name)
+    counts = session.execute(
+        select(Author.name, func.count(Book.id)).join(Author.books).group_by(Author.id)
+    ).all()
+    print(counts)
+</textarea>
+    </div>
+    <div class="two-col">
+      <div><h4>ORM strengths</h4><ul>
+        <li>Less boilerplate for create/read/update/delete</li>
+        <li>Portable across databases</li>
+        <li>Composable, type-checked queries; relationships as attributes</li>
+        <li>Integrates with Alembic for migrations</li></ul></div>
+      <div><h4>ORM costs</h4><ul>
+        <li>Another abstraction to learn and debug</li>
+        <li>Easy to write slow code without noticing, especially the <strong>N+1 problem</strong>: one query for the
+          list, then one per item for a relationship (fix with <code>selectinload()</code>)</li>
+        <li>Complex analytics are often clearer in raw SQL</li></ul></div>
+    </div>
+    <p>A sensible professional stance: know SQL well (an ORM never excuses you from it), use an ORM or SQLAlchemy Core
+      for application CRUD if your team likes it, and drop to SQL for reporting. Always look at the SQL an ORM
+      generates (<code>echo=True</code>) when performance matters.</p>
+    <h3>Connection pooling</h3>
+    <p>Opening a connection to a server database costs a network round trip, authentication, and memory on the server
+      (a PostgreSQL connection is a whole process). A <strong>connection pool</strong> keeps a set of open connections
+      and lends them out per request, then takes them back. SQLAlchemy's engine pools automatically
+      (<code>create_engine(url, pool_size=5, max_overflow=10, pool_pre_ping=True)</code>); large deployments add an
+      external pooler such as PgBouncer. Size pools deliberately: 50 app workers with 20 connections each is 1,000
+      connections, more than most databases want.</p>
+    <h3>SQLite or PostgreSQL?</h3>
+    <table>
+      <thead><tr><th></th><th>SQLite</th><th>PostgreSQL</th></tr></thead>
+      <tbody>
+        <tr><td>Deployment</td><td>A library and a file; zero administration</td><td>A server process; users, roles, backups, upgrades</td></tr>
+        <tr><td>Concurrency</td><td>Many readers, one writer at a time (WAL helps)</td><td>Many concurrent writers (MVCC)</td></tr>
+        <tr><td>Types</td><td>Flexible affinity (use STRICT)</td><td>Strict, rich: timestamptz, JSONB, arrays, UUID, ranges</td></tr>
+        <tr><td>Scale</td><td>Excellent up to moderate write loads on one machine</td><td>Large data, many clients, replication</td></tr>
+        <tr><td>Best for</td><td>Apps, CLIs, tests, embedded, single-server sites, data files</td><td>Multi-user web services and shared data</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout pixi"><p>Drivers are ordinary packages: <code>pixi add sqlalchemy</code>,
+      <code>pixi add psycopg</code> (PostgreSQL), <code>pixi add alembic</code>. For local development you can even run
+      PostgreSQL from conda-forge with <code>pixi add postgresql</code> and a task that calls <code>pg_ctl</code>.</p></aside>
+    <aside class="callout pro"><p>In production code, log database events with structlog rather than
+      <code>print()</code>: <code>log.info("migration_applied", version=3, duration_ms=12)</code> produces a
+      machine-parseable line your log aggregator can search and alert on. Never log full SQL parameters that may contain
+      personal data.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise receives an open <code>sqlite3</code> connection that the tests create and fill. Write the SQL
+      inside the function and return plain Python values.</p>
+
+    <div class="exercise" data-id="m44-e1" data-title="Filter and sort">
+      <div class="exercise-prompt">
+        <p>Table <code>people(name TEXT, age INTEGER)</code>. Write <code>adults(conn)</code> that returns a list of the
+          names of people aged 18 or over, sorted alphabetically. Return plain strings, not tuples.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def adults(conn):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE people (name TEXT, age INTEGER)")
+    conn.executemany("INSERT INTO people VALUES (?, ?)",
+                     [("zoe", 30), ("al", 17), ("mia", 18), ("bob", 64), ("cy", 5)])
+    return conn
+
+def test_names_sorted():
+    assert adults(_db()) == ["bob", "mia", "zoe"], "expected adults sorted by name: ['bob', 'mia', 'zoe']"
+
+def test_returns_strings():
+    result = adults(_db())
+    assert all(isinstance(n, str) for n in result), "return a list of str, not row tuples"
+
+def test_empty_table():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE people (name TEXT, age INTEGER)")
+    assert adults(conn) == [], "an empty table gives an empty list"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>SELECT name FROM people WHERE age &gt;= 18 ORDER BY name</code>,
+        then unpack each one-element row: <code>[name for (name,) in rows]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def adults(conn):
+    rows = conn.execute("SELECT name FROM people WHERE age &gt;= 18 ORDER BY name")
+    return [name for (name,) in rows]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m44-e2" data-title="An injection-proof lookup">
+      <div class="exercise-prompt">
+        <p>Table <code>users(id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT)</code>. Write
+          <code>find_user(conn, email)</code> that returns a <code>dict</code> with keys <code>id</code>,
+          <code>email</code>, <code>name</code> for the matching user, or <code>None</code>. It must use a parameterized
+          query: hostile input must simply find nothing.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def find_user(conn, email):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT)")
+    conn.executemany("INSERT INTO users (email, name) VALUES (?, ?)", [("ada@x.io", "Ada"), ("ben@x.io", "Ben")])
+    return conn
+
+def test_found():
+    assert find_user(_db(), "ben@x.io") == {"id": 2, "email": "ben@x.io", "name": "Ben"}, "return the row as a dict"
+
+def test_missing():
+    assert find_user(_db(), "nobody@x.io") is None, "unknown email returns None"
+
+def test_injection_finds_nothing():
+    conn = _db()
+    assert find_user(conn, "x' OR '1'='1") is None, "hostile input must be treated as a plain value"
+    assert find_user(conn, "ada@x.io'; DROP TABLE users; --") is None, "hostile input must not run as SQL"
+    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 2, "the users table must be intact"
+
+def test_does_not_leak_row_factory():
+    conn = _db()
+    find_user(conn, "ada@x.io")
+    assert isinstance(conn.execute("SELECT 1").fetchone(), tuple), "don't leave conn.row_factory changed for other code"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use <code>"... WHERE email = ?", (email,)</code>. To build the dict
+        without changing <code>conn.row_factory</code>, zip <code>cursor.description</code> names with the row values,
+        or set <code>row_factory</code> on the <em>cursor</em> (<code>cur = conn.cursor(); cur.row_factory = sqlite3.Row</code>).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def find_user(conn, email):
+    cursor = conn.execute("SELECT id, email, name FROM users WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    names = [column[0] for column in cursor.description]
+    return dict(zip(names, row))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m44-e3" data-title="GROUP BY with HAVING">
+      <div class="exercise-prompt">
+        <p>Table <code>sales(region TEXT, amount INTEGER)</code>. Write <code>big_regions(conn, min_total)</code> that
+          returns a list of <code>(region, total)</code> tuples for regions whose total is <em>at least</em>
+          <code>min_total</code>, largest total first (ties broken by region name).</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def big_regions(conn, min_total):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE sales (region TEXT, amount INTEGER)")
+    conn.executemany("INSERT INTO sales VALUES (?, ?)", [
+        ("north", 100), ("north", 50), ("south", 20), ("east", 150), ("west", 75), ("west", 75), ("south", 5)])
+    return conn
+
+def test_threshold_and_order():
+    assert big_regions(_db(), 100) == [("east", 150), ("north", 150), ("west", 150)], \
+        "totals of 150 tie, so order by region name"
+
+def test_inclusive():
+    assert big_regions(_db(), 150) == [("east", 150), ("north", 150), ("west", 150)], "the threshold is inclusive"
+
+def test_low_threshold():
+    assert big_regions(_db(), 0)[-1] == ("south", 25), "south totals 25 and comes last"
+
+def test_parameterized():
+    assert big_regions(_db(), 1000) == [], "no region reaches 1000"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>GROUP BY region HAVING SUM(amount) &gt;= ?</code> then
+        <code>ORDER BY total DESC, region</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def big_regions(conn, min_total):
+    sql = """
+        SELECT region, SUM(amount) AS total
+        FROM sales
+        GROUP BY region
+        HAVING SUM(amount) &gt;= ?
+        ORDER BY total DESC, region
+    """
+    return conn.execute(sql, (min_total,)).fetchall()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m44-e4" data-title="LEFT JOIN report">
+      <div class="exercise-prompt">
+        <p>Tables <code>customers(id, name)</code> and <code>orders(id, customer_id, total)</code>. Write
+          <code>spend_report(conn)</code> returning <code>(name, order_count, total_spent)</code> for <em>every</em>
+          customer, including those with no orders (count 0, total 0), sorted by <code>total_spent</code> descending then
+          name. Also write <code>no_orders(conn)</code> returning the sorted names of customers who never ordered.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def spend_report(conn):
+    ...
+
+def no_orders(conn):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total INTEGER);
+        INSERT INTO customers VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Ava');
+        INSERT INTO orders VALUES (10, 1, 30), (11, 1, 20), (12, 3, 50);
+    """)
+    return conn
+
+def test_report_includes_everyone():
+    assert spend_report(_db()) == [("Ada", 2, 50), ("Cy", 1, 50), ("Ava", 0, 0), ("Ben", 0, 0)], \
+        "every customer appears; no-order customers have count 0 and total 0"
+
+def test_no_orders():
+    assert no_orders(_db()) == ["Ava", "Ben"], "Ava and Ben never ordered"
+
+def test_counts_are_not_inflated():
+    conn = _db()
+    conn.execute("INSERT INTO orders VALUES (13, 2, 5)")
+    report = dict((name, (count, total)) for name, count, total in spend_report(conn))
+    assert report["Ben"] == (1, 5), "count orders with COUNT(o.id), not COUNT(*)"
+    assert report["Ava"] == (0, 0), "a customer with no orders must count 0, not 1"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use <code>COUNT(o.id)</code> (which skips the NULL padding) and
+        <code>COALESCE(SUM(o.total), 0)</code>. For the anti-join, keep rows <code>WHERE o.id IS NULL</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def spend_report(conn):
+    sql = """
+        SELECT c.name, COUNT(o.id) AS n, COALESCE(SUM(o.total), 0) AS spent
+        FROM customers AS c
+        LEFT JOIN orders AS o ON o.customer_id = c.id
+        GROUP BY c.id
+        ORDER BY spent DESC, c.name
+    """
+    return conn.execute(sql).fetchall()
+
+def no_orders(conn):
+    sql = """
+        SELECT c.name FROM customers AS c
+        LEFT JOIN orders AS o ON o.customer_id = c.id
+        WHERE o.id IS NULL
+        ORDER BY c.name
+    """
+    return [name for (name,) in conn.execute(sql)]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m44-e5" data-title="An atomic transfer">
+      <div class="exercise-prompt">
+        <p>Table <code>accounts(name TEXT PRIMARY KEY, balance INTEGER)</code> with <em>no</em> CHECK constraint. Write
+          <code>transfer(conn, src, dst, amount)</code> that moves money in one transaction. Raise
+          <code>ValueError</code> (and change nothing) if <code>amount</code> is not positive, if either account does
+          not exist, or if <code>src</code> has insufficient funds. On success, the change must be committed.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def transfer(conn, src, dst, amount):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE accounts (name TEXT PRIMARY KEY, balance INTEGER)")
+    conn.executemany("INSERT INTO accounts VALUES (?, ?)", [("a", 100), ("b", 10)])
+    conn.commit()
+    return conn
+
+def _balances(conn):
+    return dict(conn.execute("SELECT name, balance FROM accounts"))
+
+def test_success_is_committed():
+    conn = _db()
+    transfer(conn, "a", "b", 40)
+    conn.rollback()
+    assert _balances(conn) == {"a": 60, "b": 50}, "a successful transfer must be committed (survive a rollback)"
+
+def test_insufficient_funds():
+    conn = _db()
+    try:
+        transfer(conn, "b", "a", 11)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("insufficient funds should raise ValueError")
+    assert _balances(conn) == {"a": 100, "b": 10}, "a failed transfer changes nothing"
+
+def test_unknown_account_changes_nothing():
+    conn = _db()
+    for args in [("a", "zed", 5), ("zed", "a", 5)]:
+        try:
+            transfer(conn, *args)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"transfer{args} should raise ValueError for an unknown account")
+    assert _balances(conn) == {"a": 100, "b": 10}, "money must not vanish into a missing account"
+
+def test_non_positive_amount():
+    conn = _db()
+    for amount in (0, -5):
+        try:
+            transfer(conn, "a", "b", amount)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"amount {amount} should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Inside <code>with conn:</code>, read the source balance, check it,
+        and run both <code>UPDATE</code>s, checking <code>cursor.rowcount == 1</code> for each. Raising inside the
+        <code>with</code> block rolls back anything already done.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def transfer(conn, src, dst, amount):
+    if amount &lt;= 0:
+        raise ValueError("amount must be positive")
+    with conn:
+        row = conn.execute("SELECT balance FROM accounts WHERE name = ?", (src,)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown account {src!r}")
+        if row[0] &lt; amount:
+            raise ValueError("insufficient funds")
+        credited = conn.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (amount, dst))
+        if credited.rowcount != 1:
+            raise ValueError(f"unknown account {dst!r}")
+        conn.execute("UPDATE accounts SET balance = balance - ? WHERE name = ?", (amount, src))</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a normalized recipe database</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Recipe book on SQLite</span></div>
+      <div class="widget-body">
+        <p>Design and build a small recipe database and a Python module that queries it. The data starts as a messy
+          CSV where each line is one recipe with its ingredients packed into one cell
+          (<code>"Pancakes","flour:200g;milk:300ml;egg:2","breakfast,quick"</code>). Your job is to normalize it and
+          answer real questions with SQL.</p>
+        <ol>
+          <li>Create a project: <code>pixi init recipes</code>, then <code>cd recipes</code>. No extra packages are
+            needed; sqlite3 is in the standard library. Add <code>pixi add --feature dev pytest</code> for tests.</li>
+          <li>Draw the ER diagram first: <code>recipes</code>, <code>ingredients</code>, <code>recipe_ingredients</code>
+            (with quantity and unit), <code>tags</code>, and <code>recipe_tags</code>. Identify every primary and foreign
+            key. Check your design against 1NF, 2NF, and 3NF.</li>
+          <li>Write <code>schema.sql</code> with constraints (<code>NOT NULL</code>, <code>UNIQUE</code>,
+            <code>CHECK (quantity &gt; 0)</code>, <code>REFERENCES ... ON DELETE CASCADE</code>) and indexes on the
+            foreign keys.</li>
+          <li>Write <code>load.py</code> that parses the CSV and inserts everything in one transaction with
+            parameterized <code>executemany</code> calls. Run it with <code>pixi run python load.py recipes.csv</code>.</li>
+          <li>Write <code>queries.py</code> with functions that take a connection: recipes containing an ingredient,
+            recipes you can make from a given pantry (a set of ingredient names), the most-used ingredients, and recipes
+            with a given tag but without another.</li>
+          <li>Test it with pytest using an in-memory database fixture, and run <code>pixi run pytest</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m44-mini">
+          <li>The ER diagram and schema are in 3NF; each fact is stored once</li>
+          <li><code>PRAGMA foreign_keys = ON</code> is set on every connection, and deleting a recipe cascades</li>
+          <li>Loading is a single transaction: a bad line rolls the whole import back</li>
+          <li>Every query uses placeholders; no f-strings build SQL</li>
+          <li>"What can I cook with my pantry?" is answered with one SQL query (hint: GROUP BY with HAVING)</li>
+          <li><code>EXPLAIN QUERY PLAN</code> shows index searches for your ingredient lookups</li>
+          <li>At least eight pytest tests pass</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add a <code>schema_version</code> table and a second migration that adds
+          <code>servings</code>; rewrite the queries with SQLAlchemy 2.0 Core and compare; add a full-text search table
+          with SQLite's FTS5 for searching instructions.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m44-quiz">
+<script type="application/json">
+{"title": "Databases & SQL quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does a foreign key guarantee (when enforced)?", "options": ["The column is unique", "Every value matches a primary key in the referenced table", "The column is indexed automatically in every database", "The column cannot change"], "answer": 1, "explanation": "<p>A foreign key is a checked reference: the database rejects values with no matching row in the referenced table. It does not imply uniqueness, and SQLite enforces it only with <code>PRAGMA foreign_keys = ON</code>.</p>"},
+  {"type": "single", "prompt": "A table keyed by <code>(order_id, product_id)</code> also stores <code>product_name</code>. Which normal form does that violate?", "options": ["1NF", "2NF", "3NF", "None"], "answer": 1, "explanation": "<p><code>product_name</code> depends on only part of the composite key (<code>product_id</code>). That partial dependency violates 2NF; move it into a <code>products</code> table.</p>"},
+  {"type": "single", "prompt": "<code>orders(id PK, customer_id, customer_city)</code>: <code>customer_city</code> depends on <code>customer_id</code>. Which normal form is violated?", "options": ["1NF", "2NF", "3NF"], "answer": 2, "explanation": "<p>A non-key column depending on another non-key column is a transitive dependency, which 3NF forbids. City belongs in <code>customers</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import sqlite3\nc = sqlite3.connect(':memory:')\nc.execute('CREATE TABLE t (x)')\nc.executemany('INSERT INTO t VALUES (?)', [(1,), (None,), (2,)])\nprint(c.execute('SELECT COUNT(*), COUNT(x), SUM(x) FROM t').fetchone())", "answer": "(3, 2, 3)", "explanation": "<p><code>COUNT(*)</code> counts rows (3), <code>COUNT(x)</code> skips NULL (2), and <code>SUM</code> ignores NULL (1 + 2 = 3).</p>"},
+  {"type": "single", "prompt": "Where must a condition on an aggregate, such as <code>SUM(amount) &gt; 100</code>, go?", "options": ["WHERE", "HAVING", "ORDER BY", "FROM"], "answer": 1, "explanation": "<p><code>WHERE</code> runs before grouping, so aggregates do not exist yet. <code>HAVING</code> filters groups after <code>GROUP BY</code>.</p>"},
+  {"type": "multi", "prompt": "Customers Ada (2 orders), Ben (0 orders), Cy (1 order). Which statements are true?", "options": ["An INNER JOIN of customers to orders returns 3 rows", "A LEFT JOIN from customers returns 4 rows", "Ben appears in the INNER JOIN with NULLs", "A LEFT JOIN ... WHERE o.id IS NULL returns only Ben"], "answer": [0, 1, 3], "explanation": "<p>Inner: Ada twice plus Cy = 3 rows. Left: those 3 plus Ben padded with NULL = 4. Filtering the NULL padding is the anti-join that finds Ben.</p>"},
+  {"type": "single", "prompt": "<code>EXPLAIN QUERY PLAN</code> shows <code>SCAN users</code>. What does that mean?", "options": ["The query uses an index", "The whole table is read row by row", "The query is invalid", "The table is cached"], "answer": 1, "explanation": "<p><code>SCAN</code> is a full table scan, O(n). <code>SEARCH ... USING INDEX</code> means a B-tree lookup.</p>"},
+  {"type": "single", "prompt": "An index on <code>(country, age)</code> exists. Which filter can use it most effectively?", "options": ["WHERE age = 30", "WHERE country = 'jp' AND age &gt; 30", "WHERE lower(country) = 'jp'", "None of them"], "answer": 1, "explanation": "<p>A composite index serves its leftmost columns: equality on <code>country</code> then a range on <code>age</code>. <code>age</code> alone is not a prefix, and wrapping the column in a function hides it from a plain index.</p>"},
+  {"type": "single", "prompt": "Why is <code>conn.execute(f\"SELECT * FROM users WHERE name = '{name}'\")</code> dangerous?", "options": ["f-strings are slow", "User input becomes part of the SQL text, allowing SQL injection", "sqlite3 does not support f-strings", "It returns tuples instead of dicts"], "answer": 1, "explanation": "<p>Input like <code>x' OR '1'='1</code> changes the statement's meaning. Pass values as parameters: <code>\"... WHERE name = ?\", (name,)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import sqlite3\nc = sqlite3.connect(':memory:')\nc.execute('CREATE TABLE t (x)')\ntry:\n    with c:\n        c.execute('INSERT INTO t VALUES (1)')\n        raise RuntimeError\nexcept RuntimeError:\n    pass\nwith c:\n    c.execute('INSERT INTO t VALUES (2)')\nprint(c.execute('SELECT COUNT(*) FROM t').fetchone()[0])", "answer": "1", "explanation": "<p>The first <code>with</code> block raised, so its insert was rolled back. The second committed. One row remains.</p>"},
+  {"type": "multi", "prompt": "Which are part of ACID?", "options": ["Atomicity", "Availability", "Isolation", "Durability", "Caching"], "answer": [0, 2, 3], "explanation": "<p>ACID is Atomicity, Consistency, Isolation, Durability. Availability belongs to the CAP theorem, a different topic.</p>"},
+  {"type": "text", "prompt": "Which <code>sqlite3</code> attribute do you set on a connection so rows can be accessed by column name? (just the attribute name)", "answer": ["row_factory", "conn.row_factory"], "explanation": "<p>Set <code>conn.row_factory = sqlite3.Row</code> (or a custom function) to control what each fetched row becomes.</p>"},
+  {"type": "single", "prompt": "What is the N+1 query problem with ORMs?", "options": ["The ORM opens N+1 connections", "Loading a list with one query, then issuing one more query per item to load a relationship", "A migration that runs N+1 times", "An off-by-one error in LIMIT"], "answer": 1, "explanation": "<p>Lazy-loaded relationships accessed in a loop cause one query per row. Eager loading (for example <code>selectinload()</code>) fetches them in one extra query.</p>"},
+  {"type": "single", "prompt": "Which is the best fit for SQLite rather than PostgreSQL?", "options": ["A multi-tenant SaaS with hundreds of concurrent writers", "A command-line app storing its data in a local file", "A shared analytics warehouse for a whole company", "A service needing role-based access control in the database"], "answer": 1, "explanation": "<p>SQLite shines as an embedded, zero-administration database for one application on one machine. Many concurrent writers and shared multi-user access are PostgreSQL's strengths.</p>"},
+  {"type": "text", "prompt": "What is the name of the SQLAlchemy migration tool?", "answer": ["alembic"], "explanation": "<p>Alembic generates and applies versioned migration scripts and records the current revision in the <code>alembic_version</code> table.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Relational databases store rows in tables; primary keys identify rows and foreign keys connect tables.</li>
+      <li>Normalize to 3NF so each fact lives in one place: atomic values, no partial dependencies, no transitive
+        dependencies. Denormalize only after measuring.</li>
+      <li>SQL is declarative. Its logical order is FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT.</li>
+      <li>NULL is unknown: use <code>IS NULL</code> and <code>COALESCE</code>, and remember <code>COUNT(col)</code>
+        skips NULLs.</li>
+      <li>Inner joins keep matching pairs; left joins keep every left row; <code>LEFT JOIN ... WHERE right.id IS NULL</code>
+        finds what is missing.</li>
+      <li>Indexes are B-trees that turn scans into searches at a cost to writes; check with <code>EXPLAIN QUERY PLAN</code>.</li>
+      <li>Always use parameters, set <code>PRAGMA foreign_keys = ON</code> in SQLite, and wrap related writes in
+        <code>with conn:</code> so they commit or roll back together.</li>
+      <li>Migrations version your schema; ORMs such as SQLAlchemy trade control for convenience; pools reuse
+        connections.</li>
+    </ul>
+    <div class="flashcards" data-title="Databases & SQL">
+<script type="application/json">
+[{"front": "Primary key", "back": "Column(s) whose value uniquely identifies a row; never NULL, never repeated."},
+ {"front": "Foreign key", "back": "A column whose values must match a primary key in another table (in SQLite, only with PRAGMA foreign_keys = ON)."},
+ {"front": "1NF / 2NF / 3NF in one line", "back": "Atomic values; depend on the whole key; depend on nothing but the key."},
+ {"front": "WHERE vs HAVING", "back": "WHERE filters rows before grouping; HAVING filters groups after GROUP BY and may use aggregates."},
+ {"front": "SQL's logical evaluation order", "back": "FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT."},
+ {"front": "x = NULL", "back": "Always unknown, so it matches nothing. Use x IS NULL."},
+ {"front": "Anti-join", "back": "LEFT JOIN the other table, then WHERE other.id IS NULL: rows with no match."},
+ {"front": "What an index is", "back": "A B-tree mapping column values to rows: O(log n) lookups, extra cost on every write."},
+ {"front": "SCAN vs SEARCH in EXPLAIN QUERY PLAN", "back": "SCAN reads the whole table; SEARCH ... USING INDEX does a B-tree lookup."},
+ {"front": "with conn: (sqlite3)", "back": "Commits if the block succeeds, rolls back if it raises. It does not close the connection."},
+ {"front": "ACID", "back": "Atomicity, Consistency, Isolation, Durability."},
+ {"front": "Why parameterized queries?", "back": "Values are sent as data, never parsed as SQL, which prevents SQL injection."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/sqlite3.html">sqlite3: DB-API 2.0 interface for SQLite databases</a> (Python docs)</li>
+      <li><a href="https://www.sqlite.org/lang.html">SQL as understood by SQLite</a> and <a href="https://www.sqlite.org/eqp.html">EXPLAIN QUERY PLAN</a></li>
+      <li><a href="https://docs.sqlalchemy.org/en/20/tutorial/">SQLAlchemy 2.0 Unified Tutorial</a></li>
+      <li><a href="https://alembic.sqlalchemy.org/en/latest/tutorial.html">Alembic tutorial</a></li>
+      <li><a href="https://www.postgresql.org/docs/current/tutorial.html">The PostgreSQL tutorial</a></li>
+      <li><a href="https://use-the-index-luke.com/">Use The Index, Luke</a>: a free book on indexing for developers</li>
+      <li>Next in the course: <a href="m45-web-apis.html">M45 · Web &amp; APIs</a>, and later <a href="m61-sql-duckdb.html">M61 · Analytical SQL &amp; DuckDB</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

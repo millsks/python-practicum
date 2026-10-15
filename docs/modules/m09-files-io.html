@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M09 · Files &amp; Data Formats · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m09">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 09</p>
+    <h1>Files &amp; Data Formats</h1>
+    <p class="lede">Programs become useful when they can read data that already exists and save results that
+      outlive them. This module covers paths, text and bytes, encodings, the <code>with</code> statement, and the
+      everyday formats (CSV, JSON, TOML, and compressed files) that you will meet in every job.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m08-modules.html">M08 Modules, Packages &amp; Pixi Projects</a></span></div>
+    <ul class="objectives">
+      <li>Build, inspect, and walk file-system paths with <code>pathlib</code>, including 3.14's <code>Path.copy()</code> and <code>Path.move()</code></li>
+      <li>Open files in the right mode, and explain the difference between text and bytes</li>
+      <li>Choose an encoding deliberately and handle encoding errors</li>
+      <li>Use <code>with</code> so files are always closed, and read large files line by line</li>
+      <li>Read and write CSV with <code>DictReader</code>/<code>DictWriter</code>, and JSON with custom encoders</li>
+      <li>Read configuration with <code>tomllib</code></li>
+      <li>Compress data with <code>gzip</code> and 3.14's <code>compression.zstd</code>, and manage temporary files with <code>tempfile</code> and <code>shutil</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="pathlib">
+    <h2>Paths with <code>pathlib</code></h2>
+    <p>A <strong>path</strong> names a location in the file system, such as <code>/home/ada/reports/jan.csv</code>
+      or <code>C:\Users\ada\reports\jan.csv</code>. Paths are not just strings: they have parts (folders, a file
+      name, an extension), they differ between operating systems, and joining them by hand with <code>+ "/" +</code>
+      is a classic source of bugs. The <code>pathlib</code> module represents a path as a <code>Path</code> object
+      with methods for everything you need.</p>
+    <div class="runnable" data-title="Building and taking apart paths">
+<textarea>
+from pathlib import Path
+
+report = Path("data") / "2026" / "jan-report.csv"   # the / operator joins parts portably
+print(report)
+print(report.name, report.stem, report.suffix)        # jan-report.csv  jan-report  .csv
+print(report.parent, report.parent.parent)
+print(report.parts)
+print(report.with_suffix(".json"))
+print(report.with_name("feb-report.csv"))
+print(Path.cwd(), Path.home())
+print(Path("data/../data/./2026").resolve())          # absolute, with .. and . removed
+</textarea>
+    </div>
+    <p>A relative path such as <code>data/jan.csv</code> is interpreted relative to the <strong>current working
+      directory</strong>, the folder your program was started from, which is not necessarily the folder containing
+      your script. When a script needs files next to itself, build the path from <code>Path(__file__).parent</code>.</p>
+    <h3>Asking the file system</h3>
+    <p>The browser runtime has a real (in-memory) file system, so the following code creates folders and files.</p>
+    <div class="runnable" data-title="Create, list, and search">
+<textarea>
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp())
+(root / "notes").mkdir()
+(root / "notes" / "todo.txt").write_text("buy milk\ncall Ada\n")
+(root / "notes" / "ideas.md").write_text("# Ideas\n")
+(root / "archive" / "2025").mkdir(parents=True, exist_ok=True)   # create missing parents; no error if present
+(root / "archive" / "2025" / "old.txt").write_text("old\n")
+
+print([p.name for p in sorted((root / "notes").iterdir())])
+print([str(p.relative_to(root)) for p in sorted(root.rglob("*.txt"))])   # recursive glob
+todo = root / "notes" / "todo.txt"
+print(todo.exists(), todo.is_file(), todo.parent.is_dir(), todo.stat().st_size, "bytes")
+print(todo.read_text().splitlines())
+</textarea>
+    </div>
+    <p>Python 3.14 adds two long-requested methods. <code>Path.copy(target)</code> copies a file or a whole directory
+      tree and returns the new path; <code>Path.move(target)</code> moves (renames) it, even across file systems.
+      Before 3.14 you needed <code>shutil.copy2</code>, <code>shutil.copytree</code>, and <code>shutil.move</code>.</p>
+    <aside class="callout py314"><p><strong>New in 3.14:</strong> <code>Path.copy()</code>,
+      <code>Path.copy_into()</code>, <code>Path.move()</code>, and <code>Path.move_into()</code>. They copy metadata
+      where possible and work on directories too.</p></aside>
+    <div class="runnable" data-title="Path.copy and Path.move (3.14)">
+<textarea>
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp())
+src = root / "draft.txt"
+src.write_text("version 1\n")
+
+backup = src.copy(root / "draft.bak")
+final = src.move(root / "final.txt")
+print(sorted(p.name for p in root.iterdir()))
+print(backup.read_text() == final.read_text(), src.exists())
+
+(root / "photos").mkdir()
+(root / "photos" / "a.jpg").write_bytes(b"\xff\xd8 fake jpeg")
+copied = (root / "photos").copy(root / "photos-backup")      # copies the whole tree
+print([p.name for p in copied.iterdir()])
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> build paths with <code>/</code>, inspect them with
+      <code>.name</code>, <code>.stem</code>, <code>.suffix</code>, <code>.parent</code>, and search with
+      <code>.glob</code>/<code>.rglob</code>. <code>mkdir(parents=True, exist_ok=True)</code> is the safe way to make
+      folders.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="open-modes">
+    <h2>Opening files: modes, text, and bytes</h2>
+    <p><code>Path.read_text()</code> and <code>write_text()</code> are perfect for small files. For anything more,
+      open a <strong>file object</strong> with <code>open()</code> (or <code>path.open()</code>) and a
+      <strong>mode</strong>:</p>
+    <table class="rubric">
+      <thead><tr><th>Mode</th><th>Meaning</th><th>If the file exists</th><th>If it doesn't</th></tr></thead>
+      <tbody>
+        <tr><td><code>"r"</code></td><td>read (default)</td><td>read from the start</td><td><code>FileNotFoundError</code></td></tr>
+        <tr><td><code>"w"</code></td><td>write</td><td><strong>erased</strong> first</td><td>created</td></tr>
+        <tr><td><code>"a"</code></td><td>append</td><td>writes go to the end</td><td>created</td></tr>
+        <tr><td><code>"x"</code></td><td>exclusive create</td><td><code>FileExistsError</code></td><td>created</td></tr>
+        <tr><td>add <code>"b"</code></td><td>binary: <code>"rb"</code>, <code>"wb"</code></td><td colspan="2">read and write <code>bytes</code> instead of <code>str</code></td></tr>
+        <tr><td>add <code>"+"</code></td><td>read and write: <code>"r+"</code></td><td colspan="2">rarely needed</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Text mode</strong> (the default) decodes bytes to <code>str</code> using an encoding, and translates
+      line endings so you always see <code>"\n"</code>. <strong>Binary mode</strong> gives you the raw
+      <code>bytes</code>, untouched. Use binary for images, archives, compressed data, and anything that is not
+      text, and for formats whose library insists on it (<code>tomllib</code>).</p>
+    <div class="runnable" data-title="Predict: text vs binary" data-predict>
+<textarea>
+import tempfile
+from pathlib import Path
+
+p = Path(tempfile.mkdtemp()) / "greeting.txt"
+with open(p, "w", encoding="utf-8") as f:
+    f.write("café\n")
+with open(p, "a", encoding="utf-8") as f:
+    f.write("naïve\n")
+
+print(repr(p.read_text(encoding="utf-8")))
+print(p.read_bytes())
+print(len(p.read_text(encoding="utf-8")), len(p.read_bytes()))
+</textarea>
+    </div>
+    <p>Eleven characters of text became thirteen bytes, because <code>é</code> and <code>ï</code> each take two bytes in
+      UTF-8. Text is characters; files store bytes; an <strong>encoding</strong> is the rule between them.</p>
+    <aside class="callout danger"><p><code>"w"</code> truncates the file the moment it is opened, even if you never
+      write anything. Opening the file you are reading with <code>"w"</code> destroys it. Use <code>"x"</code> when
+      overwriting would be a mistake.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>r</code> reads, <code>w</code> erases and writes,
+      <code>a</code> appends, <code>x</code> refuses to overwrite; add <code>b</code> for bytes.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="encodings">
+    <h2>Encodings</h2>
+    <p>Recall from M03 that a <code>str</code> is a sequence of Unicode code points and <code>bytes</code> are raw
+      numbers from 0 to 255. <strong>UTF-8</strong> is the universal encoding today: it handles every language and
+      emoji, and plain ASCII text is unchanged. Other encodings still appear in old files: <code>latin-1</code>,
+      <code>cp1252</code> (old Windows), <code>utf-16</code>.</p>
+    <p>If you do not pass <code>encoding=</code>, Python 3.14 uses the <em>locale's</em> preferred encoding, which is
+      UTF-8 on macOS and Linux but may be something else on Windows. The same program can then read a file
+      correctly on one machine and garble it on another. <strong>Always pass <code>encoding="utf-8"</code></strong>
+      for text files.</p>
+    <div class="runnable" data-title="Decoding with the wrong encoding">
+<textarea>
+data = "Zoë paid €5".encode("utf-8")
+print(data)
+print(data.decode("utf-8"))
+print(data.decode("latin-1"))                       # wrong guess: mojibake, no error!
+try:
+    "Zoë paid €5".encode("utf-8").decode("ascii")
+except UnicodeDecodeError as e:
+    print("UnicodeDecodeError:", e.reason, "at byte", e.start)
+print(data.decode("ascii", errors="replace"))       # replace bad bytes with U+FFFD
+print(b"\xef\xbb\xbfDate,Amount".decode("utf-8-sig"))   # utf-8-sig strips a byte-order mark
+</textarea>
+    </div>
+    <p>The <code>errors=</code> argument decides what happens with undecodable bytes: <code>"strict"</code> (the
+      default, raise), <code>"replace"</code>, <code>"ignore"</code>, or <code>"backslashreplace"</code>. Prefer
+      <code>"strict"</code> so problems are noticed. Some programs, notably Excel, write a <em>byte-order mark</em>
+      (BOM) at the start of UTF-8 files; the <code>"utf-8-sig"</code> encoding removes it when reading.</p>
+    <aside class="callout py315"><p><strong>Python 3.15 preview, PEP 686:</strong> UTF-8 mode becomes the default,
+      so <code>open()</code> without <code>encoding=</code> uses UTF-8 on every platform. Writing
+      <code>encoding="utf-8"</code> explicitly remains good practice and works on every version.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="UTF-8 by default (Python 3.15)">
+<textarea>
+import locale, sys
+from pathlib import Path
+
+print(sys.flags.utf8_mode)                    # 1 by default in 3.15
+print(locale.getencoding(), "is ignored by open() in UTF-8 mode")
+Path("hello.txt").write_text("こんにちは\n")    # no encoding= needed: UTF-8 everywhere
+print(open("hello.txt").read())
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> pass <code>encoding="utf-8"</code> every time you open a
+      text file; use <code>"utf-8-sig"</code> for files that may start with a BOM; keep <code>errors="strict"</code>
+      unless you have a reason.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="with">
+    <h2>The <code>with</code> statement and context managers</h2>
+    <p>An open file holds an operating-system resource. If you forget to <code>close()</code> it, written data may
+      never reach the disk, and long-running programs can run out of file handles. Calling <code>close()</code>
+      yourself is fragile: an exception before that line skips it.</p>
+    <p>The <code>with</code> statement solves this. The object after <code>with</code> is a <strong>context
+      manager</strong>: it sets something up on entry and is <em>guaranteed</em> to clean up on exit, whether the
+      block finishes normally, returns, or raises. It is the <code>try</code>/<code>finally</code> from M07, packaged.</p>
+    <div class="two-col">
+      <div><pre><code class="language-python">f = open(path, encoding="utf-8")
+try:
+    text = f.read()
+finally:
+    f.close()</code></pre></div>
+      <div><pre><code class="language-python">with open(path, encoding="utf-8") as f:
+    text = f.read()
+# f is closed here, even after an exception</code></pre></div>
+    </div>
+    <p>Step through and watch <code>closed</code> change when the block ends, even though the second block raises:</p>
+    <div class="tracer" data-title="with closes the file">
+<textarea>
+import io
+
+with io.StringIO("line 1\nline 2\n") as f:
+    first = f.readline()
+    inside = f.closed
+after = f.closed
+
+try:
+    with io.StringIO("data") as g:
+        raise ValueError("boom")
+except ValueError:
+    closed_anyway = g.closed
+</textarea>
+    </div>
+    <p>One <code>with</code> can manage several resources, and you can write your own context managers with
+      <code>contextlib.contextmanager</code> (the full story is in <a href="m15-decorators.html">M15</a>):</p>
+    <div class="runnable" data-title="Two files at once, and a custom context manager">
+<textarea>
+import tempfile, time
+from contextlib import contextmanager
+from pathlib import Path
+
+d = Path(tempfile.mkdtemp())
+(d / "in.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+
+with open(d / "in.txt", encoding="utf-8") as src, open(d / "out.txt", "w", encoding="utf-8") as dst:
+    for line in src:
+        dst.write(line.upper())
+print((d / "out.txt").read_text(encoding="utf-8"))
+
+@contextmanager
+def timer(label):
+    start = time.perf_counter()
+    try:
+        yield                     # the with-block runs here
+    finally:
+        print(f"{label}: {time.perf_counter() - start:.4f}s")
+
+with timer("sum of squares"):
+    total = sum(n * n for n in range(200_000))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> always open files with <code>with</code>. Context
+      managers guarantee cleanup; many other resources (locks, database connections, temporary directories) use the
+      same protocol.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="large-files">
+    <h2>Reading large files line by line</h2>
+    <p><code>f.read()</code> loads the whole file into memory. That is fine for kilobytes, not for a 20 GB log file.
+      A text file object is an <strong>iterator over lines</strong>: a <code>for</code> loop reads one line at a time,
+      so memory use stays tiny no matter how big the file is.</p>
+    <div class="runnable" data-title="Stream a log file">
+<textarea>
+import tempfile
+from pathlib import Path
+
+log = Path(tempfile.mkdtemp()) / "app.log"
+with log.open("w", encoding="utf-8") as f:
+    for i in range(10_000):
+        level = "ERROR" if i % 997 == 0 else "INFO"
+        f.write(f"2026-01-01T00:00:{i % 60:02d} {level} request {i}\n")
+
+errors = []
+with log.open(encoding="utf-8") as f:
+    for line_no, line in enumerate(f, start=1):
+        line = line.rstrip("\n")          # each line keeps its newline; strip it
+        if " ERROR " in line:
+            errors.append((line_no, line))
+print(len(errors), "errors; first:", errors[0])
+</textarea>
+    </div>
+    <ul>
+      <li>Each line includes its trailing <code>"\n"</code> (except possibly the last); use <code>.rstrip("\n")</code>.</li>
+      <li><code>f.readline()</code> reads one line; <code>f.readlines()</code> reads <em>all</em> lines into a list
+        (avoid for big files).</li>
+      <li>For binary data, read fixed-size chunks: <code>while chunk := f.read(65536): ...</code>.</li>
+    </ul>
+    <div class="runnable" data-title="Predict: lines and newlines" data-predict>
+<textarea>
+import io
+f = io.StringIO("a\nbb\n\nccc")
+print([len(line) for line in f])
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> iterate over the file object to stream lines; strip
+      the newline; use <code>enumerate(f, start=1)</code> for line numbers in error messages.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="csv">
+    <h2>CSV files</h2>
+    <p><strong>CSV</strong> (comma-separated values) is the lingua franca of spreadsheets and bank exports. It looks
+      trivial, but values can contain commas, quotes, and even newlines, so never split lines on
+      <code>","</code> yourself. Use the <code>csv</code> module, and always open CSV files with
+      <code>newline=""</code> so the module can handle line endings itself (the docs require it).</p>
+    <div class="runnable" data-title="DictWriter and DictReader">
+<textarea>
+import csv, tempfile
+from pathlib import Path
+
+path = Path(tempfile.mkdtemp()) / "orders.csv"
+orders = [
+    {"id": 1, "customer": "Ada Lovelace", "item": "notebook, A5", "qty": 3, "price": 4.5},
+    {"id": 2, "customer": 'Grace "Amazing" Hopper', "item": "pen", "qty": 10, "price": 0.99},
+]
+with path.open("w", encoding="utf-8", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=["id", "customer", "item", "qty", "price"])
+    writer.writeheader()
+    writer.writerows(orders)
+
+print(path.read_text(encoding="utf-8"))       # note the quoting the module added
+
+with path.open(encoding="utf-8", newline="") as f:
+    for row in csv.DictReader(f):
+        total = int(row["qty"]) * float(row["price"])     # every value comes back as a str
+        print(f"{row['customer']:24} {row['item']:14} {total:7.2f}")
+</textarea>
+    </div>
+    <ul>
+      <li><code>csv.reader</code>/<code>csv.writer</code> work with lists; <code>DictReader</code>/<code>DictWriter</code>
+        use the header row as dict keys, which is clearer and survives column reordering.</li>
+      <li><strong>Every value read is a string.</strong> Convert numbers and dates yourself, and validate them.</li>
+      <li>Other dialects: <code>delimiter=";"</code> (common in Europe) or <code>delimiter="\t"</code> for TSV.</li>
+      <li><code>reader.line_num</code> gives the current line number for error messages.</li>
+    </ul>
+    <p>The <code>pipeline</code> visualizer shows the shape of almost every data job, including this module's
+      mini-project and Project 1: read, parse, transform, write.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["read CSV", "parse + validate", "transform", "write JSON"]}'></div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>newline=""</code> plus <code>encoding="utf-8"</code>
+      when opening CSV files; DictReader/DictWriter for named columns; all values are strings.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="json">
+    <h2>JSON</h2>
+    <p><strong>JSON</strong> (JavaScript Object Notation) is the standard format for web APIs and structured data.
+      It maps neatly onto Python:</p>
+    <table class="rubric">
+      <thead><tr><th>JSON</th><th>Python</th></tr></thead>
+      <tbody>
+        <tr><td>object <code>{"a": 1}</code></td><td><code>dict</code> (keys must be strings)</td></tr>
+        <tr><td>array <code>[1, 2]</code></td><td><code>list</code> (tuples are written as arrays)</td></tr>
+        <tr><td>string, number</td><td><code>str</code>, <code>int</code>/<code>float</code></td></tr>
+        <tr><td><code>true</code>/<code>false</code>/<code>null</code></td><td><code>True</code>/<code>False</code>/<code>None</code></td></tr>
+      </tbody>
+    </table>
+    <p>Four functions: <code>dumps</code> (to string) and <code>loads</code> (from string), <code>dump</code> (to a
+      file) and <code>load</code> (from a file). The "s" means string.</p>
+    <div class="runnable" data-title="Round-tripping JSON">
+<textarea>
+import json, tempfile
+from pathlib import Path
+
+profile = {"name": "Zoë", "langs": ["python", "sql"], "admin": False, "manager": None, "scores": (9, 7)}
+text = json.dumps(profile, indent=2, sort_keys=True, ensure_ascii=False)
+print(text)
+
+path = Path(tempfile.mkdtemp()) / "profile.json"
+with path.open("w", encoding="utf-8") as f:
+    json.dump(profile, f, indent=2, ensure_ascii=False)
+with path.open(encoding="utf-8") as f:
+    loaded = json.load(f)
+print(loaded == profile, loaded["scores"])     # the tuple came back as a list!
+</textarea>
+    </div>
+    <h3>Custom types: <code>default=</code></h3>
+    <p>JSON has no dates, decimals, sets, or paths. <code>json.dumps</code> raises <code>TypeError</code> for them
+      unless you pass <code>default=</code>, a function called for each object JSON cannot encode. It returns
+      something JSON can encode, or raises <code>TypeError</code> itself.</p>
+    <div class="runnable" data-title="A custom encoder function">
+<textarea>
+import json
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+def encode_extra(obj):
+    if isinstance(obj, (date, Path)):
+        return str(obj)
+    if isinstance(obj, Decimal):
+        return str(obj)            # keep the exact digits
+    if isinstance(obj, set):
+        return sorted(obj)
+    raise TypeError(f"cannot JSON-encode {type(obj).__name__}")
+
+invoice = {"due": date(2026, 2, 1), "total": Decimal("19.99"), "tags": {"paid", "eu"}, "file": Path("inv.pdf")}
+print(json.dumps(invoice, default=encode_extra))
+
+try:
+    json.dumps({"when": date.today()})
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>json.loads</code> on untrusted input is safe (it never runs code), but the
+      result can be any shape. Validate the structure before using it, as Project 1 does with its rules file.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>dump</code>/<code>load</code> for files,
+      <code>dumps</code>/<code>loads</code> for strings. <code>indent=2</code> for humans; <code>default=</code> for
+      custom types; tuples become lists.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="toml">
+    <h2>TOML configuration with <code>tomllib</code></h2>
+    <p><strong>TOML</strong> is a configuration format designed to be easy for humans to read and write. You have
+      already seen it: <code>pixi.toml</code> and <code>pyproject.toml</code>. The standard library's
+      <code>tomllib</code> <em>reads</em> TOML (writing needs a third-party package). It requires the file to be
+      opened in <strong>binary mode</strong>, because TOML is defined to be UTF-8 and the parser decodes it itself.</p>
+    <div class="runnable" data-title="Reading a config file">
+<textarea>
+import tempfile, tomllib
+from pathlib import Path
+
+path = Path(tempfile.mkdtemp()) / "app.toml"
+path.write_text('''
+title = "Budget"
+debug = false
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[limits]
+groceries = 400
+dining = 120.5
+
+[[users]]
+name = "ada"
+[[users]]
+name = "grace"
+''', encoding="utf-8")
+
+with path.open("rb") as f:          # binary mode is required
+    config = tomllib.load(f)
+
+print(config["server"]["port"], type(config["limits"]["dining"]).__name__)
+print([u["name"] for u in config["users"]])
+try:
+    tomllib.loads("port = ")
+except tomllib.TOMLDecodeError as e:
+    print("TOMLDecodeError:", e)
+</textarea>
+    </div>
+    <aside class="callout py315"><p><strong>Python 3.15 preview:</strong> <code>tomllib</code> supports TOML 1.1,
+      which allows, among other things, newlines and trailing commas inside inline tables.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>tomllib.load</code> needs <code>open(path,
+      "rb")</code>; <code>tomllib.loads</code> takes a string. Tables become dicts, arrays of tables become lists of
+      dicts.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="compression">
+    <h2>Compression: <code>gzip</code> and <code>compression.zstd</code></h2>
+    <p>Text data compresses extremely well. The <code>gzip</code> module reads and writes <code>.gz</code> files
+      with the same <code>open()</code> interface as normal files, so streaming code barely changes. Use
+      <code>"wt"</code>/<code>"rt"</code> for text and <code>"wb"</code>/<code>"rb"</code> for bytes.</p>
+    <div class="runnable" data-title="gzip in practice">
+<textarea>
+import gzip, tempfile
+from pathlib import Path
+
+d = Path(tempfile.mkdtemp())
+lines = [f"2026-01-{day:02d},INFO,all systems normal\n" for day in range(1, 29)] * 50
+
+plain = d / "log.csv"
+plain.write_text("".join(lines), encoding="utf-8")
+with gzip.open(d / "log.csv.gz", "wt", encoding="utf-8") as f:
+    f.writelines(lines)
+
+print(plain.stat().st_size, "bytes plain")
+print((d / "log.csv.gz").stat().st_size, "bytes gzipped")
+with gzip.open(d / "log.csv.gz", "rt", encoding="utf-8") as f:
+    print(next(f).strip())
+
+blob = gzip.compress(b"hello " * 1000)     # in-memory bytes too
+print(len(blob), gzip.decompress(blob)[:12])
+</textarea>
+    </div>
+    <aside class="callout py314"><p><strong>New in 3.14, PEP 784:</strong> the <code>compression</code> package,
+      with <code>compression.zstd</code> for <strong>Zstandard</strong>, a modern algorithm that compresses about as
+      well as gzip or better while being much faster. <code>compression</code> also re-exports
+      <code>gzip</code>, <code>bz2</code>, <code>lzma</code>, and <code>zlib</code> under one roof, and
+      <code>tarfile</code>, <code>zipfile</code>, and <code>shutil</code> gained Zstandard support.</p></aside>
+    <div class="runnable" data-title="compression.zstd (3.14)">
+<textarea>
+from compression import zstd
+from pathlib import Path
+
+data = b"timestamp,level,message\n" + b"2026-01-01,INFO,ok\n" * 10_000
+packed = zstd.compress(data)
+print(len(data), "->", len(packed), "bytes")
+assert zstd.decompress(packed) == data
+
+with zstd.open("log.csv.zst", "wt", encoding="utf-8") as f:   # same interface as gzip.open
+    f.write("hello zstd\n")
+print(zstd.open("log.csv.zst", "rt", encoding="utf-8").read())
+Path("log.csv.zst").unlink()
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>gzip.open</code> and <code>zstd.open</code> work
+      like <code>open</code>; add <code>t</code> for text. Choose zstd for speed in 3.14+, gzip for maximum
+      compatibility.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="tempfile-shutil">
+    <h2>Temporary files and <code>shutil</code></h2>
+    <p>Tests and data jobs often need scratch space that cleans itself up. <code>tempfile.TemporaryDirectory()</code>
+      is a context manager that creates a fresh directory and deletes it, with everything inside, on exit.
+      <code>NamedTemporaryFile</code> does the same for a single file. (pytest gives tests a <code>tmp_path</code>
+      fixture built on the same idea; Project 1's tests use it.)</p>
+    <p><code>shutil</code> ("shell utilities") handles whole-file and whole-tree operations: <code>copy2</code>
+      (copy with metadata), <code>copytree</code>, <code>move</code>, <code>rmtree</code> (delete a tree, carefully!),
+      <code>make_archive</code>/<code>unpack_archive</code>, and <code>disk_usage</code>.</p>
+    <div class="runnable" data-title="A self-cleaning workspace">
+<textarea>
+import shutil, tempfile
+from pathlib import Path
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    project = root / "project"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    (project / "README.md").write_text("# Project\n", encoding="utf-8")
+
+    shutil.copytree(project, root / "project-copy")
+    archive = shutil.make_archive(str(root / "project"), "zip", root_dir=project)
+    print(Path(archive).name, Path(archive).stat().st_size > 0)
+    print(sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()))
+    saved = root
+print("still exists after the with block?", saved.exists())
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>shutil.rmtree(path)</code> deletes everything under <code>path</code> with
+      no recycle bin. Double-check the path, and never build it from unchecked user input.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>TemporaryDirectory()</code> for scratch space;
+      <code>shutil</code> for trees and archives; prefer 3.14's <code>Path.copy</code>/<code>move</code> for single
+      paths.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises write to temporary directories; the tests create the input files for you.</p>
+
+    <div class="exercise" data-id="m09-e1" data-title="A tiny wc">
+      <div class="exercise-prompt">
+        <p>Write <code>count_file(path)</code> returning a tuple <code>(lines, words, chars)</code> for a UTF-8 text
+          file, like the Unix <code>wc</code> command. Read the file line by line with <code>with</code>; characters
+          include newlines.</p>
+      </div>
+<textarea class="starter">
+from pathlib import Path
+
+
+def count_file(path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import tempfile as _tf
+from pathlib import Path as _P
+
+def _make(text):
+    p = _P(_tf.mkdtemp()) / "f.txt"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+def test_counts():
+    assert count_file(_make("hello world\nbye\n")) == (2, 3, 16), "2 lines, 3 words, 16 characters"
+
+def test_unicode_chars():
+    assert count_file(_make("café ☕\n")) == (1, 2, 7), "count characters, not bytes"
+
+def test_empty():
+    assert count_file(_make("")) == (0, 0, 0), "an empty file is all zeros"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop <code>for line in f:</code> and add <code>1</code>,
+        <code>len(line.split())</code>, and <code>len(line)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from pathlib import Path
+
+
+def count_file(path):
+    lines = words = chars = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            lines += 1
+            words += len(line.split())
+            chars += len(line)
+    return lines, words, chars</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m09-e2" data-title="Load scores from CSV">
+      <div class="exercise-prompt">
+        <p>Write <code>load_scores(path)</code> that reads a CSV file with columns <code>name,score</code> using
+          <code>csv.DictReader</code> and returns a dict name → int score. Strip whitespace around names. If a score
+          is not an integer, raise <code>ValueError</code> whose message contains <code>"line N"</code>, where N is
+          the line number in the file (the header is line 1).</p>
+      </div>
+<textarea class="starter">
+import csv
+
+
+def load_scores(path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import tempfile as _tf
+from pathlib import Path as _P
+
+def _make(text):
+    p = _P(_tf.mkdtemp()) / "scores.csv"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+def test_load():
+    p = _make("name,score\nAda,91\n Grace ,88\n")
+    assert load_scores(p) == {"Ada": 91, "Grace": 88}, "names stripped, scores converted to int"
+
+def test_bad_line_number():
+    p = _make("name,score\nAda,91\nBob,ninety\n")
+    try:
+        load_scores(p)
+    except ValueError as e:
+        assert "line 3" in str(e), f"message should mention line 3, got {e}"
+        return
+    assert False, "a non-integer score should raise ValueError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Inside the loop, <code>reader.line_num</code> is the line just
+        read. Catch the <code>ValueError</code> from <code>int()</code> and raise a new one <code>from</code> it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import csv
+
+
+def load_scores(path):
+    scores = {}
+    with open(path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                scores[row["name"].strip()] = int(row["score"])
+            except ValueError as e:
+                raise ValueError(f"line {reader.line_num}: bad score {row['score']!r}") from e
+    return scores</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m09-e3" data-title="Write rows with DictWriter">
+      <div class="exercise-prompt">
+        <p>Write <code>save_rows(path, rows)</code>. <code>rows</code> is a non-empty list of dicts with the same
+          keys. Write a CSV with a header in the key order of the first row, using <code>csv.DictWriter</code> and
+          <code>newline=""</code>. Return the number of data rows written. Values containing commas or quotes must
+          survive a round trip.</p>
+      </div>
+<textarea class="starter">
+import csv
+
+
+def save_rows(path, rows):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import csv as _csv
+import tempfile as _tf
+from pathlib import Path as _P
+
+ROWS = [{"city": "Paris, FR", "pop": 2100000}, {"city": 'The "Big" Apple', "pop": 8300000}]
+
+def test_round_trip():
+    p = _P(_tf.mkdtemp()) / "cities.csv"
+    assert save_rows(p, ROWS) == 2, "should return the number of rows"
+    with p.open(encoding="utf-8", newline="") as f:
+        back = list(_csv.DictReader(f))
+    assert back == [{"city": "Paris, FR", "pop": "2100000"}, {"city": 'The "Big" Apple', "pop": "8300000"}], f"got {back}"
+
+def test_header_order():
+    p = _P(_tf.mkdtemp()) / "c.csv"
+    save_rows(p, [{"b": 1, "a": 2}])
+    assert p.read_text(encoding="utf-8").splitlines()[0] == "b,a", "header follows the first row's key order"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>csv.DictWriter(f, fieldnames=list(rows[0]))</code>, then
+        <code>writeheader()</code> and <code>writerows(rows)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import csv
+
+
+def save_rows(path, rows):
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m09-e4" data-title="JSON with extra types">
+      <div class="exercise-prompt">
+        <p>Write <code>to_json(data)</code> returning a JSON string with <code>indent=2</code> and
+          <code>sort_keys=True</code>. Encode <code>date</code> as ISO text (<code>"2026-01-31"</code>),
+          <code>Decimal</code> as its exact string, and <code>set</code> as a sorted list. Any other unsupported type
+          must still raise <code>TypeError</code>.</p>
+      </div>
+<textarea class="starter">
+import json
+from datetime import date
+from decimal import Decimal
+
+
+def to_json(data):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import json as _json
+from datetime import date as _date
+from decimal import Decimal as _Dec
+
+def test_extra_types():
+    text = to_json({"when": _date(2026, 1, 31), "amount": _Dec("10.10"), "tags": {"b", "a"}})
+    assert _json.loads(text) == {"amount": "10.10", "tags": ["a", "b"], "when": "2026-01-31"}, f"got {text}"
+
+def test_format():
+    text = to_json({"b": 1, "a": 2})
+    assert text == '{\n  "a": 2,\n  "b": 1\n}', "use indent=2 and sort_keys=True"
+
+def test_unsupported():
+    try:
+        to_json({"x": object()})
+    except TypeError:
+        return
+    assert False, "unsupported types should raise TypeError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Write a helper and pass it as <code>default=</code>. Use
+        <code>obj.isoformat()</code> for dates.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import json
+from datetime import date
+from decimal import Decimal
+
+
+def _encode(obj):
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, set):
+        return sorted(obj)
+    raise TypeError(f"cannot encode {type(obj).__name__}")
+
+
+def to_json(data):
+    return json.dumps(data, indent=2, sort_keys=True, default=_encode)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m09-e5" data-title="Config with defaults">
+      <div class="exercise-prompt">
+        <p>Write <code>read_server_config(path)</code> that loads a TOML file with <code>tomllib</code> and returns a
+          dict with keys <code>host</code>, <code>port</code>, and <code>debug</code>. Start from the defaults
+          <code>{"host": "127.0.0.1", "port": 8000, "debug": False}</code> and override them with whatever is in the
+          file's <code>[server]</code> table. A missing <code>[server]</code> table means all defaults.</p>
+      </div>
+<textarea class="starter">
+import tomllib
+
+DEFAULTS = {"host": "127.0.0.1", "port": 8000, "debug": False}
+
+
+def read_server_config(path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import tempfile as _tf
+from pathlib import Path as _P
+
+def _make(text):
+    p = _P(_tf.mkdtemp()) / "app.toml"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+def test_override():
+    p = _make('[server]\nport = 9000\ndebug = true\n')
+    assert read_server_config(p) == {"host": "127.0.0.1", "port": 9000, "debug": True}, "file values override defaults"
+
+def test_defaults():
+    p = _make('title = "x"\n')
+    assert read_server_config(p) == {"host": "127.0.0.1", "port": 8000, "debug": False}, "no [server] means defaults"
+
+def test_defaults_not_mutated():
+    read_server_config(_make('[server]\nport = 1\n'))
+    assert DEFAULTS["port"] == 8000, "do not modify DEFAULTS"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Open with <code>"rb"</code>, then <code>DEFAULTS | data.get("server", {})</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import tomllib
+
+DEFAULTS = {"host": "127.0.0.1", "port": 8000, "debug": False}
+
+
+def read_server_config(path):
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    return DEFAULTS | data.get("server", {})</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m09-e6" data-title="Compressed backup">
+      <div class="exercise-prompt">
+        <p>Write <code>backup_text_files(src, dest)</code>, where both are <code>Path</code>s. For every
+          <code>.txt</code> file anywhere under <code>src</code>, write a gzip-compressed copy to the same relative
+          location under <code>dest</code> with <code>.gz</code> appended (<code>notes/a.txt</code> →
+          <code>notes/a.txt.gz</code>), creating folders as needed. Return a sorted list of the relative paths written,
+          as POSIX strings (<code>"notes/a.txt.gz"</code>).</p>
+      </div>
+<textarea class="starter">
+import gzip
+import shutil
+from pathlib import Path
+
+
+def backup_text_files(src, dest):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import gzip as _gz
+import tempfile as _tf
+from pathlib import Path as _P
+
+def _tree():
+    src = _P(_tf.mkdtemp())
+    (src / "notes" / "old").mkdir(parents=True)
+    (src / "a.txt").write_text("alpha\n", encoding="utf-8")
+    (src / "notes" / "b.txt").write_text("beta\n", encoding="utf-8")
+    (src / "notes" / "old" / "c.txt").write_text("gamma\n", encoding="utf-8")
+    (src / "notes" / "skip.md").write_text("# no\n", encoding="utf-8")
+    return src
+
+def test_written_list():
+    dest = _P(_tf.mkdtemp()) / "backup"
+    got = backup_text_files(_tree(), dest)
+    assert got == ["a.txt.gz", "notes/b.txt.gz", "notes/old/c.txt.gz"], f"got {got}"
+
+def test_contents_round_trip():
+    dest = _P(_tf.mkdtemp()) / "backup"
+    backup_text_files(_tree(), dest)
+    assert _gz.decompress((dest / "notes" / "old" / "c.txt.gz").read_bytes()) == b"gamma\n", "gzip must round-trip"
+    assert not (dest / "notes" / "skip.md.gz").exists(), "only .txt files are backed up"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use <code>src.rglob("*.txt")</code>,
+        <code>path.relative_to(src)</code>, <code>target.parent.mkdir(parents=True, exist_ok=True)</code>, and
+        <code>gzip.open(target, "wb")</code> with <code>shutil.copyfileobj</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import gzip
+import shutil
+from pathlib import Path
+
+
+def backup_text_files(src, dest):
+    written = []
+    for path in src.rglob("*.txt"):
+        rel = path.relative_to(src)
+        target = dest / rel.with_name(rel.name + ".gz")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("rb") as fin, gzip.open(target, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        written.append(target.relative_to(dest).as_posix())
+    return sorted(written)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a CSV → JSON report converter</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">csv2report: sales CSV in, JSON summary out</span></div>
+      <div class="widget-body">
+        <p>Write a command-line tool that reads one or more sales CSV files (columns <code>date,region,product,qty,unit_price</code>),
+          validates every row, and writes a JSON report with totals per region and per product, the best-selling
+          product, and a list of rejected rows with their file name and line number.</p>
+        <pre data-label="Terminal"><code class="language-bash">mkdir csv2report &amp;&amp; cd csv2report
+pixi init
+pixi add python=3.14
+pixi run python csv2report.py data/*.csv --out report.json
+pixi run python csv2report.py data/*.csv --out report.json.gz    # compressed output</code></pre>
+        <pre><code class="language-json">{
+  "files": ["data/jan.csv", "data/feb.csv"],
+  "rows": 1840,
+  "revenue_by_region": {"EU": "18250.40", "US": "22711.95"},
+  "units_by_product": {"pen": 1200, "notebook": 640},
+  "best_seller": "pen",
+  "rejected": [{"file": "data/feb.csv", "line": 17, "error": "qty must be an integer, got 'ten'"}]
+}</code></pre>
+        <ul class="checklist" data-id="m09-mini">
+          <li>Paths handled with <code>pathlib</code>; every <code>open</code> uses <code>with</code> and <code>encoding="utf-8"</code></li>
+          <li>CSV read with <code>csv.DictReader</code> and <code>newline=""</code>, streaming row by row</li>
+          <li>Money computed with <code>Decimal</code> and written with a <code>default=</code> encoder</li>
+          <li>Bad rows are collected with file and line number instead of crashing the run</li>
+          <li>An output path ending in <code>.gz</code> is written with <code>gzip.open(..., "wt")</code></li>
+          <li>Tested with <code>tempfile.TemporaryDirectory()</code> sample files</li>
+          <li>Library functions return data; only <code>main()</code> prints</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> read <code>.csv.gz</code> inputs transparently; support <code>.zst</code>
+          output with <code>compression.zstd</code>; read column names and currency from a <code>report.toml</code>
+          config via <code>tomllib</code>; also write a per-region CSV summary with <code>DictWriter</code>.
+          Then move on to <a href="../projects/p01-budget-ledger.html">Project 1: Budget Ledger CLI</a>, which builds
+          on everything here.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m09-quiz">
+      <script type="application/json">
+      {"title": "Files and data formats quiz", "passScore": 0.7, "questions": [
+        {"type": "output", "prompt": "What does this print?", "code": "from pathlib import Path\np = Path('data') / 'jan.report.csv'\nprint(p.stem, p.suffix)", "answer": "jan.report .csv",
+         "explanation": "<p><code>suffix</code> is the last extension; <code>stem</code> is the name without it.</p>"},
+        {"type": "single", "prompt": "Which mode refuses to overwrite an existing file?", "options": ["<code>\"w\"</code>", "<code>\"a\"</code>", "<code>\"x\"</code>", "<code>\"r+\"</code>"], "answer": 2,
+         "explanation": "<p><code>\"x\"</code> (exclusive create) raises <code>FileExistsError</code> if the file exists. <code>\"w\"</code> erases it.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "print(len('é'), len('é'.encode('utf-8')))", "answer": "1 2",
+         "explanation": "<p>One character, two bytes in UTF-8.</p>"},
+        {"type": "single", "prompt": "Why pass <code>encoding=\"utf-8\"</code> explicitly in Python 3.14?", "options": ["It is faster", "Without it, open() uses the locale encoding, which differs between machines", "UTF-8 is not supported otherwise", "It enables binary mode"], "answer": 1,
+         "explanation": "<p>The default depends on the platform locale until Python 3.15 makes UTF-8 the default (PEP 686).</p>"},
+        {"type": "single", "prompt": "What guarantees that a file opened with <code>with open(...) as f:</code> is closed?", "options": ["The garbage collector", "The context manager's exit, which runs even if the block raises", "The end of the program", "Calling f.flush()"], "answer": 1,
+         "explanation": "<p>The <code>with</code> statement calls the file's exit method on every way out of the block.</p>"},
+        {"type": "single", "prompt": "Best way to process a 20 GB text file?", "options": ["<code>f.read()</code>", "<code>f.readlines()</code>", "<code>for line in f:</code>", "<code>list(f)</code>"], "answer": 2,
+         "explanation": "<p>Iterating the file reads one line at a time, using constant memory.</p>"},
+        {"type": "text", "prompt": "What value should you pass as <code>newline=</code> when opening a CSV file?", "answer": ["\"\"", "''", "empty string", "empty"],
+         "explanation": "<p><code>newline=\"\"</code> lets the csv module handle line endings and newlines inside quoted fields.</p>"},
+        {"type": "single", "prompt": "What type are the values in a row from <code>csv.DictReader</code>?", "options": ["Whatever type the data looks like", "Always <code>str</code>", "<code>bytes</code>", "<code>int</code> for numbers"], "answer": 1,
+         "explanation": "<p>CSV has no types; you convert and validate values yourself.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "import json\nprint(json.loads(json.dumps({'t': (1, 2)})))", "answer": "{'t': [1, 2]}",
+         "explanation": "<p>JSON has arrays, not tuples, so a tuple comes back as a list.</p>"},
+        {"type": "single", "prompt": "How do you make <code>json.dumps</code> handle <code>datetime.date</code> values?", "options": ["Pass <code>indent=2</code>", "Pass <code>default=</code> a function that converts them", "It handles dates automatically", "Use <code>ensure_ascii=False</code>"], "answer": 1,
+         "explanation": "<p><code>default</code> is called for every object JSON cannot encode.</p>"},
+        {"type": "single", "prompt": "How must a file be opened for <code>tomllib.load</code>?", "options": ["Text mode <code>\"r\"</code>", "Binary mode <code>\"rb\"</code>", "Append mode", "Any mode"], "answer": 1,
+         "explanation": "<p><code>tomllib.load</code> needs a binary file; TOML is always UTF-8 and the parser decodes it.</p>"},
+        {"type": "multi", "prompt": "Which are new in Python 3.14?", "options": ["<code>Path.copy()</code> and <code>Path.move()</code>", "<code>compression.zstd</code>", "<code>tomllib</code>", "<code>gzip</code>"], "answer": [0, 1],
+         "explanation": "<p><code>tomllib</code> arrived in 3.11 and <code>gzip</code> is ancient. PEP 784 added <code>compression.zstd</code>.</p>"},
+        {"type": "single", "prompt": "What happens to a <code>tempfile.TemporaryDirectory()</code> after its <code>with</code> block?", "options": ["It stays until reboot", "It and its contents are deleted", "It is moved to the trash", "It becomes read-only"], "answer": 1,
+         "explanation": "<p>It is a context manager that removes the directory tree on exit.</p>"},
+        {"type": "text", "prompt": "Which encoding name strips a UTF-8 byte-order mark when reading?", "answer": ["utf-8-sig", "utf_8_sig"],
+         "explanation": "<p><code>\"utf-8-sig\"</code> handles files written by Excel and some banks.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li><code>pathlib.Path</code> for every path: <code>/</code> to join, properties to inspect, <code>glob</code>/<code>rglob</code> to search, 3.14 <code>copy</code>/<code>move</code>.</li>
+      <li>Modes: <code>r</code>, <code>w</code> (erases), <code>a</code>, <code>x</code>; add <code>b</code> for bytes.</li>
+      <li>Always pass <code>encoding="utf-8"</code>; <code>utf-8-sig</code> for BOMs; UTF-8 becomes the default in 3.15.</li>
+      <li><code>with</code> guarantees cleanup; iterate files to stream lines.</li>
+      <li>CSV: <code>newline=""</code>, DictReader/DictWriter, values are strings.</li>
+      <li>JSON: <code>dump</code>/<code>load</code>/<code>dumps</code>/<code>loads</code>, <code>default=</code> for custom types.</li>
+      <li>TOML: <code>tomllib.load(open(p, "rb"))</code>, read-only.</li>
+      <li><code>gzip.open</code> and 3.14's <code>compression.zstd.open</code> work like <code>open</code>; <code>tempfile</code> and <code>shutil</code> handle scratch space and trees.</li>
+    </ul>
+    <div class="flashcards" data-title="Files and formats">
+      <script type="application/json">
+      [{"front": "Join paths portably", "back": "<code>Path(\"data\") / \"2026\" / \"jan.csv\"</code>"},
+       {"front": "<code>.stem</code> vs <code>.suffix</code>", "back": "<code>report.csv</code>: stem <code>report</code>, suffix <code>.csv</code>."},
+       {"front": "Mode <code>\"w\"</code> vs <code>\"x\"</code>", "back": "<code>w</code> erases an existing file; <code>x</code> raises FileExistsError."},
+       {"front": "Text vs binary mode", "back": "Text decodes to str with an encoding; binary gives raw bytes."},
+       {"front": "Why <code>with open(...)</code>?", "back": "The file is closed on every exit path, including exceptions."},
+       {"front": "Stream a big file", "back": "<code>for line in f:</code> reads one line at a time."},
+       {"front": "CSV open arguments", "back": "<code>encoding=\"utf-8\", newline=\"\"</code>"},
+       {"front": "JSON for custom types", "back": "<code>json.dumps(obj, default=fn)</code>; fn returns something encodable or raises TypeError."},
+       {"front": "tomllib file mode", "back": "Binary: <code>open(path, \"rb\")</code>."},
+       {"front": "PEP 784 (3.14)", "back": "<code>compression.zstd</code>: Zstandard compression in the standard library."},
+       {"front": "PEP 686 (3.15)", "back": "UTF-8 is the default encoding for <code>open()</code>."},
+       {"front": "Self-deleting scratch folder", "back": "<code>with tempfile.TemporaryDirectory() as tmp:</code>"}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/library/pathlib.html">pathlib: object-oriented file-system paths</a></li>
+      <li><a href="https://docs.python.org/3.14/tutorial/inputoutput.html#reading-and-writing-files">Python tutorial: Reading and writing files</a></li>
+      <li><a href="https://docs.python.org/3.14/howto/unicode.html">Unicode HOWTO</a></li>
+      <li><a href="https://docs.python.org/3.14/library/csv.html">csv</a>, <a href="https://docs.python.org/3.14/library/json.html">json</a>, and <a href="https://docs.python.org/3.14/library/tomllib.html">tomllib</a></li>
+      <li><a href="https://docs.python.org/3.14/library/compression.zstd.html">compression.zstd</a> and <a href="https://peps.python.org/pep-0784/">PEP 784</a></li>
+      <li><a href="https://docs.python.org/3.14/library/tempfile.html">tempfile</a> and <a href="https://docs.python.org/3.14/library/shutil.html">shutil</a></li>
+      <li>Next: <a href="../projects/p01-budget-ledger.html">Project 1: Budget Ledger CLI</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

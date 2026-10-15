@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M36 · Metaprogramming · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m36">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Module 36</p>
+    <h1>Metaprogramming</h1>
+    <p class="lede">Metaprogramming is code that shapes other code: attributes that validate themselves, classes that
+      register themselves, and class statements whose meaning you can redefine. Frameworks like Django, SQLAlchemy,
+      Pydantic, and the standard library's <code>dataclasses</code> and <code>enum</code> are built from exactly the
+      hooks in this module. Learn the mechanics and those libraries stop being magic.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m11-data-model.html">M11 Data Model</a>, <a href="m15-decorators.html">M15 Decorators</a>, <a href="m16-typing.html">M16 Typing</a></span></div>
+    <ul class="objectives">
+      <li>Trace Python's attribute lookup order: data descriptors, the instance <code>__dict__</code>, non-data descriptors, and <code>__getattr__</code></li>
+      <li>Write descriptors with <code>__get__</code>, <code>__set__</code>, and <code>__set_name__</code> to build validated fields</li>
+      <li>Explain how functions become bound methods, and how <code>property</code>, <code>classmethod</code>, and <code>staticmethod</code> are descriptors</li>
+      <li>Use <code>__slots__</code> deliberately, knowing what it saves and what it costs</li>
+      <li>Register plugins with <code>__init_subclass__</code> and transform classes with class decorators</li>
+      <li>Describe the full class-creation sequence, including metaclasses and <code>__prepare__</code>, and know when not to use them</li>
+      <li>Introspect objects with <code>getattr</code>/<code>setattr</code>, <code>inspect</code>, and 3.14's <code>annotationlib</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="classes-are-objects">
+    <h2>Classes are objects too</h2>
+    <p><dfn>Metaprogramming</dfn> means writing code that inspects or modifies the structure of a program (its classes,
+      functions, and attributes) rather than just its data. In many languages that requires macros or code generation.
+      In Python it falls out of one design decision: <strong>everything, including a class, is an ordinary runtime
+      object</strong>. A class statement is executed like any other statement, and its result is an object you can pass
+      around, inspect, and modify.</p>
+    <p>That object has a type too. The type of most classes is <code>type</code>, which is why <code>type</code> is
+      called the default <dfn>metaclass</dfn>: the class of classes. And because <code>type</code> is itself a class,
+      <code>type(type) is type</code> closes the loop.</p>
+    <div class="runnable" data-title="Classes are runtime objects">
+<textarea>
+class Point:
+    """A 2-D point."""
+    dims = 2
+
+    def norm(self):
+        return (self.x ** 2 + self.y ** 2) ** 0.5
+
+print(type(Point))                  # the metaclass
+print(type(type))                   # type is its own type
+print(Point.__name__, Point.__qualname__, Point.__module__)
+print(Point.__mro__)                # method resolution order
+print(sorted(k for k in vars(Point) if not k.startswith("__")))
+
+# Classes can be stored, passed, and modified at runtime
+registry = {"point": Point}
+Point.describe = lambda self: f"Point({self.x}, {self.y})"   # monkey-patching
+p = registry["point"]()
+p.x, p.y = 3, 4
+print(p.describe(), p.norm())
+</textarea>
+    </div>
+    <p>There are five hooks, in increasing order of power and decreasing order of how often you should reach for them:</p>
+    <table>
+      <thead><tr><th>Hook</th><th>Customizes</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td><code>__getattr__</code> / <code>__getattribute__</code></td><td>attribute access on instances</td><td>proxies, lazy loading, delegation</td></tr>
+        <tr><td>Descriptors</td><td>one attribute, for every instance of a class</td><td>validated fields, computed attributes, ORMs</td></tr>
+        <tr><td><code>__init_subclass__</code></td><td>what happens when someone subclasses you</td><td>plugin registries, subclass validation</td></tr>
+        <tr><td>Class decorators</td><td>a class after it is built</td><td><code>@dataclass</code>, registration, adding methods</td></tr>
+        <tr><td>Metaclasses</td><td>how the class itself is built</td><td><code>ABCMeta</code>, <code>EnumType</code>, custom namespaces</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout pro"><p>Professional rule of thumb: <strong>use the least powerful tool that works</strong>.
+      Metaprogramming makes code shorter at the call site and harder to read at the definition site. Every hook you add
+      is something the next maintainer, your type checker, and your IDE must understand.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="attribute-lookup">
+    <h2>The attribute lookup algorithm</h2>
+    <p>Everything in this module hangs on one algorithm: what Python does when you write <code>obj.name</code>. That
+      expression calls <code>type(obj).__getattribute__(obj, "name")</code>. For ordinary objects that is
+      <code>object.__getattribute__</code>, which implements the following precedence. First, two definitions:</p>
+    <ul>
+      <li>A <dfn>descriptor</dfn> is any object whose <em>class</em> defines <code>__get__</code>, <code>__set__</code>,
+        or <code>__delete__</code>, and which lives as an attribute <em>on a class</em>.</li>
+      <li>A <dfn>data descriptor</dfn> defines <code>__set__</code> or <code>__delete__</code> (usually both
+        <code>__get__</code> and <code>__set__</code>). A <dfn>non-data descriptor</dfn> defines only
+        <code>__get__</code>. Plain functions are non-data descriptors; <code>property</code> is a data descriptor.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 720 330" role="img" aria-label="Attribute lookup order flowchart">
+        <defs><marker id="m36-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
+        <rect x="10" y="20" width="150" height="50" rx="8" fill="var(--viz-1)" opacity="0.18" stroke="var(--viz-1)"/>
+        <text x="85" y="42" text-anchor="middle" font-size="13" fill="var(--fg)">obj.name</text>
+        <text x="85" y="60" text-anchor="middle" font-size="11" fill="var(--fg-muted)">__getattribute__</text>
+        <rect x="200" y="20" width="200" height="50" rx="8" fill="none" stroke="var(--fg-muted)"/>
+        <text x="300" y="40" text-anchor="middle" font-size="12" fill="var(--fg)">1. search type(obj).__mro__</text>
+        <text x="300" y="58" text-anchor="middle" font-size="11" fill="var(--fg-muted)">found a DATA descriptor?</text>
+        <rect x="450" y="20" width="250" height="50" rx="8" fill="var(--viz-2)" opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="575" y="49" text-anchor="middle" font-size="12" fill="var(--fg)">yes: return desc.__get__(obj, type)</text>
+        <rect x="200" y="100" width="200" height="50" rx="8" fill="none" stroke="var(--fg-muted)"/>
+        <text x="300" y="120" text-anchor="middle" font-size="12" fill="var(--fg)">2. look in obj.__dict__</text>
+        <text x="300" y="138" text-anchor="middle" font-size="11" fill="var(--fg-muted)">key present?</text>
+        <rect x="450" y="100" width="250" height="50" rx="8" fill="var(--viz-2)" opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="575" y="129" text-anchor="middle" font-size="12" fill="var(--fg)">yes: return the stored value</text>
+        <rect x="200" y="180" width="200" height="50" rx="8" fill="none" stroke="var(--fg-muted)"/>
+        <text x="300" y="200" text-anchor="middle" font-size="12" fill="var(--fg)">3. class attribute from step 1?</text>
+        <text x="300" y="218" text-anchor="middle" font-size="11" fill="var(--fg-muted)">non-data descriptor or plain</text>
+        <rect x="450" y="180" width="250" height="50" rx="8" fill="var(--viz-2)" opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="575" y="200" text-anchor="middle" font-size="12" fill="var(--fg)">descriptor: desc.__get__(obj, type)</text>
+        <text x="575" y="218" text-anchor="middle" font-size="12" fill="var(--fg)">plain value: return it</text>
+        <rect x="200" y="260" width="200" height="50" rx="8" fill="none" stroke="var(--fg-muted)"/>
+        <text x="300" y="280" text-anchor="middle" font-size="12" fill="var(--fg)">4. raise AttributeError</text>
+        <text x="300" y="298" text-anchor="middle" font-size="11" fill="var(--fg-muted)">caught if __getattr__ exists</text>
+        <rect x="450" y="260" width="250" height="50" rx="8" fill="var(--viz-3)" opacity="0.18" stroke="var(--viz-3)"/>
+        <text x="575" y="289" text-anchor="middle" font-size="12" fill="var(--fg)">return type(obj).__getattr__(obj, name)</text>
+        <g stroke="var(--fg-muted)" stroke-width="1.5" fill="none" marker-end="url(#m36-arrow)">
+          <line x1="160" y1="45" x2="198" y2="45"/>
+          <line x1="400" y1="45" x2="448" y2="45"/>
+          <line x1="300" y1="70" x2="300" y2="98"/>
+          <line x1="400" y1="125" x2="448" y2="125"/>
+          <line x1="300" y1="150" x2="300" y2="178"/>
+          <line x1="400" y1="205" x2="448" y2="205"/>
+          <line x1="300" y1="230" x2="300" y2="258"/>
+          <line x1="400" y1="285" x2="448" y2="285"/>
+        </g>
+        <text x="308" y="88" font-size="11" fill="var(--fg-muted)">no</text>
+        <text x="308" y="168" font-size="11" fill="var(--fg-muted)">no</text>
+        <text x="308" y="248" font-size="11" fill="var(--fg-muted)">no</text>
+      </svg>
+      <figcaption>The precedence implemented by <code>object.__getattribute__</code>. Data descriptors beat the instance
+        dictionary; the instance dictionary beats non-data descriptors; <code>__getattr__</code> is the last resort.</figcaption>
+    </figure>
+    <p>Why this specific order? It lets <code>property</code> (a data descriptor) protect an attribute even if someone
+      stuffs a same-named key into <code>obj.__dict__</code>, while letting an instance <em>shadow</em> a method (a
+      non-data descriptor) by assigning to it. It is also why <code>functools.cached_property</code> works: it is a
+      non-data descriptor that computes once and writes the result into the instance dictionary, so the next lookup
+      stops at step 2 and never calls the descriptor again.</p>
+    <p>Assignment follows a shorter path: <code>obj.name = v</code> calls <code>type(obj).__setattr__</code>, which
+      looks for a data descriptor on the type and calls its <code>__set__</code>; otherwise it writes to
+      <code>obj.__dict__</code>.</p>
+    <div class="runnable" data-title="See all four steps in action">
+<textarea>
+class DataDesc:
+    def __get__(self, obj, objtype=None):
+        return "from DATA descriptor"
+    def __set__(self, obj, value):
+        print(f"  DataDesc.__set__ intercepted {value!r}")
+
+class NonDataDesc:
+    def __get__(self, obj, objtype=None):
+        return "from NON-DATA descriptor"
+
+class Thing:
+    d = DataDesc()
+    n = NonDataDesc()
+    plain = "plain class attribute"
+
+    def __getattr__(self, name):          # only called when normal lookup fails
+        return f"__getattr__ fallback for {name!r}"
+
+t = Thing()
+t.__dict__["d"] = "instance dict value"   # sneak past __set__
+t.__dict__["n"] = "instance dict value"
+
+print("d     ->", t.d)       # step 1 wins: data descriptor beats instance dict
+print("n     ->", t.n)       # step 2 wins: instance dict beats non-data descriptor
+print("plain ->", t.plain)   # step 3: class attribute
+print("nope  ->", t.nope)    # step 4: __getattr__
+t.d = 42                     # assignment goes to the data descriptor
+</textarea>
+    </div>
+    <h3><code>__getattr__</code> vs <code>__getattribute__</code></h3>
+    <p>These two names are easy to confuse and behave very differently:</p>
+    <div class="two-col">
+      <div><h4><code>__getattr__(self, name)</code></h4><p>A <strong>fallback</strong>, called only after normal lookup
+        raises <code>AttributeError</code>. Cheap and safe: existing attributes are unaffected. Ideal for delegation and
+        proxies. It must raise <code>AttributeError</code> for names it doesn't handle, or <code>hasattr</code>,
+        <code>getattr(obj, name, default)</code>, <code>copy</code>, and <code>pickle</code> all misbehave.</p></div>
+      <div><h4><code>__getattribute__(self, name)</code></h4><p>Intercepts <strong>every</strong> attribute access,
+        including <code>self.__dict__</code> and method lookups inside your own methods. Easy to recurse infinitely; to
+        reach real attributes call <code>super().__getattribute__(name)</code>. Every access pays for your Python code,
+        so it is slow. Rarely the right choice.</p></div>
+    </div>
+    <div class="runnable" data-title="A delegating proxy with __getattr__">
+<textarea>
+class LoggingProxy:
+    """Wrap any object and log attribute reads that reach the wrapped object."""
+
+    def __init__(self, target):
+        # Write through object.__setattr__ semantics; plain assignment is fine here
+        self._target = target
+        self.log = []
+
+    def __getattr__(self, name):
+        # Only reached for names NOT found on the proxy itself (_target, log, ...)
+        self.log.append(name)
+        return getattr(self._target, name)   # raises AttributeError naturally
+
+items = LoggingProxy([3, 1, 2])
+items.append(0)
+items.sort()
+print(items._target, items.log)
+print(hasattr(items, "no_such_thing"))   # False: AttributeError propagated correctly
+print(len(items._target))
+try:
+    len(items)                            # special methods bypass __getattr__!
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout warn"><p><strong>Implicit special-method lookup skips the instance.</strong> <code>len(x)</code>,
+      <code>x + y</code>, <code>iter(x)</code>, and friends look up <code>__len__</code> and so on directly on
+      <code>type(x)</code>, bypassing both the instance dictionary and <code>__getattr__</code>/<code>__getattribute__</code>.
+      That is a deliberate speed and correctness choice. A transparent proxy must define every dunder it wants to
+      forward explicitly.</p></aside>
+    <div class="runnable" data-title="Predict: shadowing a method" data-predict>
+<textarea>
+class Greeter:
+    def hello(self):
+        return "method"
+
+g = Greeter()
+g.hello = lambda: "instance attribute"
+print(g.hello(), Greeter().hello())
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> data descriptor, then instance dict, then non-data descriptor or class attribute, then
+      <code>__getattr__</code>. Special methods are looked up on the type.</p>
+  </section>
+
+  <section class="lesson-section" id="descriptors">
+    <h2>Descriptors: reusable attribute logic</h2>
+    <p>A <code>property</code> customizes one attribute of one class. When you need the same logic (say, "must be a
+      positive int") on many attributes across many classes, you write a <dfn>descriptor class</dfn> once and
+      instantiate it as a class attribute wherever you need it. The protocol has four methods:</p>
+    <table>
+      <thead><tr><th>Method</th><th>Called when</th><th>Arguments</th></tr></thead>
+      <tbody>
+        <tr><td><code>__get__(self, obj, objtype=None)</code></td><td><code>obj.attr</code> or <code>Cls.attr</code></td><td><code>obj</code> is the instance, or <code>None</code> for class access</td></tr>
+        <tr><td><code>__set__(self, obj, value)</code></td><td><code>obj.attr = value</code></td><td>never called for class-level assignment</td></tr>
+        <tr><td><code>__delete__(self, obj)</code></td><td><code>del obj.attr</code></td><td></td></tr>
+        <tr><td><code>__set_name__(self, owner, name)</code></td><td>once, when the owning class is created</td><td>the class and the attribute name</td></tr>
+      </tbody>
+    </table>
+    <p>The key design question is <strong>where to store the per-instance value</strong>. The descriptor object is
+      shared by every instance (it lives on the class), so storing <code>self.value = value</code> on the descriptor
+      would make every instance share one value, a classic bug. The standard answers:</p>
+    <ul>
+      <li>Store it in the instance's <code>__dict__</code> under the same name. This works because a data descriptor
+        takes precedence over the instance dict on lookup, so the descriptor still intercepts reads and writes.</li>
+      <li>Store it under a private name (<code>"_" + name</code>) with <code>setattr</code>.</li>
+      <li>Store it in a <code>weakref.WeakKeyDictionary</code> keyed by instance (for classes that use
+        <code>__slots__</code> and have no <code>__dict__</code>; the instances must be hashable and weak-referenceable).</li>
+    </ul>
+    <p><code>__set_name__</code> (added in 3.6) solved the old annoyance of repeating the attribute name:
+      <code>age = Positive("age")</code> becomes simply <code>age = Positive()</code>.</p>
+    <div class="runnable" data-title="A family of validated fields">
+<textarea>
+class Field:
+    """Base data descriptor: stores values in the instance __dict__ and calls validate()."""
+
+    def __set_name__(self, owner, name):
+        self.name = name                       # e.g. "price"
+        self.owner = owner.__name__
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:                        # accessed on the class: return the descriptor itself
+            return self
+        try:
+            return obj.__dict__[self.name]
+        except KeyError:
+            raise AttributeError(f"{self.owner}.{self.name} is not set") from None
+
+    def __set__(self, obj, value):
+        self.validate(value)
+        obj.__dict__[self.name] = value
+
+    def validate(self, value):
+        pass
+
+class Typed(Field):
+    kind = object
+    def validate(self, value):
+        if not isinstance(value, self.kind):
+            raise TypeError(f"{self.name} must be {self.kind.__name__}, got {type(value).__name__}")
+
+class Integer(Typed):
+    kind = int
+
+class String(Typed):
+    kind = str
+    def __init__(self, max_len=None):
+        self.max_len = max_len
+    def validate(self, value):
+        super().validate(value)
+        if self.max_len is not None and len(value) > self.max_len:
+            raise ValueError(f"{self.name} longer than {self.max_len}")
+
+class Positive(Integer):
+    def validate(self, value):
+        super().validate(value)                # cooperative: type check first
+        if value <= 0:
+            raise ValueError(f"{self.name} must be > 0, got {value}")
+
+class Product:
+    sku = String(max_len=8)
+    price = Positive()
+    stock = Integer()
+
+    def __init__(self, sku, price, stock=0):
+        self.sku, self.price, self.stock = sku, price, stock   # each goes through __set__
+
+p = Product("ABC-1", 1299)
+print(p.sku, p.price, p.stock, vars(p))
+print(Product.price)                           # class access returns the descriptor
+for bad in [("TOO-LONG-SKU", 10), ("A", -5), ("A", 9.99)]:
+    try:
+        Product(*bad)
+    except (TypeError, ValueError) as e:
+        print(f"{type(e).__name__}: {e}")
+</textarea>
+    </div>
+    <p>Step through a smaller version to watch <code>__set_name__</code> run at class-creation time (before any
+      instance exists) and <code>__set__</code> run during <code>__init__</code>:</p>
+    <div class="tracer" data-title="When descriptor hooks run">
+<textarea>
+class Upper:
+    def __set_name__(self, owner, name):
+        self.name = name
+    def __get__(self, obj, objtype=None):
+        return obj.__dict__[self.name]
+    def __set__(self, obj, value):
+        obj.__dict__[self.name] = value.upper()
+
+class City:
+    name = Upper()
+    def __init__(self, name):
+        self.name = name
+
+c = City("oslo")
+result = c.name
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Return <code>self</code> from <code>__get__</code> when <code>obj is None</code>.
+      Class-level access (<code>Product.price</code>) then yields the descriptor, which documentation tools, ORMs
+      (<code>Product.price &gt; 100</code> as a query expression), and <code>inspect</code> rely on.</p></aside>
+    <p><strong>Remember:</strong> a descriptor is shared by all instances, so per-instance state goes on the instance.
+      <code>__set_name__</code> tells the descriptor its name. Data descriptors are what make validation unavoidable.</p>
+  </section>
+
+  <section class="lesson-section" id="builtin-descriptors">
+    <h2>Methods, properties, and classmethods are descriptors</h2>
+    <p>Descriptors are not an exotic add-on; they are how Python's object model works. A function defined in a class
+      body is stored in the class <code>__dict__</code> as a plain function. Functions have a <code>__get__</code>
+      method, so they are non-data descriptors. When you access <code>obj.method</code>, step 3 of the lookup calls
+      <code>function.__get__(obj, type(obj))</code>, which returns a <dfn>bound method</dfn>: a small object holding
+      the function (<code>__func__</code>) and the instance (<code>__self__</code>). Calling it calls
+      <code>func(obj, *args)</code>. That is the entire mechanism behind <code>self</code>.</p>
+    <div class="runnable" data-title="Binding a method by hand">
+<textarea>
+class Counter:
+    def __init__(self):
+        self.n = 0
+    def incr(self, by=1):
+        self.n += by
+        return self.n
+
+c = Counter()
+raw = Counter.__dict__["incr"]            # the plain function
+print(type(raw).__name__, hasattr(raw, "__get__"), hasattr(raw, "__set__"))
+
+bound = raw.__get__(c, Counter)            # exactly what c.incr does
+print(bound, bound.__self__ is c, bound.__func__ is raw)
+print(bound(5), c.incr(), Counter.incr(c, 10))
+
+# Any function can be bound to any object this way
+def shout(self):
+    return f"n is {self.n}!"
+print(shout.__get__(c)())
+
+# Each access creates a NEW bound-method object
+print(c.incr is c.incr, c.incr == c.incr)
+</textarea>
+    </div>
+    <p>The other built-in method decorators are descriptors that bind differently:</p>
+    <table>
+      <thead><tr><th>Descriptor</th><th>Kind</th><th><code>__get__(obj, cls)</code> returns</th></tr></thead>
+      <tbody>
+        <tr><td>plain function</td><td>non-data</td><td>method bound to <code>obj</code> (or the function itself when <code>obj is None</code>)</td></tr>
+        <tr><td><code>staticmethod(f)</code></td><td>non-data</td><td><code>f</code> unchanged: no binding at all</td></tr>
+        <tr><td><code>classmethod(f)</code></td><td>non-data</td><td><code>f</code> bound to <code>cls</code>, whether accessed from an instance or the class</td></tr>
+        <tr><td><code>property(fget, fset, fdel)</code></td><td>data (always defines <code>__set__</code>)</td><td><code>fget(obj)</code>; <code>__set__</code> raises <code>AttributeError</code> when there is no setter</td></tr>
+        <tr><td><code>functools.cached_property(f)</code></td><td>non-data</td><td>computes <code>f(obj)</code> once and stores it in <code>obj.__dict__</code></td></tr>
+        <tr><td><code>__slots__</code> member</td><td>data</td><td>the value in the instance's fixed slot</td></tr>
+      </tbody>
+    </table>
+    <p>To demystify <code>property</code>, here is a working pure-Python version. CPython's is written in C, but it
+      behaves the same way:</p>
+    <div class="runnable" data-title="property, re-implemented">
+<textarea>
+class my_property:
+    def __init__(self, fget=None, fset=None):
+        self.fget, self.fset = fget, fset
+    def __set_name__(self, owner, name):
+        self.name = name
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return self.fget(obj)
+    def __set__(self, obj, value):          # defining __set__ makes this a DATA descriptor
+        if self.fset is None:
+            raise AttributeError(f"property {self.name!r} has no setter")
+        self.fset(obj, value)
+    def setter(self, fset):                  # @x.setter returns a NEW descriptor
+        return type(self)(self.fget, fset)
+
+class Temperature:
+    def __init__(self, celsius):
+        self.celsius = celsius
+
+    @my_property
+    def fahrenheit(self):
+        return self.celsius * 9 / 5 + 32
+
+    @fahrenheit.setter
+    def fahrenheit(self, value):
+        self.celsius = (value - 32) * 5 / 9
+
+t = Temperature(100)
+print(t.fahrenheit)
+t.fahrenheit = 32
+print(t.celsius)
+t.__dict__["fahrenheit"] = "ignored"        # data descriptor still wins
+print(t.fahrenheit)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: classmethod binding" data-predict>
+<textarea>
+class Base:
+    @classmethod
+    def make(cls):
+        return cls.__name__
+
+class Child(Base):
+    pass
+
+print(Base.make(), Child.make(), Child().make())
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>self</code> is not a keyword; it is the instance a function was bound to by
+      <code>function.__get__</code>. <code>property</code> is a data descriptor; methods and
+      <code>cached_property</code> are non-data descriptors.</p>
+  </section>
+
+  <section class="lesson-section" id="slots">
+    <h2><code>__slots__</code>: fixed attribute layouts</h2>
+    <p>By default every instance can carry a <code>__dict__</code>, a hash table that lets you add any attribute at
+      any time, plus a <code>__weakref__</code> slot. That flexibility costs memory. Recent CPython versions soften it (ordinary
+      instances store attributes "inline" with a key table shared across the class, and a real dict is only
+      materialized if something asks for <code>__dict__</code>), but the overhead is still measurable, and when you
+      create millions of small objects (points, graph nodes, parsed records) it adds up.</p>
+    <p>Declaring <code>__slots__ = ("x", "y")</code> tells <code>type</code> to allocate a fixed array of references in
+      each instance instead of a dict, and to create a <dfn>member descriptor</dfn> on the class for each name (a data
+      descriptor that reads and writes a fixed offset in the object). Consequences:</p>
+    <ul>
+      <li><strong>Memory</strong>: instances are much smaller; there is no per-instance dict.</li>
+      <li><strong>Speed</strong>: attribute access is slightly faster (a fixed offset, no hashing), although CPython's
+        specializing interpreter (3.11+) and inline attribute storage have narrowed the gap considerably.
+        Measure before claiming a speedup.</li>
+      <li><strong>Safety</strong>: assigning a misspelled attribute (<code>p.lenght = 3</code>) raises
+        <code>AttributeError</code> instead of silently creating a new attribute.</li>
+    </ul>
+    <div class="runnable" data-title="Measure the memory difference">
+<textarea>
+import sys
+import tracemalloc
+
+class PlainPoint:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+class SlotPoint:
+    __slots__ = ("x", "y")
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+def measure(cls, n=50_000):
+    tracemalloc.start()
+    before = tracemalloc.get_traced_memory()[0]
+    objs = [cls(i, i) for i in range(n)]
+    after = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+    return (after - before) / n, objs
+
+for cls in (PlainPoint, SlotPoint):
+    per_obj, objs = measure(cls)
+    print(f"{cls.__name__:<11} ~{per_obj:6.1f} bytes per instance (incl. list slot and ints)")
+
+p, s = PlainPoint(1, 2), SlotPoint(1, 2)
+print("has __dict__:", hasattr(p, "__dict__"), hasattr(s, "__dict__"))
+print(type(SlotPoint.__dict__["x"]).__name__)      # the generated data descriptor
+try:
+    s.z = 3
+except AttributeError as e:
+    print("AttributeError:", e)
+</textarea>
+    </div>
+    <h3>The trade-offs</h3>
+    <table>
+      <thead><tr><th>Gotcha</th><th>Why</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr><td>Subclass without <code>__slots__</code> gets a <code>__dict__</code> back</td><td>Slots are per class; any class in the MRO lacking them adds a dict</td><td>Declare <code>__slots__</code> (possibly <code>()</code>) in every subclass</td></tr>
+        <tr><td>No <code>__weakref__</code></td><td>Weak references need their own slot</td><td>Add <code>"__weakref__"</code> to <code>__slots__</code></td></tr>
+        <tr><td><code>cached_property</code> fails</td><td>It writes to <code>obj.__dict__</code>, which doesn't exist</td><td>Add <code>"__dict__"</code> to slots, or cache manually in a slot</td></tr>
+        <tr><td>Class attribute with a slot's name</td><td>A class attribute <code>x = 0</code> would replace the member descriptor; Python raises <code>ValueError</code></td><td>Set defaults in <code>__init__</code></td></tr>
+        <tr><td>Multiple inheritance layout conflict</td><td>Two bases with non-empty slots have incompatible C layouts</td><td>Only one base may have non-empty slots; use <code>__slots__ = ()</code> in mixins</td></tr>
+        <tr><td>Pickling, <code>vars()</code>, generic tooling</td><td>Code that expects <code>__dict__</code> breaks</td><td>Modern pickle handles slots; check other tools</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout tip"><p>The easiest way to get slots right is <code>@dataclass(slots=True)</code> (3.10+),
+      which generates the class with correct <code>__slots__</code>, or <code>typing.NamedTuple</code> for immutable
+      records. Reach for hand-written <code>__slots__</code> when profiling shows instance memory matters.</p></aside>
+    <p><strong>Remember:</strong> <code>__slots__</code> trades flexibility for memory. It replaces the per-instance
+      dict with member descriptors, and every class in the hierarchy must cooperate.</p>
+  </section>
+
+  <section class="lesson-section" id="init-subclass">
+    <h2><code>__init_subclass__</code>: hooking subclass creation</h2>
+    <p>A very common reason people historically wrote metaclasses was "do something whenever a subclass is defined":
+      register it, validate it, or configure it. <a href="https://peps.python.org/pep-0487/">PEP 487</a> (3.6) added a
+      much simpler hook: <code>__init_subclass__(cls, **kwargs)</code>, an implicit classmethod on the
+      <em>parent</em> that runs after each subclass is created. Keyword arguments in the class statement
+      (<code>class Csv(Exporter, fmt="csv")</code>) are passed to it.</p>
+    <div class="runnable" data-title="A plugin registry without a metaclass">
+<textarea>
+class Exporter:
+    registry: dict[str, type["Exporter"]] = {}
+
+    def __init_subclass__(cls, /, fmt: str | None = None, **kwargs):
+        super().__init_subclass__(**kwargs)          # cooperate with other bases
+        if fmt is None:                              # abstract intermediate class
+            return
+        if fmt in Exporter.registry:
+            raise TypeError(f"format {fmt!r} already registered by {Exporter.registry[fmt].__name__}")
+        if not callable(getattr(cls, "export", None)):
+            raise TypeError(f"{cls.__name__} must define export()")
+        cls.fmt = fmt
+        Exporter.registry[fmt] = cls
+
+    @classmethod
+    def for_format(cls, fmt: str) -> "Exporter":
+        try:
+            return cls.registry[fmt]()
+        except KeyError:
+            raise ValueError(f"unknown format {fmt!r}; choose from {sorted(cls.registry)}") from None
+
+class CsvExporter(Exporter, fmt="csv"):
+    def export(self, rows):
+        return "\n".join(",".join(map(str, r)) for r in rows)
+
+class TsvExporter(Exporter, fmt="tsv"):
+    def export(self, rows):
+        return "\n".join("\t".join(map(str, r)) for r in rows)
+
+print(sorted(Exporter.registry))
+print(Exporter.for_format("csv").export([(1, 2), (3, 4)]))
+try:
+    class Broken(Exporter, fmt="json"):
+        pass
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <p>Notice that the subclass registers itself just by being <em>defined</em>. That's why plugin systems often say
+      "import your module to activate it", and why such registration is a form of import-time side effect: test
+      isolation and import order now matter. Validation at class-definition time is a big win, though: the error
+      appears when the module is imported, not hours later when a rarely used code path runs.</p>
+    <aside class="callout note"><p>Always call <code>super().__init_subclass__(**kwargs)</code>. With multiple
+      inheritance, several bases may define the hook, and the chain only works if each passes on the keywords it
+      didn't consume. <code>object.__init_subclass__</code> raises <code>TypeError</code> on leftover keywords,
+      which catches typos like <code>fromat="csv"</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>__init_subclass__</code> lives on the parent and runs once per subclass.
+      It covers most registration and validation use cases that used to need a metaclass.</p>
+  </section>
+
+  <section class="lesson-section" id="class-decorators">
+    <h2>Class decorators</h2>
+    <p>A <dfn>class decorator</dfn> is a callable that takes a fully built class and returns a class (usually the
+      same one, modified). It runs once, after the class body and all class-creation hooks. Unlike
+      <code>__init_subclass__</code>, it is opt-in per class and is not inherited: a subclass of a decorated class is
+      not automatically decorated. <code>@dataclass</code>, <code>@functools.total_ordering</code>, and
+      <code>@enum.unique</code> are all class decorators.</p>
+    <div class="runnable" data-title="Generate __repr__ and __eq__ from __init__'s signature">
+<textarea>
+import inspect
+
+def record(cls):
+    """Add __repr__ and __eq__ based on the parameters of __init__."""
+    params = [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+
+    def __repr__(self):
+        args = ", ".join(f"{p}={getattr(self, p)!r}" for p in params)
+        return f"{type(self).__name__}({args})"
+
+    def __eq__(self, other):
+        if type(other) is not type(self):
+            return NotImplemented
+        return all(getattr(self, p) == getattr(other, p) for p in params)
+
+    cls.__repr__ = __repr__
+    cls.__eq__ = __eq__
+    cls.__hash__ = None                  # defining __eq__ in a class body would do this automatically
+    cls.__record_fields__ = tuple(params)
+    return cls
+
+@record
+class Color:
+    def __init__(self, r, g, b=0):
+        self.r, self.g, self.b = r, g, b
+
+print(Color(255, 128))
+print(Color(1, 2, 3) == Color(1, 2, 3), Color(1, 2, 3) == Color(1, 2, 4))
+print(Color.__record_fields__)
+</textarea>
+    </div>
+    <p>This is the same strategy <code>dataclasses</code> uses, except that it reads the class's annotations and
+      generates source code for <code>__init__</code> that it compiles with <code>exec</code>, so the generated
+      methods run as fast as hand-written ones.</p>
+    <aside class="callout think"><p>When would you choose a class decorator over <code>__init_subclass__</code>? Think
+      about who opts in. A decorator is explicit at each use site and composes with any base class.
+      <code>__init_subclass__</code> applies automatically to an entire hierarchy, which is what you want for "every
+      exporter must register".</p></aside>
+  </section>
+
+  <section class="lesson-section" id="metaclasses">
+    <h2>Metaclasses: customizing class creation</h2>
+    <p>Since a class is an object, something must construct it. When Python executes a class statement, it gathers the
+      name, the bases, and a namespace dictionary filled by running the body, then calls the
+      <dfn>metaclass</dfn> with them. The default metaclass is <code>type</code>, and you can call it directly with the
+      three-argument form <code>type(name, bases, namespace)</code>:</p>
+    <div class="runnable" data-title="Building a class without a class statement">
+<textarea>
+def area(self):
+    return self.w * self.h
+
+def init(self, w, h):
+    self.w, self.h = w, h
+
+Rect = type("Rect", (object,), {"__init__": init, "area": area, "sides": 4})
+r = Rect(3, 4)
+print(Rect, Rect.__mro__, r.area(), r.sides)
+
+# The class statement is (roughly) sugar for exactly that call:
+class Square(Rect):
+    def __init__(self, s):
+        super().__init__(s, s)
+print(type(Square) is type, Square(5).area())
+</textarea>
+    </div>
+    <h3>The full class-creation sequence</h3>
+    <p>For <code>class C(Base, metaclass=M, flag=True): body</code>, Python does the following (simplified from the
+      <a href="https://docs.python.org/3/reference/datamodel.html#customizing-class-creation">data model reference</a>):</p>
+    <ol>
+      <li><strong>Resolve bases</strong> (including <code>__mro_entries__</code>, which is how <code>list[int]</code>
+        and <code>Generic[T]</code> can appear as bases).</li>
+      <li><strong>Determine the metaclass</strong>: the explicit <code>metaclass=</code>, otherwise the most derived
+        metaclass among the bases' types. If two bases have unrelated metaclasses, you get a
+        <dfn>metaclass conflict</dfn> <code>TypeError</code>.</li>
+      <li><strong>Prepare the namespace</strong>: <code>ns = M.__prepare__("C", bases, flag=True)</code>. The default
+        returns an empty <code>dict</code>.</li>
+      <li><strong>Execute the body</strong> in <code>ns</code>. Each <code>def</code> and assignment becomes a key.</li>
+      <li><strong>Create the class</strong>: <code>C = M("C", bases, ns, flag=True)</code>, which calls
+        <code>M.__new__</code> then <code>M.__init__</code>. Inside <code>type.__new__</code>, Python calls
+        <code>__set_name__</code> on every descriptor in the namespace and then the parent's
+        <code>__init_subclass__</code>.</li>
+      <li><strong>Apply class decorators</strong>, innermost first, and bind the result to the name <code>C</code>.</li>
+    </ol>
+    <div class="runnable" data-title="Watch every hook fire, in order">
+<textarea>
+class Meta(type):
+    @classmethod
+    def __prepare__(mcls, name, bases, **kw):
+        print(f"1. __prepare__({name!r}, kw={kw})")
+        return {}
+
+    def __new__(mcls, name, bases, ns, **kw):
+        print(f"3. Meta.__new__: body produced {sorted(k for k in ns if not k.startswith('__'))}")
+        cls = super().__new__(mcls, name, bases, ns, **kw)   # runs __set_name__, __init_subclass__
+        print(f"6. Meta.__new__ returning {name}")
+        return cls
+
+    def __init__(cls, name, bases, ns, **kw):
+        print(f"7. Meta.__init__({name!r})")
+        super().__init__(name, bases, ns)
+
+class Desc:
+    def __set_name__(self, owner, name):
+        print(f"4. __set_name__({owner.__name__}, {name!r})")
+
+class Base(metaclass=Meta):
+    def __init_subclass__(cls, **kw):
+        print(f"5. __init_subclass__({cls.__name__}, kw={kw})")
+
+def deco(cls):
+    print(f"8. decorator({cls.__name__})")
+    return cls
+
+print("---- defining Child ----")
+
+@deco
+class Child(Base, flag=True):
+    print("2. executing class body")
+    field = Desc()
+</textarea>
+    </div>
+    <h3>What only a metaclass can do</h3>
+    <p>Most class customization no longer needs a metaclass. What remains:</p>
+    <ul>
+      <li><strong>Control the namespace</strong> with <code>__prepare__</code>: record definition order (historically;
+        dicts are ordered now), reject duplicate definitions, or auto-create entries. <code>enum</code> uses a special
+        namespace so <code>RED = auto()</code> works and duplicate member names raise.</li>
+      <li><strong>Customize behavior of the class object itself</strong>: methods defined on the metaclass are
+        available on the class but not on instances. <code>Color["RED"]</code>, <code>len(Color)</code>, and
+        <code>iter(Color)</code> on an <code>Enum</code> work because <code>EnumType</code> defines
+        <code>__getitem__</code>, <code>__len__</code>, and <code>__iter__</code>.</li>
+      <li><strong>Customize <code>isinstance</code>/<code>issubclass</code></strong> via
+        <code>__instancecheck__</code>/<code>__subclasscheck__</code>, which is how <code>ABCMeta.register</code> creates
+        virtual subclasses.</li>
+    </ul>
+    <div class="runnable" data-title="__prepare__ that forbids accidental redefinition">
+<textarea>
+class StrictNamespace(dict):
+    def __setitem__(self, key, value):
+        if key in self and not key.startswith("__"):
+            raise TypeError(f"{key!r} defined twice in class body")
+        super().__setitem__(key, value)
+
+class StrictMeta(type):
+    @classmethod
+    def __prepare__(mcls, name, bases, **kw):
+        return StrictNamespace()
+
+    def __len__(cls):                        # a method on the CLASS object
+        return sum(1 for k in vars(cls) if not k.startswith("__"))
+
+class Api(metaclass=StrictMeta):
+    def get(self): ...
+    def post(self): ...
+
+print(len(Api), hasattr(Api(), "__len__"))  # len works on the class, not on instances
+
+try:
+    class Oops(metaclass=StrictMeta):
+        def handler(self): return 1
+        def handler(self): return 2         # copy-paste bug caught at definition time
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout warn"><p><strong>Use metaclasses rarely.</strong> They are inherited by every subclass, they
+      conflict with other metaclasses (try combining two libraries that each use one), and static type checkers
+      understand them only partially. Tim Peters' famous advice still holds: if you wonder whether you need one, you
+      don't. Try, in order: a function, a decorator, a descriptor, <code>__init_subclass__</code>, a class decorator.
+      Only then reach for a metaclass.</p></aside>
+    <p><strong>Remember:</strong> class creation is <code>__prepare__</code> → body → <code>metaclass.__new__</code>
+      (which triggers <code>__set_name__</code> and <code>__init_subclass__</code>) → <code>__init__</code> →
+      decorators.</p>
+  </section>
+
+  <section class="lesson-section" id="introspection">
+    <h2>Dynamic access, <code>inspect</code>, and <code>annotationlib</code></h2>
+    <p><dfn>Introspection</dfn> is examining objects at runtime. The basic tools are built-ins:
+      <code>getattr(obj, name[, default])</code>, <code>setattr</code>, <code>hasattr</code>, <code>delattr</code>,
+      <code>vars(obj)</code> (the <code>__dict__</code>), and <code>dir(obj)</code> (all reachable names). They let you
+      choose an attribute by a string computed at runtime, which is how command dispatchers, serializers, and test
+      runners work.</p>
+    <div class="runnable" data-title="String-driven dispatch">
+<textarea>
+class Calculator:
+    def cmd_add(self, a, b):
+        """Add two numbers."""
+        return a + b
+    def cmd_mul(self, a, b):
+        """Multiply two numbers."""
+        return a * b
+
+def dispatch(obj, line):
+    name, *args = line.split()
+    handler = getattr(obj, f"cmd_{name}", None)
+    if handler is None:
+        commands = sorted(n.removeprefix("cmd_") for n in dir(obj) if n.startswith("cmd_"))
+        return f"unknown {name!r}; try {commands}"
+    return handler(*map(float, args))
+
+calc = Calculator()
+for line in ["add 2 3", "mul 4 2.5", "pow 2 8"]:
+    print(f"{line:<10} -> {dispatch(calc, line)}")
+
+setattr(calc, "precision", 2)          # same as calc.precision = 2
+print(vars(calc), getattr(calc, "missing", "default"))
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Never pass untrusted input straight to <code>getattr</code> on an object with
+      dangerous methods, and never <code>setattr</code> arbitrary user-provided names. Restrict to a known prefix (as
+      above) or an explicit allow-list. The same caution applies to <code>eval</code> and <code>exec</code>, which
+      should essentially never see external input.</p></aside>
+    <p>The <a href="https://docs.python.org/3/library/inspect.html"><code>inspect</code></a> module goes deeper:
+      <code>inspect.signature</code> returns a <code>Signature</code> with typed <code>Parameter</code> objects (kind,
+      default, annotation), <code>Signature.bind</code> validates arguments exactly like a real call would,
+      <code>getmembers</code> lists attributes with a predicate, and <code>isfunction</code>/<code>ismethod</code>/
+      <code>isclass</code>/<code>iscoroutinefunction</code> classify objects. Frameworks like pytest (fixture
+      injection by parameter name) and FastAPI (request parsing from type hints) are built on these.</p>
+    <div class="runnable" data-title="inspect.signature and bind">
+<textarea>
+import inspect
+
+def connect(host: str, port: int = 5432, *, timeout: float = 5.0, **options) -> str:
+    return f"{host}:{port}"
+
+sig = inspect.signature(connect)
+print(sig)
+for p in sig.parameters.values():
+    default = "required" if p.default is p.empty else repr(p.default)
+    print(f"  {p.name:<8} {p.kind.name:<22} {default:<10} {p.annotation}")
+
+bound = sig.bind("db.local", timeout=1.0, sslmode="require")
+bound.apply_defaults()
+print(dict(bound.arguments))
+
+try:
+    sig.bind(port=1)                    # validate without calling
+except TypeError as e:
+    print("TypeError:", e)
+
+print([name for name, _ in inspect.getmembers(inspect, inspect.isclass)][:5])
+</textarea>
+    </div>
+    <h3>Annotations in 3.14: deferred evaluation and <code>annotationlib</code></h3>
+    <aside class="callout py314"><p>Python 3.14 implements <a href="https://peps.python.org/pep-0649/">PEP 649</a> and
+      <a href="https://peps.python.org/pep-0749/">PEP 749</a>: annotations are no longer evaluated when a function or
+      class is defined. The compiler stores an <code>__annotate__</code> function instead, and annotations are computed
+      on first access. Forward references like <code>def f() -&gt; Node:</code> before <code>Node</code> exists just
+      work, without quotes or <code>from __future__ import annotations</code>. The new
+      <code>annotationlib</code> module lets introspection tools ask for annotations in different
+      <em>formats</em>.</p></aside>
+    <div class="runnable" data-title="annotationlib formats">
+<textarea>
+import annotationlib
+from annotationlib import Format
+
+class Tree:
+    left: Node | None          # Node doesn't exist yet: fine in 3.14
+    value: int
+
+# Normal access evaluates the annotations now and fails on the undefined name
+try:
+    Tree.__annotations__
+except NameError as e:
+    print("VALUE format:", type(e).__name__, e)
+
+print("FORWARDREF:", annotationlib.get_annotations(Tree, format=Format.FORWARDREF))
+print("STRING:    ", annotationlib.get_annotations(Tree, format=Format.STRING))
+
+class Node:                    # define it later...
+    pass
+
+print("VALUE now: ", annotationlib.get_annotations(Tree))
+</textarea>
+    </div>
+    <p>For metaprogramming this matters in two ways. Libraries that read annotations at class-creation time
+      (dataclasses, ORMs, validators) should use <code>annotationlib.get_annotations(cls,
+      format=Format.FORWARDREF)</code> so that a not-yet-defined name doesn't crash class creation. And reading
+      <code>cls.__annotations__</code> directly now runs code (the <code>__annotate__</code> function), so it can raise.
+      Prefer <code>annotationlib.get_annotations</code> (or <code>inspect.get_annotations</code>) over poking at
+      dunder attributes.</p>
+    <aside class="callout note"><p>In a metaclass's <code>__new__</code>, the namespace no longer contains an
+      <code>__annotations__</code> dict in 3.14; it contains <code>__annotate__</code> (exposed through
+      <code>annotationlib.get_annotate_from_class_namespace(ns)</code>). Code that did
+      <code>ns.get("__annotations__", {})</code> must be updated. Build the class first and read its annotations
+      afterwards when you can.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m36-e1" data-title="A Positive descriptor">
+      <div class="exercise-prompt">
+        <p>Write a data descriptor <code>Positive</code> that uses <code>__set_name__</code> to learn its attribute
+          name, stores values in the instance's <code>__dict__</code>, and raises <code>ValueError</code> when a
+          value is not greater than 0 (also raise <code>TypeError</code> for non-numbers, including <code>bool</code>).
+          Class access (<code>Order.qty</code>) must return the descriptor itself.</p>
+      </div>
+<textarea class="starter">
+class Positive:
+    def __set_name__(self, owner, name):
+        ...
+
+    def __get__(self, obj, objtype=None):
+        ...
+
+    def __set__(self, obj, value):
+        ...
+
+
+class Order:
+    qty = Positive()
+    price = Positive()
+
+    def __init__(self, qty, price):
+        self.qty = qty
+        self.price = price
+</textarea>
+      <script type="text/x-python" class="tests">
+def _raises(exc, fn):
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception as e:
+        raise AssertionError(f"expected {exc.__name__}, got {type(e).__name__}: {e}")
+    return False
+
+def test_valid_values_stored_per_instance():
+    a, b = Order(2, 9.5), Order(7, 1)
+    assert (a.qty, a.price, b.qty, b.price) == (2, 9.5, 7, 1), "each instance must keep its own values"
+
+def test_values_live_in_instance_dict():
+    o = Order(3, 4)
+    assert o.__dict__ == {"qty": 3, "price": 4}, f"store under the attribute name in obj.__dict__, got {o.__dict__}"
+
+def test_rejects_zero_and_negative():
+    assert _raises(ValueError, lambda: Order(0, 1)), "qty=0 should raise ValueError"
+    o = Order(1, 1)
+    assert _raises(ValueError, lambda: setattr(o, "price", -2)), "price=-2 should raise ValueError"
+    assert o.price == 1, "a rejected assignment must not change the value"
+
+def test_rejects_non_numbers():
+    assert _raises(TypeError, lambda: Order("3", 1)), "a string should raise TypeError"
+    assert _raises(TypeError, lambda: Order(True, 1)), "bool is not an acceptable quantity"
+
+def test_class_access_returns_descriptor():
+    assert isinstance(Order.qty, Positive), "Order.qty should return the descriptor (obj is None)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>__get__</code>, return <code>self</code> when
+        <code>obj is None</code>. Check <code>isinstance(value, bool) or not isinstance(value, (int, float))</code>
+        for the type test.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Positive:
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.__dict__[self.name]
+
+    def __set__(self, obj, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{self.name} must be a number")
+        if value &lt;= 0:
+            raise ValueError(f"{self.name} must be &gt; 0")
+        obj.__dict__[self.name] = value
+
+
+class Order:
+    qty = Positive()
+    price = Positive()
+
+    def __init__(self, qty, price):
+        self.qty = qty
+        self.price = price</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m36-e2" data-title="Plugin registry with __init_subclass__">
+      <div class="exercise-prompt">
+        <p>Complete <code>Command</code> so that every subclass defined with a <code>name=</code> keyword is stored
+          in <code>Command.registry</code> under that name. Subclasses without <code>name=</code> are abstract and are
+          not registered. Registering the same name twice raises <code>ValueError</code>. Write
+          <code>run(name, *args)</code> that instantiates the registered class and returns <code>.execute(*args)</code>,
+          raising <code>KeyError</code> for unknown names.</p>
+      </div>
+<textarea class="starter">
+class Command:
+    registry = {}
+
+    def __init_subclass__(cls, name=None, **kwargs):
+        ...
+
+    def execute(self, *args):
+        raise NotImplementedError
+
+
+def run(name, *args):
+    ...
+
+
+class Greet(Command, name="greet"):
+    def execute(self, who):
+        return f"hello {who}"
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_registered():
+    assert Command.registry.get("greet") is Greet, "Greet should register under 'greet'"
+    assert run("greet", "ada") == "hello ada", "run should instantiate and execute"
+
+def test_abstract_not_registered():
+    class Base(Command):
+        pass
+    assert Base not in Command.registry.values(), "classes without name= must not register"
+    class Add(Base, name="add"):
+        def execute(self, a, b):
+            return a + b
+    assert run("add", 2, 3) == 5, "subclasses of abstract intermediates still register"
+
+def test_duplicate_rejected():
+    try:
+        class Again(Command, name="greet"):
+            pass
+    except ValueError:
+        return
+    raise AssertionError("defining a second 'greet' should raise ValueError")
+
+def test_unknown():
+    try:
+        run("nope")
+    except KeyError:
+        return
+    raise AssertionError("unknown names should raise KeyError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Call <code>super().__init_subclass__(**kwargs)</code> first, then
+        return early if <code>name is None</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Command:
+    registry = {}
+
+    def __init_subclass__(cls, name=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if name is None:
+            return
+        if name in Command.registry:
+            raise ValueError(f"command {name!r} already registered")
+        Command.registry[name] = cls
+
+    def execute(self, *args):
+        raise NotImplementedError
+
+
+def run(name, *args):
+    return Command.registry[name]().execute(*args)
+
+
+class Greet(Command, name="greet"):
+    def execute(self, who):
+        return f"hello {who}"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m36-e3" data-title="Attribute-style config with __getattr__">
+      <div class="exercise-prompt">
+        <p>Write <code>Config(data)</code> wrapping a (possibly nested) dict so that <code>cfg.db.host</code> reads
+          <code>data["db"]["host"]</code>. Nested dicts must come back wrapped as <code>Config</code>. Missing keys
+          must raise <code>AttributeError</code> (so <code>hasattr</code> and <code>getattr(cfg, k, default)</code>
+          work). Use <code>__getattr__</code>, not <code>__getattribute__</code>. Also make <code>Config</code>
+          read-only: assigning any attribute other than in <code>__init__</code> raises <code>AttributeError</code>.</p>
+      </div>
+<textarea class="starter">
+class Config:
+    def __init__(self, data):
+        ...
+
+    def __getattr__(self, name):
+        ...
+
+    def __setattr__(self, name, value):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+cfg = Config({"debug": True, "db": {"host": "localhost", "port": 5432}})
+
+def test_nested_access():
+    assert cfg.debug is True, "top-level key"
+    assert cfg.db.host == "localhost" and cfg.db.port == 5432, "nested keys via chained attributes"
+    assert isinstance(cfg.db, Config), "nested dicts should be wrapped in Config"
+
+def test_missing_is_attribute_error():
+    assert not hasattr(cfg, "missing"), "hasattr must be False for missing keys"
+    assert getattr(cfg.db, "user", "guest") == "guest", "getattr default must work"
+
+def test_read_only():
+    try:
+        cfg.debug = False
+    except AttributeError:
+        assert cfg.debug is True, "value must be unchanged"
+        return
+    raise AssertionError("assignment should raise AttributeError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Because you override <code>__setattr__</code>, store the dict
+        with <code>object.__setattr__(self, "_data", data)</code>. In <code>__getattr__</code>, convert
+        <code>KeyError</code> into <code>AttributeError</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Config:
+    def __init__(self, data):
+        object.__setattr__(self, "_data", data)
+
+    def __getattr__(self, name):
+        try:
+            value = self._data[name]
+        except KeyError:
+            raise AttributeError(name) from None
+        return Config(value) if isinstance(value, dict) else value
+
+    def __setattr__(self, name, value):
+        raise AttributeError("Config is read-only")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m36-e4" data-title="A class decorator that adds fields()">
+      <div class="exercise-prompt">
+        <p>Write a class decorator <code>auto_init</code> that reads the class's annotations with
+          <code>annotationlib.get_annotations(cls)</code> and adds an <code>__init__</code> accepting those names
+          as keyword-only arguments, in declaration order. A class attribute with the same name provides a default.
+          Missing required arguments raise <code>TypeError</code>. Also add a classmethod-like attribute
+          <code>cls.__fields__</code>, a tuple of the field names.</p>
+      </div>
+<textarea class="starter">
+import annotationlib
+
+def auto_init(cls):
+    ...
+    return cls
+
+@auto_init
+class User:
+    name: str
+    email: str
+    active: bool = True
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_fields_in_order():
+    assert User.__fields__ == ("name", "email", "active"), f"got {User.__fields__}"
+
+def test_init_sets_values_and_defaults():
+    u = User(name="ada", email="a@x.io")
+    assert (u.name, u.email, u.active) == ("ada", "a@x.io", True), "defaults come from class attributes"
+    v = User(name="bob", email="b@x.io", active=False)
+    assert v.active is False, "explicit values override defaults"
+
+def test_keyword_only_and_required():
+    for bad in (lambda: User("ada", "a@x.io"), lambda: User(name="ada")):
+        try:
+            bad()
+        except TypeError:
+            continue
+        raise AssertionError("positional args and missing required fields should raise TypeError")
+
+def test_unknown_keyword():
+    try:
+        User(name="a", email="b", admin=True)
+    except TypeError:
+        return
+    raise AssertionError("unknown keywords should raise TypeError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Define <code>def __init__(self, **kwargs)</code> inside the
+        decorator, loop over the field names, and check for leftovers with <code>set(kwargs) - set(fields)</code>.
+        Defaults: <code>cls.__dict__.get(name, MISSING)</code> with a sentinel <code>MISSING = object()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import annotationlib
+
+MISSING = object()
+
+def auto_init(cls):
+    fields = tuple(annotationlib.get_annotations(cls))
+    defaults = {f: cls.__dict__.get(f, MISSING) for f in fields}
+
+    def __init__(self, *args, **kwargs):
+        if args:
+            raise TypeError(f"{cls.__name__}() takes keyword arguments only")
+        unknown = set(kwargs) - set(fields)
+        if unknown:
+            raise TypeError(f"unexpected arguments: {sorted(unknown)}")
+        for f in fields:
+            if f in kwargs:
+                value = kwargs[f]
+            elif defaults[f] is not MISSING:
+                value = defaults[f]
+            else:
+                raise TypeError(f"missing required argument {f!r}")
+            setattr(self, f, value)
+
+    cls.__init__ = __init__
+    cls.__fields__ = fields
+    return cls
+
+@auto_init
+class User:
+    name: str
+    email: str
+    active: bool = True</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m36-e5" data-title="A metaclass with an ordered field registry">
+      <div class="exercise-prompt">
+        <p>Write a metaclass <code>ModelMeta</code> whose <code>__new__</code> collects every class attribute that
+          is an instance of <code>Field</code> into <code>cls._fields</code>, a dict from name to field in definition
+          order, <strong>including fields inherited from bases</strong> (base fields first; a subclass can override a
+          base field by redefining it). Also give <code>ModelMeta</code> a <code>__len__</code> so
+          <code>len(SomeModel)</code> returns the number of fields.</p>
+      </div>
+<textarea class="starter">
+class Field:
+    def __init__(self, kind):
+        self.kind = kind
+
+class ModelMeta(type):
+    def __new__(mcls, name, bases, ns):
+        ...
+
+class Model(metaclass=ModelMeta):
+    pass
+
+class Person(Model):
+    name = Field(str)
+    age = Field(int)
+
+class Employee(Person):
+    salary = Field(float)
+    age = Field(float)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_own_fields():
+    assert list(Person._fields) == ["name", "age"], f"got {list(Person._fields)}"
+    assert Person._fields["age"].kind is int, "values are the Field objects"
+
+def test_inherited_and_overridden():
+    assert list(Employee._fields) == ["name", "age", "salary"], f"base fields first, got {list(Employee._fields)}"
+    assert Employee._fields["age"].kind is float, "a subclass redefinition overrides the base field"
+    assert Person._fields["age"].kind is int, "the base class must be unaffected"
+
+def test_len_on_class():
+    assert len(Model) == 0 and len(Person) == 2 and len(Employee) == 3, "len(cls) counts fields"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build the class with <code>super().__new__</code>, then walk
+        <code>reversed(cls.__mro__[1:])</code> merging each base's <code>_fields</code> (use
+        <code>getattr(base, "_fields", {})</code>), and finally add this class's own fields from <code>ns</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Field:
+    def __init__(self, kind):
+        self.kind = kind
+
+class ModelMeta(type):
+    def __new__(mcls, name, bases, ns):
+        cls = super().__new__(mcls, name, bases, ns)
+        fields = {}
+        for base in reversed(cls.__mro__[1:]):
+            fields.update(base.__dict__.get("_fields", {}))
+        fields.update({k: v for k, v in ns.items() if isinstance(v, Field)})
+        cls._fields = fields
+        return cls
+
+    def __len__(cls):
+        return len(cls._fields)
+
+class Model(metaclass=ModelMeta):
+    pass
+
+class Person(Model):
+    name = Field(str)
+    age = Field(int)
+
+class Employee(Person):
+    salary = Field(float)
+    age = Field(float)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a tiny ORM-style model layer</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">orm-lite: models, fields, and validation</span></div>
+      <div class="widget-body">
+        <p>Libraries like Django's ORM and Pydantic let you declare a model as a class with typed fields and get
+          validation, serialization, and querying for free. Build a miniature version using only the hooks from this
+          module: descriptors for fields, <code>__set_name__</code> for names, <code>__init_subclass__</code> to
+          collect fields, and <code>__slots__</code>-free instances backed by <code>__dict__</code>.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init orm-lite
+cd orm-lite
+pixi add python=3.14 pytest
+mkdir -p src tests
+pixi run python -m pytest -q</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>Field(default=MISSING, *, required=True)</code> base data descriptor with <code>validate()</code>
+            and <code>to_python()</code> hooks; subclasses <code>IntField(min=None, max=None)</code>,
+            <code>StrField(max_length=None, pattern=None)</code>, <code>BoolField()</code>, and
+            <code>ChoiceField(choices)</code>.</li>
+          <li><code>Model.__init_subclass__</code> builds <code>cls._fields</code> in definition order, including
+            inherited fields.</li>
+          <li><code>Model(**kwargs)</code> assigns each field (so validation runs), applies defaults, and raises
+            <code>TypeError</code> for unknown or missing required fields. Errors from all fields are collected into one
+            <code>ValidationError</code> with a <code>.errors</code> dict, not just the first one.</li>
+          <li><code>__repr__</code>, <code>__eq__</code>, <code>to_dict()</code>, and <code>Model.from_dict(d)</code>.</li>
+          <li>A class-level in-memory table: <code>Model.objects.add(obj)</code>, <code>.all()</code>, and
+            <code>.filter(**criteria)</code>; also support <code>.filter(Product.price &gt; 100)</code> by making
+            class-level field access return the descriptor and overloading comparisons on it to build predicate
+            objects.</li>
+        </ul>
+        <h4>Starting point</h4>
+<pre><code class="language-python">MISSING = object()
+
+class Field:
+    def __init__(self, default=MISSING, *, required=True):
+        self.default, self.required = default, required
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.__dict__.get(self.name, self.default)
+
+    def __set__(self, obj, value):
+        obj.__dict__[self.name] = self.validate(self.to_python(value))
+
+    def to_python(self, value):
+        return value
+
+    def validate(self, value):
+        return value
+
+class Model:
+    _fields: dict[str, Field] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        ...  # collect Field instances from the MRO into cls._fields</code></pre>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m36-mini">
+          <li><code>class Product(Model): name = StrField(max_length=20); price = IntField(min=0)</code> defines a model with <code>Product._fields</code> in order</li>
+          <li><code>Product(name="pen", price=-1)</code> raises <code>ValidationError</code> naming <code>price</code></li>
+          <li>Several invalid fields are all reported in <code>ValidationError.errors</code></li>
+          <li>Assigning <code>p.price = "x"</code> after construction is also validated</li>
+          <li><code>Product.from_dict(p.to_dict()) == p</code></li>
+          <li><code>Product.objects.filter(Product.price &gt; 100)</code> returns the matching instances</li>
+          <li>A pytest suite with at least 12 tests passes via <code>pixi run python -m pytest</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Read field types from annotations (<code>price: int</code>) using <code>annotationlib.get_annotations(cls, format=Format.FORWARDREF)</code>, so forward references don't crash.</li>
+          <li>A <code>ForeignKey(OtherModel)</code> field that accepts an instance or an id.</li>
+          <li>Persist to <code>sqlite3</code> by generating <code>CREATE TABLE</code> from <code>_fields</code> (see <a href="m40-stdlib.html">M40</a>).</li>
+          <li>Compare memory with and without <code>__slots__</code> on the model instances (and explain why slots complicate this design).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m36-quiz">
+<script type="application/json">
+{"title": "Metaprogramming quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What makes a descriptor a <em>data</em> descriptor?", "options": ["It defines <code>__get__</code>", "It defines <code>__set__</code> or <code>__delete__</code>", "It stores data in the instance dict", "It defines <code>__set_name__</code>"], "answer": 1, "explanation": "<p>Defining <code>__set__</code> or <code>__delete__</code> makes it a data descriptor, which takes precedence over the instance <code>__dict__</code> on lookup.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "class D:\n    def __get__(self, obj, t=None):\n        return 'desc'\n\nclass C:\n    x = D()\n\nc = C()\nc.__dict__['x'] = 'inst'\nprint(c.x)", "answer": "inst", "explanation": "<p><code>D</code> defines only <code>__get__</code>, so it is a non-data descriptor. The instance dictionary wins over non-data descriptors.</p>"},
+  {"type": "output", "prompt": "And now? (same code, but D also defines <code>__set__</code>)", "code": "class D:\n    def __get__(self, obj, t=None):\n        return 'desc'\n    def __set__(self, obj, v):\n        pass\n\nclass C:\n    x = D()\n\nc = C()\nc.__dict__['x'] = 'inst'\nprint(c.x)", "answer": "desc", "explanation": "<p>With <code>__set__</code>, <code>D</code> is a data descriptor, which beats the instance dictionary.</p>"},
+  {"type": "single", "prompt": "When is <code>__getattr__</code> called?", "options": ["On every attribute access", "Only when normal lookup raises <code>AttributeError</code>", "Only for special methods", "Only on class attribute access"], "answer": 1, "explanation": "<p><code>__getattr__</code> is a fallback. <code>__getattribute__</code> is the one that intercepts every access.</p>"},
+  {"type": "single", "prompt": "Why does <code>len(proxy)</code> fail even though the proxy's <code>__getattr__</code> forwards everything?", "options": ["<code>len</code> is a keyword", "Implicit special-method lookup goes straight to the type, bypassing <code>__getattr__</code>", "<code>__getattr__</code> cannot return methods", "Proxies need <code>__slots__</code>"], "answer": 1, "explanation": "<p>Built-ins like <code>len</code> look up <code>type(x).__len__</code> directly. A proxy must define the dunder methods it wants to support.</p>"},
+  {"type": "multi", "prompt": "Which of these are descriptors?", "options": ["A plain function in a class body", "<code>property</code> objects", "<code>classmethod</code> objects", "An <code>int</code> class attribute", "<code>__slots__</code> member objects"], "answer": [0, 1, 2, 4], "explanation": "<p>Functions, properties, classmethods, staticmethods, and slot members all implement <code>__get__</code>. An int does not.</p>"},
+  {"type": "single", "prompt": "What does <code>Counter.__dict__['incr'].__get__(c, Counter)</code> return?", "options": ["The raw function", "A bound method with <code>__self__</code> = c", "The result of calling incr", "A classmethod"], "answer": 1, "explanation": "<p>That is exactly what <code>c.incr</code> does: <code>function.__get__</code> binds the function to the instance.</p>"},
+  {"type": "multi", "prompt": "Which are real costs of <code>__slots__</code>?", "options": ["No arbitrary new attributes", "<code>functools.cached_property</code> doesn't work without a <code>__dict__</code> slot", "Every attribute access becomes much slower", "Subclasses must also declare <code>__slots__</code> to keep the savings", "Two bases with non-empty slots can't be combined"], "answer": [0, 1, 3, 4], "explanation": "<p>Access is not slower (it is the same or slightly faster). The other four are genuine trade-offs.</p>"},
+  {"type": "single", "prompt": "Where is <code>__init_subclass__</code> defined, and when does it run?", "options": ["On the subclass; at each instantiation", "On the parent; once each time a subclass is created", "On the metaclass; once per module import", "On <code>object</code> only"], "answer": 1, "explanation": "<p>It's an implicit classmethod on the parent, called with the new subclass after it is created, receiving keywords from the class statement.</p>"},
+  {"type": "text", "prompt": "Which metaclass method returns the namespace mapping used to execute a class body?", "answer": ["__prepare__", "prepare"], "explanation": "<p><code>__prepare__(name, bases, **kw)</code> runs before the body and may return any mapping, for example one that rejects duplicates.</p>"},
+  {"type": "single", "prompt": "In which order do these run when a class is defined: class decorator (D), <code>__set_name__</code> (S), <code>__prepare__</code> (P), class body (B), <code>__init_subclass__</code> (I)?", "options": ["P, B, S, I, D", "B, P, S, I, D", "P, B, I, S, D", "D, P, B, S, I"], "answer": 0, "explanation": "<p>Prepare the namespace, run the body, then <code>type.__new__</code> calls <code>__set_name__</code> on descriptors and then <code>__init_subclass__</code>; decorators apply last.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "Point = type('Point', (), {'x': 1})\nprint(Point.__name__, Point().x, type(Point).__name__)", "answer": "Point 1 type", "explanation": "<p>The three-argument form of <code>type</code> builds a class; its metaclass is <code>type</code>.</p>"},
+  {"type": "single", "prompt": "In Python 3.14, what happens when a class annotation refers to a name that doesn't exist yet?", "options": ["SyntaxError at compile time", "NameError when the class is defined", "Nothing until the annotations are requested; <code>Format.FORWARDREF</code> then returns a <code>ForwardRef</code>", "The annotation is silently dropped"], "answer": 2, "explanation": "<p>PEP 649/749 defer evaluation. Accessing in VALUE format raises <code>NameError</code>; FORWARDREF and STRING formats succeed.</p>"},
+  {"type": "single", "prompt": "You need every subclass of <code>Exporter</code> to be registered automatically. Which is the simplest correct tool?", "options": ["A metaclass", "<code>__init_subclass__</code>", "<code>__getattribute__</code>", "<code>__slots__</code>"], "answer": 1, "explanation": "<p><code>__init_subclass__</code> was designed for this and avoids metaclass conflicts.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Classes are objects created by a metaclass (by default <code>type</code>).</li>
+      <li>Lookup order: data descriptor → instance <code>__dict__</code> → non-data descriptor/class attribute → <code>__getattr__</code>.</li>
+      <li>Descriptors (<code>__get__</code>, <code>__set__</code>, <code>__set_name__</code>) package attribute logic; store per-instance data on the instance.</li>
+      <li>Functions bind via <code>__get__</code>; <code>property</code> is a data descriptor; <code>classmethod</code>, <code>staticmethod</code>, and <code>cached_property</code> are non-data descriptors.</li>
+      <li><code>__slots__</code> saves memory by replacing the instance dict with member descriptors, at the cost of flexibility.</li>
+      <li><code>__init_subclass__</code> and class decorators cover most needs; metaclasses (<code>__prepare__</code>, methods on the class object) are a last resort.</li>
+      <li>Use <code>getattr</code>/<code>setattr</code>, <code>inspect.signature</code>, and 3.14's <code>annotationlib.get_annotations</code> for introspection.</li>
+    </ul>
+    <div class="flashcards" data-title="Metaprogramming">
+<script type="application/json">
+[
+  {"front": "Attribute lookup precedence", "back": "Data descriptor on the type → instance <code>__dict__</code> → non-data descriptor or class attribute → <code>__getattr__</code>."},
+  {"front": "Data vs non-data descriptor", "back": "Data: defines <code>__set__</code> or <code>__delete__</code> (beats instance dict). Non-data: only <code>__get__</code> (instance dict wins)."},
+  {"front": "<code>__set_name__(self, owner, name)</code>", "back": "Called once at class creation so a descriptor learns the attribute name it was assigned to."},
+  {"front": "<code>__getattr__</code> vs <code>__getattribute__</code>", "back": "<code>__getattr__</code>: fallback after AttributeError. <code>__getattribute__</code>: every access; use <code>super()</code> to avoid recursion."},
+  {"front": "How does <code>obj.method</code> bind <code>self</code>?", "back": "Functions are non-data descriptors; <code>function.__get__(obj, type)</code> returns a bound method."},
+  {"front": "What does <code>__slots__</code> do?", "back": "Replaces the per-instance <code>__dict__</code> with fixed slots and member descriptors: less memory, no new attributes."},
+  {"front": "<code>__init_subclass__</code>", "back": "Implicit classmethod on a parent, run for each new subclass with keywords from the class statement. Great for registries."},
+  {"front": "Three-argument <code>type()</code>", "back": "<code>type(name, bases, namespace)</code> creates a class dynamically."},
+  {"front": "<code>__prepare__</code>", "back": "Metaclass hook returning the mapping in which the class body executes."},
+  {"front": "Class creation order", "back": "<code>__prepare__</code> → body → <code>meta.__new__</code> (→ <code>__set_name__</code> → <code>__init_subclass__</code>) → <code>meta.__init__</code> → decorators."},
+  {"front": "<code>annotationlib.Format</code> values", "back": "VALUE (evaluate, may raise), FORWARDREF (undefined names become ForwardRef), STRING (source text)."},
+  {"front": "When to write a metaclass?", "back": "Almost never: only to control the class namespace or the class object's own behavior when nothing simpler works."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/howto/descriptor.html">Descriptor Guide (docs.python.org)</a>: the authoritative walkthrough, with pure-Python equivalents of built-ins</li>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html#customizing-class-creation">Data model: customizing class creation</a></li>
+      <li><a href="https://docs.python.org/3/library/annotationlib.html"><code>annotationlib</code></a> and <a href="https://docs.python.org/3/howto/annotations.html">Annotations best practices</a></li>
+      <li><a href="https://docs.python.org/3/library/inspect.html"><code>inspect</code> module</a></li>
+      <li><a href="https://peps.python.org/pep-0487/">PEP 487</a> (<code>__init_subclass__</code>, <code>__set_name__</code>) and <a href="https://peps.python.org/pep-0649/">PEP 649</a></li>
+      <li>Next: <a href="m37-concurrency.html">M37 Concurrency: Threads, Processes &amp; Interpreters</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

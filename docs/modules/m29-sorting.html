@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M29 · Sorting · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m29">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 4 · Algorithms · Module 29</p>
+    <h1>Sorting</h1>
+    <p class="lede">Sorting is the most studied problem in computer science, and for good reason: once data is in order,
+      searching, deduplicating, grouping, merging, and ranking all become easy. This module builds every major sorting
+      algorithm from intuition to invariant to code, then shows how Python's own <code>sorted</code> beats them all on
+      real data.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m28-recursion.html">M28</a>,
+      <a href="m25-heaps.html">M25</a>, <a href="m19-complexity.html">M19</a></span></div>
+    <ul class="objectives">
+      <li>Explain stability and in-place sorting and why each matters in practice</li>
+      <li>Implement bubble, selection, insertion, merge, quick, and heap sort, and state the invariant that proves each correct</li>
+      <li>Analyze best, average, and worst cases in time and space, and pick the right algorithm for a situation</li>
+      <li>Explain the Ω(n log n) lower bound for comparison sorts and how counting and radix sort get around it</li>
+      <li>Use <code>list.sort</code>, <code>sorted</code>, key functions, <code>operator.itemgetter</code>, and <code>functools.cmp_to_key</code> like a professional</li>
+      <li>Describe Timsort's runs and galloping and the Powersort merge policy adopted in Python 3.11</li>
+      <li>Benchmark sorts with <code>timeit</code> and plot the results with matplotlib</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-sorting">
+    <h2>Why sorting matters, stability, and in-place</h2>
+    <p>Imagine a library whose books are shelved randomly. Finding one book means checking every shelf. Shelve them by
+      author and you can jump straight to the right spot (binary search, <a href="m30-searching.html">M30</a>), see all
+      books by one author side by side (grouping), and spot duplicates because they are now neighbors. Sorting is a
+      <em>preprocessing</em> step that makes many other problems cheap.</p>
+    <p>Two properties describe how a sorting algorithm behaves beyond speed:</p>
+    <div class="two-col">
+      <div class="card"><h4>Stable</h4><p>Items that compare equal keep their original relative order. Sort a list of
+        employees by department with a stable sort and, within each department, they stay in whatever order they were
+        before (for example, alphabetical). Stability is what makes multi-key sorting by repeated passes work.</p></div>
+      <div class="card"><h4>In-place</h4><p>The algorithm uses O(1) (or O(log n)) extra memory beyond the input,
+        rearranging the items within the array itself. Merge sort is usually not in-place: it needs an O(n) buffer.
+        In-place matters when memory is tight.</p></div>
+    </div>
+    <div class="runnable" data-title="Stability in action">
+<textarea>
+people = [("Ada", "eng"), ("Grace", "ops"), ("Alan", "eng"), ("Linus", "ops"), ("Barbara", "eng")]
+
+by_dept = sorted(people, key=lambda p: p[1])   # Python's sort is stable
+for name, dept in by_dept:
+    print(dept, name)
+# Within "eng", the order is still Ada, Alan, Barbara: their original order.
+</textarea>
+    </div>
+    <p>Throughout this module, <strong>n</strong> is the number of items, and we count <strong>comparisons</strong> and
+      <strong>moves</strong> (swaps or writes), because those dominate the cost. Watch the counters in the visualizer
+      as you try different algorithms on the same data:</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["bubble", "selection", "insertion", "merge", "quick", "heap", "counting", "radix"], "default": "insertion", "size": 20}'></div>
+    <p><strong>Remember:</strong> stable means equal keys keep their order; in-place means O(1) or O(log n) extra
+      memory. Python's built-in sort is stable but not in-place in the strict sense (it may use up to n/2 extra
+      pointers).</p>
+  </section>
+
+  <section class="lesson-section" id="elementary-sorts">
+    <h2>Bubble, selection, and insertion sort</h2>
+    <p>These three O(n²) algorithms are too slow for large inputs, but they are the clearest place to learn the most
+      important skill in this module: proving a sort correct with a <strong>loop invariant</strong>. An invariant is a
+      statement that is true before every iteration of a loop. If it holds at the start, every iteration preserves it,
+      and it implies "sorted" when the loop ends, the algorithm is correct.</p>
+
+    <h3>Bubble sort</h3>
+    <p><strong>Intuition:</strong> bubbles rise. Walk through the list swapping each adjacent pair that is out of
+      order; the largest item "bubbles" to the end. Repeat on the shorter unsorted part.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">for end from n-1 down to 1:
+    swapped = False
+    for i in 0 .. end-1:
+        if a[i] &gt; a[i+1]: swap them; swapped = True
+    if not swapped: stop          # already sorted: best case O(n)</code></pre>
+    <p><strong>Invariant:</strong> after pass k, the last k positions hold the k largest items in their final sorted
+      order. <strong>Cost:</strong> worst and average O(n²) comparisons and swaps; best O(n) with the early exit;
+      O(1) space; stable (it only swaps strictly greater neighbors).</p>
+
+    <h3>Selection sort</h3>
+    <p><strong>Intuition:</strong> picking a sports team. Scan everyone, pick the best, put them first; scan the rest,
+      pick the next best, and so on.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">for i in 0 .. n-2:
+    m = index of the minimum of a[i..n-1]
+    swap a[i], a[m]</code></pre>
+    <p><strong>Invariant:</strong> <code>a[0:i]</code> holds the i smallest items, sorted, and every item in
+      <code>a[i:]</code> is at least as large as each of them. <strong>Cost:</strong> always Θ(n²) comparisons, even on
+      sorted input, but only n − 1 swaps, which matters when writes are expensive (flash memory). O(1) space.
+      <strong>Not stable</strong>: the long-distance swap can jump an item past an equal one.</p>
+
+    <h3>Insertion sort</h3>
+    <p><strong>Intuition:</strong> sorting a hand of cards. Pick up cards one at a time and slide each one left into its
+      place among the cards you already hold.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">for i in 1 .. n-1:
+    item = a[i]; j = i - 1
+    while j &gt;= 0 and a[j] &gt; item:
+        a[j+1] = a[j]; j -= 1     # shift bigger items right
+    a[j+1] = item</code></pre>
+    <p><strong>Invariant:</strong> before iteration i, <code>a[0:i]</code> contains the original first i items in
+      sorted order. <strong>Cost:</strong> worst O(n²) (reverse-sorted input), best O(n) (already sorted), and in general
+      O(n + inversions), where an <em>inversion</em> is a pair that is out of order. That makes insertion sort the
+      champion for small or nearly sorted inputs, which is why Timsort uses it internally. O(1) space, stable.</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["bubble", "selection", "insertion"], "default": "bubble", "size": 14}'></div>
+    <div class="runnable" data-title="Count the work of the three elementary sorts">
+<textarea>
+import random
+
+def bubble(a):
+    a, comps, swaps = a[:], 0, 0
+    for end in range(len(a) - 1, 0, -1):
+        swapped = False
+        for i in range(end):
+            comps += 1
+            if a[i] > a[i + 1]:
+                a[i], a[i + 1] = a[i + 1], a[i]
+                swaps += 1
+                swapped = True
+        if not swapped:
+            break
+    return a, comps, swaps
+
+def selection(a):
+    a, comps, swaps = a[:], 0, 0
+    for i in range(len(a) - 1):
+        m = i
+        for j in range(i + 1, len(a)):
+            comps += 1
+            if a[j] < a[m]:
+                m = j
+        a[i], a[m] = a[m], a[i]
+        swaps += 1
+    return a, comps, swaps
+
+def insertion(a):
+    a, comps, moves = a[:], 0, 0
+    for i in range(1, len(a)):
+        item, j = a[i], i - 1
+        while j >= 0:
+            comps += 1
+            if a[j] <= item:
+                break
+            a[j + 1] = a[j]
+            moves += 1
+            j -= 1
+        a[j + 1] = item
+    return a, comps, moves
+
+for label, data in [("random", random.sample(range(200), 200)),
+                    ("sorted", list(range(200))),
+                    ("reversed", list(range(200, 0, -1)))]:
+    print(label)
+    for sort in (bubble, selection, insertion):
+        out, c, s = sort(data)
+        assert out == sorted(data)
+        print(f"  {sort.__name__:10} comparisons={c:6}  moves={s:6}")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Look at the "sorted" row. Which algorithm does almost no work, and which one still
+      does about n²/2 comparisons? Explain why using each algorithm's invariant.</p></aside>
+    <p><strong>Remember:</strong> insertion sort is O(n + inversions) and stable; selection sort minimizes swaps; bubble
+      sort is mainly a teaching tool.</p>
+  </section>
+
+  <section class="lesson-section" id="merge-sort">
+    <h2>Merge sort</h2>
+    <p><strong>Intuition:</strong> two people each sort half a stack of exam papers, then merge their piles by
+      repeatedly taking whichever top paper comes first. Merging two sorted piles is easy and linear; recursion makes the
+      halves sorted. You previewed this in <a href="m28-recursion.html#divide-and-conquer">M28</a>.</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["merge"], "default": "merge", "size": 16}'></div>
+    <pre data-label="Pseudo-code"><code class="language-python">merge_sort(a):
+    if len(a) &lt;= 1: return a
+    mid = len(a) // 2
+    return merge(merge_sort(a[:mid]), merge_sort(a[mid:]))
+
+merge(L, R):
+    out = []; i = j = 0
+    while i &lt; len(L) and j &lt; len(R):
+        if R[j] &lt; L[i]: out.append(R[j]); j += 1
+        else:           out.append(L[i]); i += 1    # ties take from L: stable
+    append the leftovers of L and R
+    return out</code></pre>
+    <div class="runnable" data-title="Merge sort in Python">
+<textarea>
+def merge(left, right):
+    out, i, j = [], 0, 0
+    while i < len(left) and j < len(right):
+        if right[j] < left[i]:
+            out.append(right[j]); j += 1
+        else:
+            out.append(left[i]); i += 1
+    out.extend(left[i:])
+    out.extend(right[j:])
+    return out
+
+def merge_sort(a):
+    if len(a) <= 1:
+        return a
+    mid = len(a) // 2
+    return merge(merge_sort(a[:mid]), merge_sort(a[mid:]))
+
+print(merge_sort([38, 27, 43, 3, 9, 82, 10]))
+print(merge_sort(list("mergesort")))
+</textarea>
+    </div>
+    <p><strong>Merge invariant:</strong> <code>out</code> holds the <code>i + j</code> smallest items of
+      <code>L + R</code> in sorted order, and <code>L[i]</code> and <code>R[j]</code> are the smallest remaining items
+      of each list. Taking the smaller of the two keeps the invariant. <strong>Stability:</strong> on a tie we take from
+      the left, so equal items keep their order.</p>
+    <p><strong>Complexity:</strong> T(n) = 2T(n/2) + Θ(n) = Θ(n log n) in the best, average, <em>and</em> worst case.
+      Space: Θ(n) for the merge buffer plus O(log n) stack. <strong>When to use:</strong> when you need guaranteed
+      n log n and stability, for linked lists (merging needs no random access), and for data on disk (external sorting,
+      this module's mini-project).</p>
+    <p><strong>Remember:</strong> merge sort is predictable and stable; its price is O(n) extra memory.</p>
+  </section>
+
+  <section class="lesson-section" id="quicksort">
+    <h2>Quicksort</h2>
+    <p><strong>Intuition:</strong> a teacher lines up a class by height. Pick one student (the <strong>pivot</strong>);
+      everyone shorter goes to the left, everyone taller to the right. The pivot is now exactly where they belong. Repeat
+      in each group. All the work happens in the split (the <em>partition</em>); there is no merge step.</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["quick"], "default": "quick", "size": 18}'></div>
+    <pre data-label="Pseudo-code"><code class="language-python">quicksort(a, lo, hi):
+    if lo &gt;= hi: return
+    p = partition(a, lo, hi)      # pivot ends at index p
+    quicksort(a, lo, p - 1)
+    quicksort(a, p + 1, hi)</code></pre>
+    <h3>Lomuto vs Hoare partitioning</h3>
+    <div class="tabs">
+      <div class="tab" data-label="Lomuto"><pre><code class="language-python">def lomuto(a: list[int], lo: int, hi: int) -&gt; int:
+    pivot = a[hi]
+    i = lo                           # a[lo:i] &lt; pivot, a[i:j] &gt;= pivot
+    for j in range(lo, hi):
+        if a[j] &lt; pivot:
+            a[i], a[j] = a[j], a[i]
+            i += 1
+    a[i], a[hi] = a[hi], a[i]        # put the pivot between the two parts
+    return i</code></pre>
+        <p>Simple and easy to prove. <strong>Invariant:</strong> <code>a[lo:i]</code> &lt; pivot ≤
+          <code>a[i:j]</code>. It does more swaps than Hoare and degrades badly when many items equal the pivot.</p></div>
+      <div class="tab" data-label="Hoare"><pre><code class="language-python">def hoare(a: list[int], lo: int, hi: int) -&gt; int:
+    pivot = a[(lo + hi) // 2]
+    i, j = lo - 1, hi + 1
+    while True:
+        i += 1
+        while a[i] &lt; pivot: i += 1
+        j -= 1
+        while a[j] &gt; pivot: j -= 1
+        if i &gt;= j:
+            return j                 # recurse on [lo, j] and [j+1, hi]
+        a[i], a[j] = a[j], a[i]</code></pre>
+        <p>Two pointers march toward each other and swap misplaced pairs. About three times fewer swaps than Lomuto and
+          handles equal keys gracefully, but the pivot does not necessarily end at index <code>j</code>, so the
+          recursion is on <code>[lo, j]</code> and <code>[j + 1, hi]</code>.</p></div>
+    </div>
+    <h3>Worst case, pivot choice, and randomization</h3>
+    <p>If the pivot is always the smallest or largest item (for example, the last item of an already sorted list with
+      Lomuto), one side is empty and the other has n − 1 items: T(n) = T(n − 1) + Θ(n) = Θ(n²), with Θ(n) recursion
+      depth. Defenses:</p>
+    <ul>
+      <li><strong>Random pivot:</strong> swap a random element into the pivot position. The expected time is
+        O(n log n) for <em>every</em> input; no adversary can force the bad case reliably.</li>
+      <li><strong>Median of three:</strong> use the median of the first, middle, and last items. Cheap and fixes sorted
+        input, though crafted inputs can still defeat it.</li>
+      <li><strong>Recurse on the smaller side first</strong> and loop on the larger: stack depth becomes O(log n).</li>
+      <li><strong>Introsort</strong> (C++ <code>std::sort</code>) switches to heapsort if recursion gets too deep,
+        guaranteeing O(n log n).</li>
+    </ul>
+    <h3>Three-way partitioning</h3>
+    <p>When there are many duplicates (sorting a million survey answers rated 1 to 5), split into three groups:
+      <code>&lt; pivot</code>, <code>== pivot</code>, <code>&gt; pivot</code>. This is Dijkstra's "Dutch national flag"
+      problem. The equal block is already done and is never recursed into, so inputs with few distinct keys sort in
+      near-linear time.</p>
+    <div class="runnable" data-title="Randomized three-way quicksort">
+<textarea>
+import random
+
+def quicksort3(a, lo=0, hi=None):
+    if hi is None:
+        hi = len(a) - 1
+    while lo < hi:
+        pivot = a[random.randint(lo, hi)]
+        lt, i, gt = lo, lo, hi          # a[lo:lt] < p, a[lt:i] == p, a[gt+1:hi+1] > p
+        while i <= gt:
+            if a[i] < pivot:
+                a[lt], a[i] = a[i], a[lt]; lt += 1; i += 1
+            elif a[i] > pivot:
+                a[i], a[gt] = a[gt], a[i]; gt -= 1
+            else:
+                i += 1
+        # recurse on the smaller side, loop on the larger: O(log n) stack
+        if lt - lo < hi - gt:
+            quicksort3(a, lo, lt - 1); lo = gt + 1
+        else:
+            quicksort3(a, gt + 1, hi); hi = lt - 1
+
+data = [random.randint(1, 5) for _ in range(30)]
+quicksort3(data)
+print(data)
+big = list(range(100_000))           # sorted input: the classic worst case for naive quicksort
+quicksort3(big)
+print(big == sorted(big))
+</textarea>
+    </div>
+    <p><strong>Complexity:</strong> best and average Θ(n log n), worst Θ(n²) (vanishingly unlikely with random pivots);
+      O(log n) stack space with the smaller-side trick; in-place; <strong>not stable</strong>. <strong>When to
+      use:</strong> in-memory arrays of primitives where stability is irrelevant; its tight inner loop and cache-friendly
+      sequential access make it the fastest general sort in many languages' standard libraries.</p>
+    <p><strong>Remember:</strong> quicksort does its work in partition; randomize the pivot, use three-way partitioning
+      for duplicates, and recurse on the smaller side.</p>
+  </section>
+
+  <section class="lesson-section" id="heapsort">
+    <h2>Heapsort</h2>
+    <p><strong>Intuition:</strong> a tournament. Arrange the items into a max-heap (<a href="m25-heaps.html">M25</a>),
+      where every parent beats its children, so the champion sits at the root. Swap the champion to the end of the array,
+      shrink the heap by one, and let the new root "sift down" to restore the heap. Repeat.</p>
+    <div class="viz" data-viz="heap" data-config='{"kind": "max", "values": [4, 10, 3, 5, 1, 8, 7]}'></div>
+    <div class="runnable" data-title="Heapsort, in place">
+<textarea>
+def sift_down(a, root, end):
+    while (child := 2 * root + 1) < end:
+        if child + 1 < end and a[child + 1] > a[child]:
+            child += 1                      # pick the larger child
+        if a[root] >= a[child]:
+            return
+        a[root], a[child] = a[child], a[root]
+        root = child
+
+def heapsort(a):
+    n = len(a)
+    for start in range(n // 2 - 1, -1, -1):  # heapify bottom-up: O(n)
+        sift_down(a, start, n)
+    for end in range(n - 1, 0, -1):
+        a[0], a[end] = a[end], a[0]          # move the max to its final place
+        sift_down(a, 0, end)
+
+xs = [4, 10, 3, 5, 1, 8, 7, 2, 9, 6]
+heapsort(xs)
+print(xs)
+</textarea>
+    </div>
+    <p><strong>Invariant:</strong> <code>a[0:end]</code> is a max-heap and <code>a[end:]</code> holds the largest
+      items in sorted order, each at least as large as everything in the heap. <strong>Complexity:</strong> Θ(n log n)
+      worst case, O(1) extra space, in-place, <strong>not stable</strong>. Its random-looking memory access makes it
+      slower than quicksort in practice, so it is used as a safety net (introsort) and when worst-case guarantees and
+      O(1) memory are both required. With <code>heapq</code> you can also write <code>[heappop(h) for _ in
+      range(len(h))]</code>; for top-k problems use <code>heapq.nsmallest</code>/<code>nlargest</code>.</p>
+    <aside class="callout py314"><p>Python 3.14 adds public max-heap functions to <code>heapq</code>:
+      <code>heapify_max</code>, <code>heappush_max</code>, <code>heappop_max</code>, <code>heappushpop_max</code>, and
+      <code>heapreplace_max</code>. Before 3.14 you had to negate keys to simulate a max-heap.</p></aside>
+    <div class="runnable" data-title="Heapsort with the 3.14 max-heap API">
+<textarea>
+import heapq
+
+data = [4, 10, 3, 5, 1, 8, 7]
+heapq.heapify_max(data)
+descending = [heapq.heappop_max(data) for _ in range(len(data))]
+print(descending)
+print(descending[::-1])
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="lower-bound">
+    <h2>The Ω(n log n) lower bound for comparison sorts</h2>
+    <p>Merge sort, heapsort, and (on average) quicksort all take about n log n. Is that a coincidence, or could a
+      cleverer comparison sort do better? It cannot, and the argument is beautiful.</p>
+    <p>Any algorithm that learns about the order only by comparing pairs (<code>a[i] &lt; a[j]</code>?) can be drawn as a
+      <strong>decision tree</strong>: each internal node is a comparison, each branch is its yes/no answer, and each leaf
+      is a final ordering. Running the algorithm on an input is following one path from root to leaf.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 600 230" role="img" aria-label="Decision tree for sorting three items a, b, c with six leaves">
+        <g font-family="var(--font-mono)" font-size="12" fill="var(--fg)">
+          <g stroke="var(--fg-muted)" fill="none">
+            <path d="M300 34 L160 84"/><path d="M300 34 L440 84"/>
+            <path d="M160 100 L80 150"/><path d="M160 100 L240 150"/>
+            <path d="M440 100 L360 150"/><path d="M440 100 L520 150"/>
+            <path d="M240 166 L200 200"/><path d="M240 166 L280 200"/>
+            <path d="M360 166 L320 200"/><path d="M360 166 L400 200"/>
+          </g>
+          <rect x="262" y="16" width="76" height="22" rx="5" fill="var(--viz-1)" opacity="0.3"/><text x="300" y="31" text-anchor="middle">a &lt; b?</text>
+          <rect x="122" y="84" width="76" height="22" rx="5" fill="var(--viz-1)" opacity="0.3"/><text x="160" y="99" text-anchor="middle">b &lt; c?</text>
+          <rect x="402" y="84" width="76" height="22" rx="5" fill="var(--viz-1)" opacity="0.3"/><text x="440" y="99" text-anchor="middle">a &lt; c?</text>
+          <text x="80" y="163" text-anchor="middle" fill="var(--viz-3)">a b c</text>
+          <rect x="202" y="150" width="76" height="22" rx="5" fill="var(--viz-1)" opacity="0.3"/><text x="240" y="165" text-anchor="middle">a &lt; c?</text>
+          <rect x="322" y="150" width="76" height="22" rx="5" fill="var(--viz-1)" opacity="0.3"/><text x="360" y="165" text-anchor="middle">b &lt; c?</text>
+          <text x="520" y="163" text-anchor="middle" fill="var(--viz-3)">c b a</text>
+          <text x="200" y="214" text-anchor="middle" fill="var(--viz-3)">a c b</text>
+          <text x="280" y="214" text-anchor="middle" fill="var(--viz-3)">c a b</text>
+          <text x="320" y="214" text-anchor="middle" fill="var(--viz-3)">b a c</text>
+          <text x="400" y="214" text-anchor="middle" fill="var(--viz-3)">b c a</text>
+          <text x="40" y="60" fill="var(--fg-muted)">left = yes, right = no</text>
+        </g>
+      </svg>
+      <figcaption>Three items have 3! = 6 possible orders, so the tree needs 6 leaves and depth at least ⌈log₂6⌉ = 3.</figcaption>
+    </figure>
+    <ul>
+      <li>The tree must have at least <strong>n!</strong> leaves: every one of the n! orderings of distinct inputs needs
+        its own leaf, or two different inputs would get the same rearrangement.</li>
+      <li>A binary tree of height h has at most 2ʰ leaves, so 2ʰ ≥ n!, giving h ≥ log₂(n!).</li>
+      <li>log₂(n!) ≥ log₂((n/2)^(n/2)) = (n/2) log₂(n/2) = Ω(n log n). (Stirling's formula sharpens this to
+        n log₂ n − 1.44n.)</li>
+    </ul>
+    <p>The height is the worst-case number of comparisons, so <strong>every comparison sort needs Ω(n log n) comparisons
+      in the worst case</strong>. Merge sort and heapsort are asymptotically optimal.</p>
+    <div class="runnable" data-title="How close do real sorts get to log2(n!)?">
+<textarea>
+import math, random
+from functools import cmp_to_key
+
+count = 0
+def counting_cmp(a, b):
+    global count
+    count += 1
+    return (a > b) - (a < b)
+
+for n in (10, 100, 1000, 10_000):
+    data = random.sample(range(n * 10), n)
+    count = 0
+    sorted(data, key=cmp_to_key(counting_cmp))
+    bound = math.lgamma(n + 1) / math.log(2)     # log2(n!)
+    print(f"n={n:6}  sorted() used {count:7} comparisons; lower bound log2(n!) = {bound:9.0f}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> sorting by comparisons alone needs at least log₂(n!) ≈ n log₂ n comparisons in the
+      worst case. To beat it you must use more than comparisons, such as the digits of the keys.</p>
+  </section>
+
+  <section class="lesson-section" id="counting-radix">
+    <h2>Counting sort and radix sort</h2>
+    <p>If keys are small integers, you do not need to compare them at all. <strong>Counting sort</strong>:
+      <em>intuition</em> is a post office sorting letters into numbered pigeonholes. Count how many items have each key,
+      turn the counts into starting positions (a prefix sum), then place each item directly into its slot.</p>
+    <pre data-label="Pseudo-code"><code class="language-python">count[k] = number of items with key k          for k in 0..K-1
+start[k] = count[0] + ... + count[k-1]          (prefix sums)
+for item in input (left to right):
+    out[start[key(item)]] = item; start[key(item)] += 1</code></pre>
+    <p>Placing items left to right makes it <strong>stable</strong>. Time Θ(n + K), space Θ(n + K), where K is the key
+      range. Great when K is O(n) (ages, grades, bytes); useless when K is huge (64-bit IDs).</p>
+    <p><strong>Radix sort</strong> extends this to big keys: sort by the least significant digit with a stable counting
+      sort, then the next digit, and so on. <strong>Invariant:</strong> after pass d, the items are sorted by their last
+      d digits; stability of each pass is what preserves the earlier digits' order. With d digits in base b, time is
+      Θ(d · (n + b)). For 32-bit integers in base 256 that is 4 linear passes.</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["counting", "radix"], "default": "radix", "size": 16}'></div>
+    <div class="runnable" data-title="LSD radix sort built on a stable counting sort">
+<textarea>
+def counting_sort_by(items, key, k):
+    counts = [0] * k
+    for item in items:
+        counts[key(item)] += 1
+    start, total = [0] * k, 0
+    for digit in range(k):
+        start[digit], total = total, total + counts[digit]
+    out = [None] * len(items)
+    for item in items:                   # left to right keeps it stable
+        d = key(item)
+        out[start[d]] = item
+        start[d] += 1
+    return out
+
+def radix_sort(nums, base=10):
+    if not nums:
+        return []
+    place = 1
+    while place <= max(nums):
+        nums = counting_sort_by(nums, lambda x: (x // place) % base, base)
+        print(f"after digit place {place:>4}: {nums}")
+        place *= base
+    return nums
+
+print(radix_sort([170, 45, 75, 90, 802, 24, 2, 66]))
+</textarea>
+    </div>
+    <p><strong>When to use:</strong> large arrays of fixed-width integers or strings (radix sort is the basis of fast
+      GPU sorts and of sorting suffixes). In pure Python, <code>sorted</code> is usually still faster because it runs in
+      C; numpy's <code>np.sort(kind="stable")</code> uses radix sort for 16-bit and smaller integer types.</p>
+    <p><strong>Remember:</strong> non-comparison sorts escape the n log n bound by exploiting key structure; they need
+      small integer keys or fixed-width digits.</p>
+  </section>
+
+  <section class="lesson-section" id="python-sort">
+    <h2>Python's sort: Timsort, galloping, and Powersort</h2>
+    <p><code>list.sort()</code> sorts a list in place and returns <code>None</code>; <code>sorted(iterable)</code> builds a
+      new list from any iterable. Both use the same algorithm, designed by Tim Peters in 2002 for CPython and later
+      adopted by Java, Android, V8, and Swift. It is a hybrid of merge sort and insertion sort tuned for real-world data,
+      which is rarely random: it often contains already-ordered stretches.</p>
+    <ul>
+      <li><strong>Runs.</strong> It scans the list for natural <em>runs</em>: maximal stretches that are already
+        ascending (or strictly descending, which it reverses in place). Short runs are extended to a minimum length
+        (<em>minrun</em>, between 32 and 64) using binary insertion sort.</li>
+      <li><strong>Merging runs.</strong> Runs are pushed on a stack and merged with neighbors. Which neighbors to merge,
+        and when, is the <em>merge policy</em>. Merging only adjacent runs is what keeps the sort stable.</li>
+      <li><strong>Galloping.</strong> When one run keeps "winning" during a merge (say, all of run A's next 7 items are
+        smaller than run B's head), the merge switches to galloping mode: exponential search (1, 3, 7, 15, ... ahead)
+        followed by binary search to find how far it can copy in one block. Merging a run of 10 into a run of a million
+        then costs about log comparisons per item instead of linear.</li>
+      <li><strong>Powersort.</strong> In <strong>Python 3.11</strong> CPython replaced Timsort's original merge-collapse
+        rules with the <em>Powersort</em> merge policy of J. Ian Munro and Sebastian Wild. It assigns each boundary
+        between runs a "power" based on where the run midpoints fall in a conceptual binary split of the array, and
+        merges so the resulting merge tree is provably near-optimal (within a small constant of the entropy of the run
+        lengths). Timsort's rules had an edge case where merge costs could be noticeably worse than necessary.</li>
+    </ul>
+    <p>The upshot: Python's sort is O(n log n) worst case, O(n) on already sorted or reverse-sorted input, and close to
+      O(n + n·H) on data made of a few runs (H is the entropy of the run lengths). It is stable and uses up to n/2 extra
+      pointers.</p>
+    <div class="runnable" data-title="Real data is not random: count comparisons on runs">
+<textarea>
+import random
+from functools import cmp_to_key
+
+def comparisons(data):
+    count = 0
+    def cmp(a, b):
+        nonlocal count
+        count += 1
+        return (a > b) - (a < b)
+    sorted(data, key=cmp_to_key(cmp))
+    return count
+
+n = 10_000
+shapes = {
+    "random": random.sample(range(n), n),
+    "sorted": list(range(n)),
+    "reversed": list(range(n, 0, -1)),
+    "two sorted halves": sorted(random.sample(range(n), n // 2)) + sorted(random.sample(range(n), n // 2)),
+    "sorted + 10 random appended": list(range(n - 10)) + random.sample(range(n), 10),
+}
+for name, data in shapes.items():
+    print(f"{name:28} {comparisons(data):7} comparisons")
+</textarea>
+    </div>
+    <aside class="callout note"><p>Python's sort only uses <code>&lt;</code> (<code>__lt__</code>). To make your own
+      class sortable, defining <code>__lt__</code> is enough, though <code>functools.total_ordering</code> or a
+      dataclass with <code>order=True</code> gives you the full set of comparisons.</p></aside>
+    <p><strong>Remember:</strong> in Python, call <code>sorted</code> or <code>list.sort</code>. Writing your own sort is
+      for learning, for special key structures, or for data that does not fit in memory.</p>
+  </section>
+
+  <section class="lesson-section" id="key-functions">
+    <h2>Key functions, multi-key sorts, and <code>cmp_to_key</code></h2>
+    <p>The <code>key=</code> argument maps each item to the value to compare. Python calls it exactly once per item
+      (the <em>decorate-sort-undecorate</em> pattern done for you), so expensive keys are fine. <code>reverse=True</code>
+      flips the order while staying stable.</p>
+    <div class="runnable" data-title="Key functions in practice">
+<textarea>
+from operator import itemgetter, attrgetter
+from dataclasses import dataclass
+
+words = ["banana", "Apple", "cherry", "apple", "Date"]
+print(sorted(words))                       # uppercase sorts before lowercase
+print(sorted(words, key=str.casefold))     # case-insensitive
+print(sorted(words, key=len))              # by length, stable ties
+
+rows = [("eng", "Ada", 120), ("ops", "Linus", 95), ("eng", "Alan", 130), ("ops", "Grace", 95)]
+print(sorted(rows, key=itemgetter(0, 2)))  # by dept, then salary ascending
+
+# dept ascending, salary DESCENDING, name ascending: negate the numeric key
+print(sorted(rows, key=lambda r: (r[0], -r[2], r[1])))
+
+@dataclass
+class Task:
+    name: str
+    priority: int
+
+tasks = [Task("write", 2), Task("test", 1), Task("ship", 3)]
+print([t.name for t in sorted(tasks, key=attrgetter("priority"), reverse=True)])
+</textarea>
+    </div>
+    <h3>The stability trick for mixed directions</h3>
+    <p>You cannot negate a string. To sort by name <em>descending</em> and then by age ascending, sort in passes from the
+      <strong>least</strong> significant key to the most significant, relying on stability:</p>
+    <div class="runnable" data-title="Multi-pass sorts rely on stability" data-predict>
+<textarea>
+people = [("bo", 30), ("al", 25), ("bo", 22), ("al", 31)]
+people.sort(key=lambda p: p[1])                 # secondary key first: age ascending
+people.sort(key=lambda p: p[0], reverse=True)   # primary key: name descending
+print(people)
+</textarea>
+    </div>
+    <h3><code>functools.cmp_to_key</code></h3>
+    <p>Sometimes the order is defined by comparing two items directly, not by a per-item key. Classic example: arrange
+      numbers to form the largest concatenation. "9" should come before "34" because "934" &gt; "349". Write a
+      three-way comparison function (negative, zero, positive) and wrap it:</p>
+    <div class="runnable" data-title="Comparison functions">
+<textarea>
+from functools import cmp_to_key
+
+def by_concat(a, b):
+    ab, ba = a + b, b + a
+    return -1 if ab > ba else (1 if ab < ba else 0)
+
+nums = [3, 30, 34, 5, 9]
+print("".join(sorted(map(str, nums), key=cmp_to_key(by_concat))))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Prefer a key function whenever one exists: it is called n times, while a comparison
+      function is called about n log n times, and tuple keys are easy to read. Reach for <code>cmp_to_key</code> only
+      when the order truly depends on both items at once.</p></aside>
+    <p><strong>Remember:</strong> tuples sort lexicographically, so <code>key=lambda r: (primary, secondary)</code> is
+      the idiomatic multi-key sort; negate numbers for descending, or use stable multi-pass sorts.</p>
+  </section>
+
+  <section class="lesson-section" id="benchmarking">
+    <h2>Benchmarking sorts with <code>timeit</code></h2>
+    <p>Big-O tells you the shape of the curve, not the constants. To know which is faster on <em>your</em> data, measure.
+      <code>timeit</code> runs code many times and reports the total, avoiding one-off noise. Report the
+      <em>minimum</em> of several repeats: the minimum is the run least disturbed by other processes.</p>
+    <div class="runnable" data-title="Measure and plot growth">
+<textarea>
+import random, timeit
+import matplotlib.pyplot as plt
+
+def insertion(a):
+    a = a[:]
+    for i in range(1, len(a)):
+        item, j = a[i], i - 1
+        while j >= 0 and a[j] > item:
+            a[j + 1] = a[j]; j -= 1
+        a[j + 1] = item
+    return a
+
+def merge_sort(a):
+    if len(a) <= 1:
+        return a
+    mid = len(a) // 2
+    left, right = merge_sort(a[:mid]), merge_sort(a[mid:])
+    out, i, j = [], 0, 0
+    while i < len(left) and j < len(right):
+        if right[j] < left[i]:
+            out.append(right[j]); j += 1
+        else:
+            out.append(left[i]); i += 1
+    return out + left[i:] + right[j:]
+
+sizes = [100, 200, 400, 800, 1600]
+results = {"insertion": [], "merge_sort": [], "sorted": []}
+for n in sizes:
+    data = random.sample(range(n * 10), n)
+    for name, fn in [("insertion", insertion), ("merge_sort", merge_sort), ("sorted", sorted)]:
+        best = min(timeit.repeat(lambda: fn(data), number=3, repeat=3)) / 3
+        results[name].append(best * 1000)
+
+fig, ax = plt.subplots(figsize=(6, 3.5))
+for name, times in results.items():
+    ax.plot(sizes, times, marker="o", label=name)
+ax.set_xlabel("n")
+ax.set_ylabel("ms per sort")
+ax.set_title("Sorting time vs input size")
+ax.legend()
+for name, times in results.items():
+    print(f"{name:11}", " ".join(f"{t:8.3f}" for t in times))
+</textarea>
+    </div>
+    <p>Doubling n roughly quadruples insertion sort's time (O(n²)) and slightly more than doubles merge sort's
+      (O(n log n)). <code>sorted</code> is the same shape as merge sort but 20 to 100 times faster because it runs in C.</p>
+    <aside class="callout pixi"><p>Locally, run benchmarks in a reproducible environment:
+      <code>pixi add matplotlib</code>, then <code>pixi run python bench.py</code>. For command-line one-liners use
+      <code>pixi run python -m timeit -s "import random; d = random.sample(range(10**6), 10**5)" "sorted(d)"</code>.</p></aside>
+    <h3>Race mode</h3>
+    <p>Use the visualizer's race mode to run two algorithms side by side on the same input and see the asymptotic
+      difference with your own eyes: choose one algorithm, pick a rival in the <strong>race vs</strong> menu, and press
+      Play. Race merge sort against insertion sort on the shuffled array first, then use the second visualizer, which
+      starts from a nearly sorted array, where insertion sort suddenly wins.</p>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["insertion", "merge", "quick", "heap"], "default": "merge", "size": 40}'></div>
+    <div class="viz" data-viz="sorting" data-config='{"algorithms": ["insertion", "merge", "quick"], "default": "insertion", "array": [1, 2, 3, 5, 4, 6, 7, 8, 10, 9, 11, 12, 13, 15, 14, 16]}'></div>
+    <h3>Choosing a sort</h3>
+    <table>
+      <thead><tr><th>Algorithm</th><th>Best</th><th>Average</th><th>Worst</th><th>Extra space</th><th>Stable</th><th>Use it when</th></tr></thead>
+      <tbody>
+        <tr><td>Bubble</td><td>n</td><td>n²</td><td>n²</td><td>1</td><td>yes</td><td>teaching only</td></tr>
+        <tr><td>Selection</td><td>n²</td><td>n²</td><td>n²</td><td>1</td><td>no</td><td>writes are very expensive</td></tr>
+        <tr><td>Insertion</td><td>n</td><td>n²</td><td>n²</td><td>1</td><td>yes</td><td>tiny or nearly sorted input</td></tr>
+        <tr><td>Merge</td><td>n log n</td><td>n log n</td><td>n log n</td><td>n</td><td>yes</td><td>stability, linked lists, external data</td></tr>
+        <tr><td>Quick (random)</td><td>n log n</td><td>n log n</td><td>n²</td><td>log n</td><td>no</td><td>fast in-memory sort of primitives</td></tr>
+        <tr><td>Heap</td><td>n log n</td><td>n log n</td><td>n log n</td><td>1</td><td>no</td><td>guaranteed time and O(1) memory</td></tr>
+        <tr><td>Counting</td><td>n + K</td><td>n + K</td><td>n + K</td><td>n + K</td><td>yes</td><td>small integer key range</td></tr>
+        <tr><td>Radix (LSD)</td><td>d(n + b)</td><td>d(n + b)</td><td>d(n + b)</td><td>n + b</td><td>yes</td><td>fixed-width ints or strings</td></tr>
+        <tr><td>Python sorted</td><td>n</td><td>n log n</td><td>n log n</td><td>n/2</td><td>yes</td><td>almost always in Python</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m29-e1" data-title="Insertion sort, in place">
+      <div class="exercise-prompt">
+        <p>Write <code>insertion_sort(a)</code> that sorts the list <code>a</code> <strong>in place</strong> and returns
+          <code>None</code>, like <code>list.sort</code>. Do not call <code>sorted</code> or <code>.sort</code>.</p>
+      </div>
+<textarea class="starter">
+def insertion_sort(a):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def test_sorts_in_place():
+    data = [5, 2, 9, 1, 5, 6]
+    result = insertion_sort(data)
+    assert result is None, "return None, like list.sort()"
+    assert data == [1, 2, 5, 5, 6, 9], f"got {data}"
+
+def test_edge_cases():
+    for case in ([], [1], [2, 1], [3, 3, 3]):
+        data = list(case)
+        insertion_sort(data)
+        assert data == sorted(case), f"failed on {case}"
+
+def test_random():
+    data = [random.randint(-50, 50) for _ in range(300)]
+    want = sorted(data)
+    insertion_sort(data)
+    assert data == want, "random data not sorted correctly"
+
+def test_no_builtin_sort():
+    names = insertion_sort.__code__.co_names
+    assert "sorted" not in names and "sort" not in names, "implement the algorithm yourself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Hold <code>item = a[i]</code>, shift larger items one place right
+        while <code>j &gt;= 0 and a[j] &gt; item</code>, then drop the item into <code>a[j + 1]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def insertion_sort(a):
+    for i in range(1, len(a)):
+        item = a[i]
+        j = i - 1
+        while j &gt;= 0 and a[j] &gt; item:
+            a[j + 1] = a[j]
+            j -= 1
+        a[j + 1] = item</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m29-e2" data-title="Stable merge sort with a key">
+      <div class="exercise-prompt">
+        <p>Write <code>merge_sort(items, key=lambda x: x)</code> that returns a <strong>new</strong> sorted list and is
+          <strong>stable</strong>: items with equal keys keep their input order. Do not use <code>sorted</code> or
+          <code>.sort</code>.</p>
+      </div>
+<textarea class="starter">
+def merge_sort(items, key=lambda x: x):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def test_numbers():
+    data = [38, 27, 43, 3, 9, 82, 10]
+    assert merge_sort(data) == [3, 9, 10, 27, 38, 43, 82], "basic sort failed"
+    assert data == [38, 27, 43, 3, 9, 82, 10], "do not modify the input"
+
+def test_stability():
+    pairs = [("b", 1), ("a", 2), ("b", 0), ("a", 1), ("c", 5), ("a", 0)]
+    got = merge_sort(pairs, key=lambda p: p[0])
+    want = [("a", 2), ("a", 1), ("a", 0), ("b", 1), ("b", 0), ("c", 5)]
+    assert got == want, f"equal keys must keep input order; got {got}"
+
+def test_random_against_sorted():
+    data = [random.randint(0, 20) for _ in range(500)]
+    tagged = list(enumerate(data))
+    got = merge_sort(tagged, key=lambda t: t[1])
+    assert got == sorted(tagged, key=lambda t: t[1]), "should match Python's stable sort"
+
+def test_empty():
+    assert merge_sort([]) == [], "empty input gives empty output"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In the merge, only take from the right half when its key is
+        <em>strictly</em> smaller: <code>if key(right[j]) &lt; key(left[i])</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def merge_sort(items, key=lambda x: x):
+    if len(items) &lt;= 1:
+        return list(items)
+    mid = len(items) // 2
+    left = merge_sort(items[:mid], key)
+    right = merge_sort(items[mid:], key)
+    out, i, j = [], 0, 0
+    while i &lt; len(left) and j &lt; len(right):
+        if key(right[j]) &lt; key(left[i]):
+            out.append(right[j])
+            j += 1
+        else:
+            out.append(left[i])
+            i += 1
+    out.extend(left[i:])
+    out.extend(right[j:])
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m29-e3" data-title="Three-way partition (Dutch national flag)">
+      <div class="exercise-prompt">
+        <p>Write <code>partition3(a, pivot)</code> that rearranges the list <code>a</code> in place into three blocks,
+          items <code>&lt; pivot</code>, then <code>== pivot</code>, then <code>&gt; pivot</code>, in one pass, and
+          returns <code>(lt, gt)</code> where <code>a[:lt]</code> are the smaller items, <code>a[lt:gt]</code> equal the
+          pivot, and <code>a[gt:]</code> are larger.</p>
+      </div>
+<textarea class="starter">
+def partition3(a, pivot):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def check(a, pivot):
+    original = sorted(a)
+    lt, gt = partition3(a, pivot)
+    assert sorted(a) == original, "partition must only rearrange items"
+    assert all(x < pivot for x in a[:lt]), f"a[:lt] should be < pivot: {a}"
+    assert all(x == pivot for x in a[lt:gt]), f"a[lt:gt] should equal pivot: {a}"
+    assert all(x > pivot for x in a[gt:]), f"a[gt:] should be > pivot: {a}"
+    return lt, gt
+
+def test_example():
+    a = [2, 0, 2, 1, 1, 0]
+    assert check(a, 1) == (2, 4), "two 0s, two 1s, two 2s"
+
+def test_pivot_absent():
+    a = [5, 1, 7, 3]
+    lt, gt = check(a, 4)
+    assert lt == gt == 2, "no item equals 4, so lt == gt"
+
+def test_random_many_duplicates():
+    for _ in range(50):
+        a = [random.randint(0, 4) for _ in range(40)]
+        check(a, random.randint(0, 4))
+
+def test_in_place():
+    a = [3, 1, 2]
+    ident = id(a)
+    partition3(a, 2)
+    assert id(a) == ident and a[1] == 2, "rearrange the same list object"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep three indexes: <code>lt</code> (end of the small block),
+        <code>i</code> (next unknown item), and <code>gt</code> (start of the big block, beginning at
+        <code>len(a)</code>). When <code>a[i]</code> is big, swap it with <code>a[gt - 1]</code> and do not advance
+        <code>i</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def partition3(a, pivot):
+    lt, i, gt = 0, 0, len(a)
+    while i &lt; gt:
+        if a[i] &lt; pivot:
+            a[lt], a[i] = a[i], a[lt]
+            lt += 1
+            i += 1
+        elif a[i] &gt; pivot:
+            gt -= 1
+            a[i], a[gt] = a[gt], a[i]
+        else:
+            i += 1
+    return lt, gt</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m29-e4" data-title="Radix sort for non-negative integers">
+      <div class="exercise-prompt">
+        <p>Write <code>radix_sort(nums)</code> that returns a new list of the non-negative integers in
+          <code>nums</code> in ascending order, using LSD radix sort in base 10 with a stable counting pass per digit.
+          Do not use <code>sorted</code> or <code>.sort</code>.</p>
+      </div>
+<textarea class="starter">
+def radix_sort(nums):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import random
+
+def test_example():
+    assert radix_sort([170, 45, 75, 90, 802, 24, 2, 66]) == [2, 24, 45, 66, 75, 90, 170, 802], "classic example"
+
+def test_edge():
+    assert radix_sort([]) == [], "empty list"
+    assert radix_sort([0, 0, 0]) == [0, 0, 0], "all zeros"
+    assert radix_sort([7]) == [7], "single item"
+
+def test_random():
+    data = [random.randint(0, 10 ** 6) for _ in range(2000)]
+    assert radix_sort(data) == sorted(data), "random large numbers"
+
+def test_no_builtin_sort():
+    names = radix_sort.__code__.co_names
+    assert "sorted" not in names and "sort" not in names, "implement radix sort yourself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For each digit place 1, 10, 100, ... up to the maximum, distribute
+        items into 10 buckets by <code>(x // place) % 10</code> in order, then concatenate the buckets. Appending to
+        buckets in input order keeps each pass stable.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def radix_sort(nums):
+    result = list(nums)
+    if not result:
+        return result
+    place = 1
+    largest = max(result)
+    while place &lt;= largest:
+        buckets = [[] for _ in range(10)]
+        for x in result:
+            buckets[(x // place) % 10].append(x)
+        result = [x for bucket in buckets for x in bucket]
+        place *= 10
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m29-e5" data-title="Leaderboard with a multi-key sort">
+      <div class="exercise-prompt">
+        <p>Each player is a dict like <code>{"name": "ada", "score": 90, "time": 31.5}</code>. Write
+          <code>leaderboard(players)</code> returning the list of names ordered by score <strong>descending</strong>,
+          then time <strong>ascending</strong> (faster is better), then name <strong>alphabetically</strong>, using a
+          single <code>sorted</code> call with a key function.</p>
+      </div>
+<textarea class="starter">
+def leaderboard(players):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_example():
+    players = [
+        {"name": "cy", "score": 90, "time": 40.0},
+        {"name": "ada", "score": 95, "time": 50.0},
+        {"name": "bo", "score": 90, "time": 31.5},
+        {"name": "al", "score": 90, "time": 31.5},
+    ]
+    assert leaderboard(players) == ["ada", "al", "bo", "cy"], f"got {leaderboard(players)}"
+
+def test_does_not_mutate():
+    players = [{"name": "b", "score": 1, "time": 1.0}, {"name": "a", "score": 2, "time": 1.0}]
+    leaderboard(players)
+    assert players[0]["name"] == "b", "do not reorder the input list"
+
+def test_empty():
+    assert leaderboard([]) == [], "no players, empty board"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>A tuple key compares element by element. Negate the score to make
+        it descending: <code>(-p["score"], p["time"], p["name"])</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def leaderboard(players):
+    ranked = sorted(players, key=lambda p: (-p["score"], p["time"], p["name"]))
+    return [p["name"] for p in ranked]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m29-e6" data-title="Largest number with cmp_to_key">
+      <div class="exercise-prompt">
+        <p>Write <code>largest_number(nums)</code> that arranges non-negative integers to form the largest possible
+          number and returns it as a string. <code>[3, 30, 34, 5, 9]</code> gives <code>"9534330"</code>. If the result
+          is all zeros, return <code>"0"</code>. Use <code>functools.cmp_to_key</code>.</p>
+      </div>
+<textarea class="starter">
+from functools import cmp_to_key
+
+def largest_number(nums):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from itertools import permutations
+
+def test_examples():
+    assert largest_number([3, 30, 34, 5, 9]) == "9534330", "classic example"
+    assert largest_number([10, 2]) == "210", "2 before 10"
+
+def test_zeros():
+    assert largest_number([0, 0]) == "0", "all zeros collapse to '0'"
+
+def test_brute_force():
+    import random
+    for _ in range(30):
+        nums = [random.randint(0, 120) for _ in range(5)]
+        best = max(int("".join(map(str, p))) for p in permutations(nums))
+        assert largest_number(nums) == str(best), f"wrong for {nums}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compare strings <code>a</code> and <code>b</code> by which of
+        <code>a + b</code> and <code>b + a</code> is larger; return -1 when <code>a</code> should come first.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from functools import cmp_to_key
+
+def largest_number(nums):
+    def compare(a, b):
+        if a + b &gt; b + a:
+            return -1
+        if a + b &lt; b + a:
+            return 1
+        return 0
+
+    digits = sorted(map(str, nums), key=cmp_to_key(compare))
+    result = "".join(digits)
+    return "0" if result.lstrip("0") == "" else result</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: external merge sort</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Sorting a file bigger than memory</span></div>
+      <div class="widget-body">
+        <p>Databases and tools like GNU <code>sort</code> sort files far larger than RAM with <strong>external merge
+          sort</strong>: read the input in chunks that fit in memory, sort each chunk and write it to a temporary "run"
+          file, then perform a k-way merge of all runs with a heap, streaming the output. You will simulate "too big for
+          memory" by limiting how many lines you hold at once.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init extsort &amp;&amp; cd extsort
+pixi add pytest
+pixi run python extsort.py big.txt sorted.txt --chunk-lines 10000</code></pre>
+        <pre data-label="Skeleton (extsort.py)"><code class="language-python">import heapq
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+
+def make_runs(src: Path, chunk_lines: int, workdir: Path) -&gt; list[Path]:
+    """Split src into sorted run files of at most chunk_lines lines each."""
+    ...
+
+def read_lines(path: Path) -&gt; Iterator[str]:
+    with path.open(encoding="utf-8") as fh:
+        yield from fh
+
+def merge_runs(runs: list[Path], dest: Path) -&gt; None:
+    """k-way merge with heapq.merge, which holds only one line per run in memory."""
+    with dest.open("w", encoding="utf-8") as out:
+        out.writelines(heapq.merge(*(read_lines(r) for r in runs)))</code></pre>
+        <ol>
+          <li>Write <code>generate.py</code> that creates a file of one million random words or numbers.</li>
+          <li>Implement <code>make_runs</code>: read <code>chunk_lines</code> lines at a time, sort them, and write each
+            run to a file inside a <code>tempfile.TemporaryDirectory()</code>.</li>
+          <li>Implement the merge with <code>heapq.merge</code>, then again by hand with <code>heapq.heappush</code> and
+            <code>heappop</code> on <code>(line, run_index)</code> tuples so you understand it.</li>
+          <li>Support <code>--key</code> options (numeric or case-insensitive) by passing <code>key=</code> to both the
+            chunk sort and <code>heapq.merge</code>.</li>
+          <li>Test with <code>tmp_path</code>: the output equals <code>sorted()</code> of the input for several chunk
+            sizes, including 1 and larger than the file.</li>
+        </ol>
+        <ul class="checklist" data-id="m29-mini">
+          <li>Runs are each sorted and never larger than <code>--chunk-lines</code></li>
+          <li>The k-way merge streams output and keeps at most one line per run in memory</li>
+          <li>The output matches <code>sorted()</code> for every tested chunk size</li>
+          <li>Temporary run files are cleaned up even if an error occurs</li>
+          <li>Key options work and the sort is stable for equal keys</li>
+          <li>You can explain the complexity: O(n log n) comparisons and two passes over the data on disk</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> limit the number of simultaneously open run files with multi-pass merging
+          (merge 16 runs at a time); compress runs with <code>compression.zstd</code> (new in Python 3.14) and measure
+          the I/O trade-off; report timings with <code>time.perf_counter</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m29-quiz">
+<script type="application/json">
+{"title": "Sorting", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does it mean for a sorting algorithm to be <em>stable</em>?", "options": ["It never crashes", "Items with equal keys keep their original relative order", "It always runs in O(n log n)", "It uses O(1) extra memory"], "answer": 1, "explanation": "<p>Stability is about ties: equal keys stay in input order. That is what lets you sort by a secondary key first and a primary key second.</p>"},
+  {"type": "single", "prompt": "Which elementary sort runs in O(n) on already sorted input?", "options": ["Selection sort", "Insertion sort", "Heapsort", "Quicksort with last-element pivot"], "answer": 1, "explanation": "<p>Insertion sort does O(n + inversions) work, and a sorted list has zero inversions. Selection sort always scans the whole remainder, and naive quicksort hits its worst case.</p>"},
+  {"type": "multi", "prompt": "Which of these sorts are stable as usually implemented?", "options": ["Merge sort", "Insertion sort", "Heapsort", "Quicksort", "Counting sort"], "answer": [0, 1, 4], "explanation": "<p>Merge, insertion, and counting sort preserve tie order. Heapsort and in-place quicksort move items long distances and can reorder equal keys.</p>"},
+  {"type": "single", "prompt": "What is the loop invariant of selection sort before iteration i?", "options": ["a[0:i] is a max-heap", "a[0:i] holds the i smallest items in sorted order", "a[i:] is sorted", "a[0:i] holds the original first i items in sorted order"], "answer": 1, "explanation": "<p>Selection sort places the global minimum of the remainder at position i, so the prefix is the i smallest items, sorted. The last option is insertion sort's invariant.</p>"},
+  {"type": "single", "prompt": "What is the worst-case time of quicksort, and when does it happen?", "options": ["O(n log n), never worse", "O(n²), when partitions are maximally unbalanced", "O(n²), only on random input", "O(2ⁿ), on duplicates"], "answer": 1, "explanation": "<p>If each pivot is the minimum or maximum, partitions have sizes 0 and n − 1, giving T(n) = T(n − 1) + n = Θ(n²). Random pivots make this astronomically unlikely.</p>"},
+  {"type": "single", "prompt": "Why is three-way partitioning useful?", "options": ["It makes quicksort stable", "It handles many equal keys efficiently by never recursing into the equal block", "It removes the need for a pivot", "It makes quicksort use O(1) space"], "answer": 1, "explanation": "<p>Items equal to the pivot are finished after one pass. With few distinct keys, the recursion barely happens.</p>"},
+  {"type": "single", "prompt": "The comparison-sort lower bound comes from the fact that a decision tree must have at least how many leaves?", "options": ["n", "n log n", "2ⁿ", "n!"], "answer": 3, "explanation": "<p>Each of the n! input orderings needs a distinct leaf. A binary tree with n! leaves has height at least log₂(n!) = Ω(n log n).</p>"},
+  {"type": "single", "prompt": "How do counting sort and radix sort beat Ω(n log n)?", "options": ["They use parallel hardware", "They do not compare items; they use the keys' integer structure", "They are randomized", "They only sort already-sorted data"], "answer": 1, "explanation": "<p>The bound applies only to algorithms that learn about order through comparisons. Counting sort indexes an array by key value directly.</p>"},
+  {"type": "single", "prompt": "Why must each digit pass of LSD radix sort be stable?", "options": ["To save memory", "So that the order established by earlier (less significant) digits is preserved among ties", "So it runs in O(n)", "It does not need to be stable"], "answer": 1, "explanation": "<p>After sorting by the tens digit, numbers with the same tens digit must stay ordered by their ones digit. An unstable pass would scramble that.</p>"},
+  {"type": "single", "prompt": "Which change did CPython make to list.sort in Python 3.11?", "options": ["It switched to quicksort", "It adopted the Powersort merge policy for deciding which runs to merge", "It became unstable for speed", "It removed galloping"], "answer": 1, "explanation": "<p>The run detection, binary insertion sort, and galloping of Timsort remain; the rules for which adjacent runs to merge were replaced by Munro and Wild's near-optimal Powersort policy.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "words = [\"bb\", \"a\", \"ccc\", \"dd\", \"e\"]\nprint(sorted(words, key=len))", "answer": "['a', 'e', 'bb', 'dd', 'ccc']", "explanation": "<p>Sorting by length is stable, so equal-length words keep their input order: \"a\" before \"e\", \"bb\" before \"dd\".</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "rows = [(\"x\", 2), (\"y\", 1), (\"x\", 1)]\nprint(sorted(rows, key=lambda r: (r[0], -r[1])))", "answer": "[('x', 2), ('x', 1), ('y', 1)]", "explanation": "<p>Primary key is the letter ascending; negating the number sorts it descending within each letter.</p>"},
+  {"type": "text", "prompt": "Which <code>functools</code> function adapts an old-style two-argument comparison function for use as <code>key=</code>?", "answer": ["cmp_to_key", "functools.cmp_to_key"], "explanation": "<p><code>cmp_to_key</code> wraps the comparison function in a class whose <code>__lt__</code> calls it.</p>"},
+  {"type": "single", "prompt": "Why is the minimum of several <code>timeit.repeat</code> results usually reported?", "options": ["It is the most optimistic lie", "Noise from other processes only ever adds time, so the minimum is closest to the true cost", "The maximum is always an error", "Python requires it"], "answer": 1, "explanation": "<p>Interference (other programs, GC, cache misses from unrelated work) makes runs slower, never faster, so the fastest run best reflects the code itself.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Stable sorts keep ties in order; in-place sorts use O(1) or O(log n) extra memory.</li>
+      <li>Bubble, selection, and insertion sort are O(n²); insertion sort is O(n + inversions) and great on nearly sorted data.</li>
+      <li>Merge sort: Θ(n log n) always, stable, O(n) extra space. Quicksort: fast on average, O(n²) worst case; randomize
+        and use three-way partitioning. Heapsort: Θ(n log n) worst case in O(1) space, not stable.</li>
+      <li>Comparison sorts need Ω(n log n) comparisons (decision-tree argument); counting and radix sort avoid comparisons.</li>
+      <li>Python's sort is a stable, adaptive merge sort with runs, galloping, and (since 3.11) the Powersort merge policy.</li>
+      <li>Use <code>key=</code> with tuples for multi-key sorts, <code>itemgetter</code>/<code>attrgetter</code> for speed
+        and clarity, and <code>cmp_to_key</code> only when you must compare pairs.</li>
+    </ul>
+    <div class="flashcards" data-title="Sorting essentials">
+<script type="application/json">
+[{"front": "Stable sort", "back": "Equal keys keep their original relative order."},
+ {"front": "Insertion sort cost", "back": "O(n + inversions): O(n) best, O(n²) worst. Stable, in-place."},
+ {"front": "Merge sort cost", "back": "Θ(n log n) in all cases, Θ(n) extra space, stable."},
+ {"front": "Quicksort worst case", "back": "Θ(n²) with unbalanced partitions; random pivots give expected Θ(n log n)."},
+ {"front": "Lomuto vs Hoare", "back": "Lomuto: single scan, pivot lands at returned index, more swaps. Hoare: two pointers, fewer swaps, pivot not fixed at j."},
+ {"front": "Heapsort", "back": "Build a max-heap in O(n), then n pops: Θ(n log n), O(1) space, not stable."},
+ {"front": "Comparison sort lower bound", "back": "log₂(n!) = Ω(n log n) comparisons, from a decision tree with n! leaves."},
+ {"front": "Counting sort", "back": "Θ(n + K) for integer keys in [0, K); stable when placing left to right."},
+ {"front": "LSD radix sort invariant", "back": "After pass d, items are sorted by their last d digits."},
+ {"front": "Galloping", "back": "Exponential then binary search during a merge when one run keeps winning."},
+ {"front": "Powersort", "back": "Near-optimal run-merge policy adopted by CPython's list.sort in 3.11."},
+ {"front": "Descending numeric key in a tuple", "back": "Negate it: key=lambda r: (r.dept, -r.salary)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/howto/sorting.html">Sorting Techniques HOWTO</a> in the Python docs</li>
+      <li><a href="https://github.com/python/cpython/blob/main/Objects/listsort.txt">listsort.txt</a>: Tim Peters' own
+        description of the algorithm, updated for Powersort</li>
+      <li><a href="https://docs.python.org/3/library/timeit.html">timeit</a> and
+        <a href="https://docs.python.org/3/library/heapq.html">heapq</a> documentation</li>
+      <li>Next: <a href="m30-searching.html">M30 Searching &amp; Array Techniques</a> cashes in on sorted data.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M19 · Complexity &amp; Big-O · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m19">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 19</p>
+    <h1>Complexity &amp; Big-O</h1>
+    <p class="lede">Before you build data structures you need a way to talk about how fast they are. This module gives you
+      that language: counting the work a program does, describing how that work grows with the input using Big-O, and
+      checking your reasoning with real timings.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m05-functions.html">M05</a>,
+      <a href="m06-collections.html">M06</a>, <a href="m14-iterators.html">M14</a></span></div>
+    <ul class="objectives">
+      <li>Count the basic operations an algorithm performs and express the count as a function of the input size <em>n</em></li>
+      <li>Define O, Ω, and Θ formally, and use them correctly in everyday speech</li>
+      <li>Recognise the common growth classes and explain logarithms from first principles</li>
+      <li>Analyse loops, nested loops, and simple recursive functions, including basic recurrences</li>
+      <li>Distinguish best, worst, average, and amortized cost, and reason about space as well as time</li>
+      <li>Measure running time with <code>timeit</code> and <code>time.perf_counter</code>, and plot it with matplotlib</li>
+      <li>Know the cost of everyday <code>list</code>, <code>dict</code>, and <code>set</code> operations, and when Big-O is not the whole story</li>
+    </ul>
+  </header>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="why-measure">
+    <h2>Why measure at all?</h2>
+    <p>Imagine two programs that answer the same question: "does this list of user IDs contain any duplicates?" On your
+      laptop, with 100 IDs, both finish instantly. In production, with 2 million IDs, one finishes in a third of a second
+      and the other would run for <em>days</em>. Nothing about the hardware changed. The difference is entirely in how the
+      amount of work <strong>grows</strong> as the input grows.</p>
+    <p>That growth is what <strong>complexity analysis</strong> studies. It lets you predict, before you run anything, how a
+      program will behave on inputs far larger than the ones you tested with. It also gives you a shared vocabulary: when
+      a colleague says "that lookup is O(n), use a set," everyone knows what they mean.</p>
+    <p>Why not just time the program? Timing is essential, and we will do plenty of it, but a stopwatch alone has three
+      weaknesses:</p>
+    <ul>
+      <li><strong>It depends on the machine.</strong> A result measured on a fast desktop says little about a Raspberry Pi or a busy server.</li>
+      <li><strong>It depends on the input you happened to try.</strong> A sort can be fast on already-sorted data and slow on random data.</li>
+      <li><strong>It does not extrapolate.</strong> Knowing a function takes 2 ms for 1,000 items tells you nothing about 1,000,000 items unless you know <em>how</em> it grows.</li>
+    </ul>
+    <p>Complexity analysis answers the "how does it grow" question in a machine-independent way. Timing then confirms the
+      analysis and supplies the constant factors that analysis deliberately ignores.</p>
+
+    <div class="runnable" data-title="Two ways to find duplicates">
+<textarea>
+import time
+
+def has_dup_quadratic(items):
+    # Compare every pair: the obvious approach.
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if items[i] == items[j]:
+                return True
+    return False
+
+def has_dup_linear(items):
+    # Remember what we've seen in a set.
+    seen = set()
+    for x in items:
+        if x in seen:
+            return True
+        seen.add(x)
+    return False
+
+for n in [500, 1000, 2000, 4000]:
+    data = list(range(n))          # no duplicates: the worst case for both
+    t0 = time.perf_counter(); has_dup_quadratic(data); t1 = time.perf_counter()
+    has_dup_linear(data); t2 = time.perf_counter()
+    print(f"n={n:5}  pairs: {t1 - t0:8.4f}s   set: {t2 - t1:8.5f}s")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Look at the "pairs" column. Each time <em>n</em> doubles, roughly what happens to the
+      time? Now look at the "set" column. Write down your guess for each before reading on.</p></aside>
+    <p>You should see the pairwise version roughly <strong>quadruple</strong> each time <em>n</em> doubles, while the set
+      version roughly <strong>doubles</strong>. That ratio, not the absolute number of seconds, is the fingerprint of an
+      algorithm's complexity. By the end of this module you will be able to predict it from the code.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> complexity describes how cost <em>grows</em> with input size.
+      It is a prediction tool; timing is the confirmation tool. You need both.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="counting">
+    <h2>Counting operations</h2>
+    <p>To analyse an algorithm without a stopwatch, we count <strong>basic operations</strong>: steps that take a roughly
+      constant amount of time regardless of input size. Examples are an arithmetic operation, a comparison, assigning a
+      variable, indexing a list, or calling <code>len()</code> on a list. We do not care whether a comparison takes 3 or
+      30 nanoseconds; we care how <em>many</em> of them happen.</p>
+    <p>We also need a measure of input size, conventionally called <strong><em>n</em></strong>. For a list it is the number
+      of elements; for a string, its length; for a number-crunching function like "is <em>k</em> prime?", it might be the
+      value <em>k</em> itself or the number of digits in it. Always say what <em>n</em> means.</p>
+
+    <h3>A worked count</h3>
+    <pre><code class="language-python">def total(nums):
+    s = 0                 # 1 assignment
+    for x in nums:        # loop body runs n times
+        s += x            # 1 addition + 1 assignment, each time
+    return s              # 1 return</code></pre>
+    <p>The count is <code>1 + 2n + 1 = 2n + 2</code>. If we also count the loop's own bookkeeping (fetching the next item),
+      maybe it is <code>3n + 2</code>. The exact constant depends on what you choose to count, and that is precisely why
+      we will soon throw constants away. What does not depend on your choices is that the count is a <em>linear</em>
+      function of <em>n</em>: double the list, double the work.</p>
+
+    <h3>Nested loops</h3>
+    <pre><code class="language-python">def count_pairs(nums):
+    count = 0
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            count += 1
+    return count</code></pre>
+    <p>The inner loop runs <code>n−1</code> times when <code>i = 0</code>, then <code>n−2</code>, and so on down to 0. The total
+      is the sum <code>(n−1) + (n−2) + … + 1 + 0</code>. Pair the first and last terms, the second and second-to-last, and so
+      on: each pair sums to <code>n−1</code> and there are <code>n/2</code> pairs, so the total is</p>
+    <p style="text-align:center"><strong>n(n − 1) / 2 = ½n² − ½n</strong></p>
+    <p>This "triangular number" shows up constantly: any time you look at every pair of items, you do about
+      <code>n²/2</code> work.</p>
+
+    <div class="runnable" data-title="Count it yourself">
+<textarea>
+def count_pairs(n):
+    count = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            count += 1
+    return count
+
+for n in [1, 2, 5, 10, 100, 1000]:
+    print(n, count_pairs(n), n * (n - 1) // 2)
+</textarea>
+    </div>
+
+    <div class="runnable" data-title="Predict: how many times does 'tick' print?" data-predict>
+<textarea>
+n = 4
+for i in range(n):
+    for j in range(n):
+        if j == i:
+            print("tick")
+</textarea>
+    </div>
+    <p>A trap in that cell: the loops do <code>n²</code> = 16 comparisons, but only 4 print. The <em>cost</em> is the 16
+      comparisons, not the 4 outputs. Count the work, not the visible effects.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> pick a measure of size <em>n</em>, count basic operations as a
+      function of <em>n</em>, and do not obsess over exact constants: the <em>shape</em> of the function is what matters.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="big-o">
+    <h2>Big-O, Big-Ω, and Big-Θ</h2>
+    <p>Counts like <code>3n² + 5n + 2</code> are precise but noisy. For large <em>n</em>, the <code>n²</code> term dwarfs
+      everything else: at <em>n</em> = 1,000 it contributes 3,000,000 while <code>5n + 2</code> contributes 5,002. And the
+      leading constant 3 depends on what we decided to count. <strong>Asymptotic notation</strong> keeps only the part that
+      matters as <em>n</em> grows: the dominant term, without its constant.</p>
+
+    <h3>The intuition</h3>
+    <ul>
+      <li><strong>O(g)</strong>, "big-O of g": the cost grows <em>no faster than</em> g, up to a constant factor. An upper bound.</li>
+      <li><strong>Ω(g)</strong>, "big-Omega of g": the cost grows <em>at least as fast as</em> g. A lower bound.</li>
+      <li><strong>Θ(g)</strong>, "big-Theta of g": both at once. The cost grows <em>exactly like</em> g, up to constants. A tight bound.</li>
+    </ul>
+
+    <h3>The formal definitions</h3>
+    <p>Let <em>f</em>(<em>n</em>) be the cost and <em>g</em>(<em>n</em>) a simple comparison function like <em>n</em>².</p>
+    <ul>
+      <li><em>f</em> ∈ O(<em>g</em>) if there exist constants <em>c</em> &gt; 0 and <em>n</em>₀ such that
+        <em>f</em>(<em>n</em>) ≤ <em>c</em>·<em>g</em>(<em>n</em>) for every <em>n</em> ≥ <em>n</em>₀.</li>
+      <li><em>f</em> ∈ Ω(<em>g</em>) if there exist constants <em>c</em> &gt; 0 and <em>n</em>₀ such that
+        <em>f</em>(<em>n</em>) ≥ <em>c</em>·<em>g</em>(<em>n</em>) for every <em>n</em> ≥ <em>n</em>₀.</li>
+      <li><em>f</em> ∈ Θ(<em>g</em>) if <em>f</em> ∈ O(<em>g</em>) and <em>f</em> ∈ Ω(<em>g</em>).</li>
+    </ul>
+    <p>In words: "eventually (past <em>n</em>₀), <em>f</em> stays below some fixed multiple of <em>g</em>." The constant
+      <em>c</em> is what lets us ignore leading coefficients; the threshold <em>n</em>₀ is what lets us ignore small inputs
+      where lower-order terms still matter.</p>
+
+    <h3>A proof you can follow</h3>
+    <p>Claim: <code>3n² + 5n + 2</code> ∈ Θ(n²).</p>
+    <ul>
+      <li><strong>Upper bound.</strong> For <em>n</em> ≥ 1 we have <code>5n ≤ 5n²</code> and <code>2 ≤ 2n²</code>. So
+        <code>3n² + 5n + 2 ≤ 3n² + 5n² + 2n² = 10n²</code>. Choose <em>c</em> = 10, <em>n</em>₀ = 1. Done: it is O(n²).</li>
+      <li><strong>Lower bound.</strong> For <em>n</em> ≥ 1, <code>3n² + 5n + 2 ≥ 3n²</code>. Choose <em>c</em> = 3,
+        <em>n</em>₀ = 1. It is Ω(n²).</li>
+    </ul>
+    <p>Both hold, so it is Θ(n²). The same argument works for any polynomial: <strong>a polynomial is Θ of its highest-degree
+      term</strong>.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 260" role="img" aria-label="f(n) squeezed between 3n squared and 10n squared after n0">
+        <line x1="50" y1="220" x2="500" y2="220" stroke="var(--fg-muted)" stroke-width="1.5"/>
+        <line x1="50" y1="220" x2="50" y2="20" stroke="var(--fg-muted)" stroke-width="1.5"/>
+        <text x="495" y="240" fill="var(--fg-muted)" font-size="13" text-anchor="end">n</text>
+        <text x="40" y="30" fill="var(--fg-muted)" font-size="13" text-anchor="end">cost</text>
+        <path d="M50,220 Q200,200 480,30" fill="none" stroke="var(--viz-2)" stroke-width="2.5"/>
+        <path d="M50,215 Q240,210 480,120" fill="none" stroke="var(--viz-1)" stroke-width="3"/>
+        <path d="M50,220 Q260,218 480,170" fill="none" stroke="var(--viz-3)" stroke-width="2.5"/>
+        <line x1="120" y1="220" x2="120" y2="60" stroke="var(--fg-muted)" stroke-dasharray="4 4"/>
+        <text x="120" y="238" fill="var(--fg-muted)" font-size="13" text-anchor="middle">n₀</text>
+        <text x="440" y="40" fill="var(--viz-2)" font-size="13">c₂·g(n) = 10n²</text>
+        <text x="440" y="112" fill="var(--viz-1)" font-size="13">f(n)</text>
+        <text x="440" y="190" fill="var(--viz-3)" font-size="13">c₁·g(n) = 3n²</text>
+        <text x="160" y="80" fill="var(--fg-muted)" font-size="12">past n₀, f is trapped between the two curves</text>
+      </svg>
+      <figcaption>Θ means "sandwiched": past some threshold, the cost stays between two constant multiples of the same function.</figcaption>
+    </figure>
+
+    <h3>How people actually use the words</h3>
+    <p>Technically O is only an upper bound, so a linear function is also O(n²) and O(2ⁿ) (both are true and useless).
+      In practice, engineers say "O(n)" when they mean the tight bound Θ(n). That is fine in conversation, but know the
+      difference: in an interview or paper, "this algorithm is Ω(n log n)" is a strong claim about a lower bound, while
+      "O(n log n)" only promises it is no worse.</p>
+
+    <h3>Rules for simplifying</h3>
+    <ul>
+      <li><strong>Drop constant factors:</strong> 7n ∈ Θ(n); n/2 ∈ Θ(n).</li>
+      <li><strong>Keep only the dominant term:</strong> n² + n log n + 1000 ∈ Θ(n²).</li>
+      <li><strong>Sequential steps add:</strong> an O(n) step followed by an O(n²) step is O(n + n²) = O(n²).</li>
+      <li><strong>Nested steps multiply:</strong> doing O(n) work for each of n items is O(n·n) = O(n²).</li>
+      <li><strong>Different inputs keep different letters:</strong> a loop over list <code>a</code> nested in a loop over list <code>b</code> is O(a·b), not O(n²).</li>
+    </ul>
+    <aside class="callout warn"><p>A common mistake is calling a function O(n) when it takes two different inputs. If you
+      search each of <em>m</em> words in a text of length <em>n</em> with <code>in</code>, the cost is O(m·n). Collapsing both
+      into "n" hides exactly the information you need.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> O is "at most", Ω is "at least", Θ is "exactly, up to
+      constants". Drop constants and lower-order terms; add sequential costs, multiply nested ones.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="classes">
+    <h2>The common growth classes</h2>
+    <p>A handful of functions describe almost every algorithm you will meet. Listed from fastest to slowest:</p>
+    <table>
+      <thead><tr><th>Class</th><th>Name</th><th>Typical example</th><th>n = 1,000,000 means roughly…</th></tr></thead>
+      <tbody>
+        <tr><td>O(1)</td><td>constant</td><td>index a list, <code>dict</code> lookup</td><td>1 step</td></tr>
+        <tr><td>O(log n)</td><td>logarithmic</td><td>binary search</td><td>20 steps</td></tr>
+        <tr><td>O(n)</td><td>linear</td><td>sum a list, <code>x in list</code></td><td>10⁶ steps</td></tr>
+        <tr><td>O(n log n)</td><td>linearithmic</td><td><code>sorted()</code>, merge sort</td><td>2×10⁷ steps</td></tr>
+        <tr><td>O(n²)</td><td>quadratic</td><td>compare all pairs</td><td>10¹² steps (hours in Python)</td></tr>
+        <tr><td>O(n³)</td><td>cubic</td><td>naive matrix multiply</td><td>10¹⁸ steps (forget it)</td></tr>
+        <tr><td>O(2ⁿ)</td><td>exponential</td><td>all subsets</td><td>impossible past n ≈ 40</td></tr>
+        <tr><td>O(n!)</td><td>factorial</td><td>all orderings</td><td>impossible past n ≈ 12</td></tr>
+      </tbody>
+    </table>
+    <p>Play with the visualizer below. Toggle classes on and off and increase the maximum <em>n</em>. Notice how the
+      ordering is fixed once <em>n</em> is large enough, even if a "slow" class looks competitive for small <em>n</em>.</p>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["1", "log n", "n", "n log n", "n^2", "2^n"], "maxN": 32}'></div>
+
+    <div class="runnable" data-title="Feel the numbers">
+<textarea>
+import math
+
+print(f"{'n':>8} {'log n':>7} {'n log n':>10} {'n^2':>14} {'2^n':>12}")
+for n in [10, 100, 1_000, 10_000, 100_000, 1_000_000]:
+    two_n = f"{2**n:.2e}" if n <= 1000 else "huge"
+    print(f"{n:>8} {math.log2(n):>7.1f} {n * math.log2(n):>10.0f} {n * n:>14} {two_n:>12}")
+</textarea>
+    </div>
+    <p>A useful rule of thumb for pure Python: about 10⁷ simple operations per second. So an O(n²) algorithm is fine up to
+      n ≈ 3,000 for an interactive response, and an O(n log n) one handles millions. Compiled libraries like NumPy are
+      10–100× faster per operation, but they do not change the class.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> 1 &lt; log n &lt; n &lt; n log n &lt; n² &lt; n³ &lt; 2ⁿ &lt; n!.
+      Moving one class to the left is usually worth more than any amount of micro-optimisation.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="logarithms">
+    <h2>Logarithms from scratch</h2>
+    <p>Logarithms scare people, but in computing they answer one friendly question:</p>
+    <p style="text-align:center"><strong>How many times can I halve <em>n</em> before I reach 1?</strong></p>
+    <p>Start with 16: 16 → 8 → 4 → 2 → 1. Four halvings, so log₂ 16 = 4. Equivalently, 2⁴ = 16: the logarithm is the
+      inverse of exponentiation. log₂ <em>n</em> = <em>k</em> means 2<sup><em>k</em></sup> = <em>n</em>.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 200" role="img" aria-label="Halving 16 items down to 1 takes four steps">
+        <g font-size="13" fill="var(--fg)">
+          <rect x="20" y="20" width="480" height="26" fill="var(--viz-1)" opacity="0.85" rx="4"/>
+          <text x="260" y="38" text-anchor="middle" fill="var(--bg)">16 items</text>
+          <rect x="20" y="58" width="240" height="26" fill="var(--viz-2)" opacity="0.85" rx="4"/>
+          <text x="140" y="76" text-anchor="middle" fill="var(--bg)">8</text>
+          <rect x="20" y="96" width="120" height="26" fill="var(--viz-3)" opacity="0.85" rx="4"/>
+          <text x="80" y="114" text-anchor="middle" fill="var(--bg)">4</text>
+          <rect x="20" y="134" width="60" height="26" fill="var(--viz-4)" opacity="0.85" rx="4"/>
+          <text x="50" y="152" text-anchor="middle" fill="var(--bg)">2</text>
+          <rect x="20" y="172" width="30" height="22" fill="var(--viz-5)" opacity="0.85" rx="4"/>
+          <text x="35" y="188" text-anchor="middle" fill="var(--bg)">1</text>
+          <text x="300" y="76" fill="var(--fg-muted)">step 1</text>
+          <text x="300" y="114" fill="var(--fg-muted)">step 2</text>
+          <text x="300" y="152" fill="var(--fg-muted)">step 3</text>
+          <text x="300" y="188" fill="var(--fg-muted)">step 4 → log₂ 16 = 4</text>
+        </g>
+      </svg>
+      <figcaption>Each step throws away half the remaining work. That is the shape of every O(log n) algorithm.</figcaption>
+    </figure>
+
+    <h3>Why logarithms are so slow-growing</h3>
+    <p>Doubling <em>n</em> adds just <strong>one</strong> to log₂ <em>n</em>. A million is about 2²⁰, so log₂ 10⁶ ≈ 20. A
+      billion is about 2³⁰, so log₂ 10⁹ ≈ 30. Binary search through a sorted list of a billion items needs at most about 30
+      comparisons. That is the power of halving.</p>
+
+    <h3>Which base?</h3>
+    <p>Computer scientists usually mean base 2, mathematicians base <em>e</em>, engineers base 10. For Big-O it does not
+      matter: the change-of-base rule says log<sub>a</sub> <em>n</em> = log<sub>b</sub> <em>n</em> / log<sub>b</sub> <em>a</em>,
+      and 1 / log<sub>b</sub> <em>a</em> is just a constant factor, which Big-O drops. So we write O(log n) without a base.</p>
+
+    <h3>Useful identities</h3>
+    <ul>
+      <li>log(<em>a</em>·<em>b</em>) = log <em>a</em> + log <em>b</em>, so log(<em>n</em>²) = 2 log <em>n</em> ∈ O(log n).</li>
+      <li>log(2ⁿ) = <em>n</em>, so halving-based and doubling-based processes are mirror images.</li>
+      <li>In Python, <code>n.bit_length()</code> is ⌊log₂ n⌋ + 1 for positive integers, an exact integer logarithm.</li>
+    </ul>
+
+    <div class="tracer" data-title="Watch the halving loop">
+<textarea>
+n = 20
+steps = 0
+while n > 1:
+    n = n // 2
+    steps += 1
+result = steps
+</textarea>
+    </div>
+    <div class="runnable" data-title="Logarithms in Python">
+<textarea>
+import math
+
+for n in [16, 1_000, 1_000_000, 1_000_000_000]:
+    halvings = 0
+    m = n
+    while m > 1:
+        m //= 2
+        halvings += 1
+    print(f"n={n:>13,}  halvings={halvings:>2}  log2={math.log2(n):6.2f}  bit_length-1={n.bit_length() - 1}")
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> log₂ <em>n</em> is "how many halvings until 1". It grows by one
+      each time <em>n</em> doubles. Whenever an algorithm cuts the problem in half per step, think O(log n).</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="analyzing">
+    <h2>Analysing loops and recursion</h2>
+    <h3>Loop patterns</h3>
+    <table>
+      <thead><tr><th>Pattern</th><th>Iterations</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td><code>for i in range(n)</code></td><td>n</td><td>O(n)</td></tr>
+        <tr><td><code>for i in range(0, n, 2)</code></td><td>n/2</td><td>O(n)</td></tr>
+        <tr><td><code>for i in range(n): for j in range(n)</code></td><td>n²</td><td>O(n²)</td></tr>
+        <tr><td><code>for i in range(n): for j in range(i)</code></td><td>n(n−1)/2</td><td>O(n²)</td></tr>
+        <tr><td><code>i = 1; while i &lt; n: i *= 2</code></td><td>⌈log₂ n⌉</td><td>O(log n)</td></tr>
+        <tr><td><code>for i in range(n): j = 1; while j &lt; n: j *= 2</code></td><td>n·log n</td><td>O(n log n)</td></tr>
+        <tr><td><code>for i in range(100)</code> (fixed bound)</td><td>100</td><td>O(1)</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout danger"><p>Hidden loops count. In Python, <code>x in some_list</code>, <code>some_list.index(x)</code>,
+      <code>some_list.remove(x)</code>, <code>some_list.insert(0, x)</code>, slicing <code>a[i:j]</code>, <code>sum(a)</code>,
+      and <code>sorted(a)</code> each loop internally. A single innocent-looking line inside a <code>for</code> loop can
+      turn O(n) into O(n²).</p></aside>
+    <div class="runnable" data-title="Predict: what's the complexity of this function?" data-predict>
+<textarea>
+def mystery(items):
+    out = []
+    for x in items:
+        if x not in out:     # hidden loop!
+            out.append(x)
+    return out
+
+# Prediction prompt: what does this print? (Then think: what's the Big-O?)
+print(mystery([3, 1, 3, 2, 1]))
+</textarea>
+    </div>
+    <p>The function prints <code>[3, 1, 2]</code>, but the real lesson is its cost: <code>x not in out</code> scans
+      <code>out</code>, which can grow to <em>n</em> items, so the whole thing is O(n²) in the worst case (all distinct).
+      Replacing <code>out</code> membership with a set makes it O(n).</p>
+
+    <h3>Recursion and recurrences</h3>
+    <p>For recursive functions we write a <strong>recurrence</strong>: an equation that defines the cost
+      <em>T</em>(<em>n</em>) in terms of the cost on smaller inputs.</p>
+    <pre><code class="language-python">def length(items):            # T(n) = T(n - 1) + c
+    if not items:
+        return 0
+    return 1 + length(items[1:])  # careful: the slice itself costs O(n)!</code></pre>
+    <p>Ignoring the slice, each call does constant work and recurses on <em>n</em> − 1 items:
+      <em>T</em>(<em>n</em>) = <em>T</em>(<em>n</em>−1) + <em>c</em>. Unrolling:
+      <em>T</em>(<em>n</em>) = <em>c</em> + <em>c</em> + … + <em>c</em> (n times) = O(n). But the slice <code>items[1:]</code>
+      copies <em>n</em>−1 items, so the true recurrence is <em>T</em>(<em>n</em>) = <em>T</em>(<em>n</em>−1) + <em>cn</em>,
+      which sums to the triangular number: O(n²). Recursion with slicing is a classic accidental quadratic.</p>
+
+    <h3>Four recurrences worth memorising</h3>
+    <table>
+      <thead><tr><th>Recurrence</th><th>Solution</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td>T(n) = T(n−1) + O(1)</td><td>O(n)</td><td>recursive sum with an index</td></tr>
+        <tr><td>T(n) = T(n/2) + O(1)</td><td>O(log n)</td><td>binary search</td></tr>
+        <tr><td>T(n) = 2T(n/2) + O(n)</td><td>O(n log n)</td><td>merge sort</td></tr>
+        <tr><td>T(n) = 2T(n−1) + O(1)</td><td>O(2ⁿ)</td><td>naive Fibonacci (roughly), Towers of Hanoi</td></tr>
+      </tbody>
+    </table>
+    <p>The third one deserves a picture. Merge sort splits the list in half, sorts each half recursively, then merges in
+      linear time. Draw the calls as a tree: the top level does <em>n</em> work merging; the next level has two calls doing
+      <em>n</em>/2 each, still <em>n</em> total; and so on. There are log₂ <em>n</em> levels, each doing <em>n</em> work.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 210" role="img" aria-label="Recursion tree for merge sort: log n levels, n work per level">
+        <g font-size="12" text-anchor="middle">
+          <rect x="190" y="10" width="160" height="26" rx="4" fill="var(--viz-1)" opacity="0.85"/>
+          <text x="270" y="28" fill="var(--bg)">n</text>
+          <rect x="100" y="60" width="140" height="26" rx="4" fill="var(--viz-2)" opacity="0.85"/>
+          <rect x="300" y="60" width="140" height="26" rx="4" fill="var(--viz-2)" opacity="0.85"/>
+          <text x="170" y="78" fill="var(--bg)">n/2</text><text x="370" y="78" fill="var(--bg)">n/2</text>
+          <g fill="var(--viz-3)" opacity="0.85">
+            <rect x="60" y="110" width="80" height="26" rx="4"/><rect x="160" y="110" width="80" height="26" rx="4"/>
+            <rect x="300" y="110" width="80" height="26" rx="4"/><rect x="400" y="110" width="80" height="26" rx="4"/>
+          </g>
+          <text x="100" y="128" fill="var(--bg)">n/4</text><text x="200" y="128" fill="var(--bg)">n/4</text>
+          <text x="340" y="128" fill="var(--bg)">n/4</text><text x="440" y="128" fill="var(--bg)">n/4</text>
+          <text x="270" y="166" fill="var(--fg-muted)">⋮</text>
+          <g fill="var(--viz-4)" opacity="0.85">
+            <rect x="40" y="180" width="18" height="20" rx="3"/><rect x="62" y="180" width="18" height="20" rx="3"/>
+            <rect x="84" y="180" width="18" height="20" rx="3"/><rect x="440" y="180" width="18" height="20" rx="3"/>
+            <rect x="462" y="180" width="18" height="20" rx="3"/><rect x="484" y="180" width="18" height="20" rx="3"/>
+          </g>
+          <text x="270" y="195" fill="var(--fg-muted)">… n leaves of size 1 …</text>
+        </g>
+        <g font-size="12" fill="var(--fg-muted)" text-anchor="start">
+          <text x="455" y="28">level work: n</text>
+          <text x="455" y="56">level work: n</text>
+          <text x="485" y="128">n</text>
+        </g>
+      </svg>
+      <figcaption>log₂ n levels × n work per level = n log n. This "levels times work per level" trick solves many recurrences.</figcaption>
+    </figure>
+    <p>The general tool for divide-and-conquer recurrences is the <strong>Master Theorem</strong>; you will meet it properly in
+      <a href="m28-recursion.html">M28 Recursion</a>. For now, the four rows above and the tree method cover most of what you
+      will see.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "fib", "n": 6}'></div>
+    <div class="runnable" data-title="Counting calls in naive Fibonacci">
+<textarea>
+calls = 0
+
+def fib(n):
+    global calls
+    calls += 1
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+
+for n in range(5, 26, 5):
+    calls = 0
+    fib(n)
+    print(f"fib({n:2}) made {calls:>7,} calls")
+</textarea>
+    </div>
+    <p>Each step of 5 multiplies the calls by about 11 (that is φ⁵, where φ ≈ 1.618 is the golden ratio). The exact class
+      is Θ(φⁿ), which is exponential. Memoisation, covered in <a href="m32-dynamic-programming.html">M32</a>, cuts it to O(n).</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> look for hidden loops in built-ins. For recursion, write the
+      recurrence, then unroll it or draw the tree: levels × work per level.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="cases">
+    <h2>Best, worst, and average case</h2>
+    <p>The same algorithm can cost very different amounts on different inputs of the same size. Consider linear search:</p>
+    <pre><code class="language-python">def find(items, target):
+    for i, x in enumerate(items):
+        if x == target:
+            return i
+    return -1</code></pre>
+    <ul>
+      <li><strong>Best case:</strong> the target is first. One comparison: Θ(1).</li>
+      <li><strong>Worst case:</strong> the target is last or missing. <em>n</em> comparisons: Θ(n).</li>
+      <li><strong>Average case:</strong> if the target is present and equally likely to be anywhere, the expected number of
+        comparisons is (1 + 2 + … + <em>n</em>)/<em>n</em> = (<em>n</em>+1)/2: still Θ(n).</li>
+    </ul>
+    <p>Best case is rarely useful (every algorithm is fast on some lucky input). <strong>Worst case</strong> is the default
+      when someone quotes a Big-O without qualification, because it is a guarantee. <strong>Average case</strong> matters
+      when worst cases are rare, and it always needs an assumption about the input distribution.</p>
+    <aside class="callout note" data-title="Case is not the same as bound"><p>Beginners often mix these up: "O is the worst
+      case, Ω is the best case." Not so. Case analysis picks <em>which inputs</em>; O/Ω/Θ describe <em>how a function
+      grows</em>. You can say "the worst case of linear search is Θ(n)" and "the best case is Θ(1)": both are tight bounds
+      on different functions.</p></aside>
+    <p>Hash tables are the classic example where the cases diverge sharply: a <code>dict</code> lookup is O(1) on average but
+      O(n) in the pathological worst case where every key collides. You will see why in <a href="m23-hash-tables.html">M23</a>.
+      Quicksort is another: O(n log n) on average, O(n²) in the worst case.</p>
+    <div class="viz" data-viz="binary-search" data-config='{"array": [2, 5, 8, 12, 16, 23, 38, 56, 72, 91], "target": 72}'></div>
+    <aside class="callout tip"><p><strong>Remember:</strong> unqualified Big-O usually means worst case. State your
+      assumptions when you quote an average case.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="amortized">
+    <h2>Amortized analysis</h2>
+    <p>Python's <code>list.append</code> is usually described as O(1). But a list is a contiguous block of memory, and when
+      that block is full, appending means allocating a bigger block and copying every element across: O(n). How can both
+      be true?</p>
+    <p>The answer is <strong>amortized</strong> cost: the total cost of a long sequence of operations, divided by the number
+      of operations. Occasional expensive steps are fine if they are rare enough that their cost, spread over the cheap
+      steps around them, stays constant per operation.</p>
+
+    <h3>The doubling argument</h3>
+    <p>Suppose the capacity doubles whenever it fills: 1, 2, 4, 8, 16, … To append <em>n</em> items we copy 1 item, then 2,
+      then 4, … up to at most <em>n</em>. The total copying is 1 + 2 + 4 + … + <em>n</em> &lt; 2<em>n</em> (a geometric series
+      where each term is bigger than all previous terms combined). Add the <em>n</em> writes themselves and the whole
+      sequence costs under 3<em>n</em>. Divided by <em>n</em> appends: fewer than 3 operations each. <strong>Amortized O(1).</strong></p>
+    <p>The key is <em>multiplicative</em> growth. If the list instead grew by a fixed 10 slots each time, the copies would be
+      10 + 20 + 30 + … ≈ n²/20: amortized O(n) per append. CPython grows by roughly 1.125× plus a small constant; any factor
+      greater than 1 gives amortized O(1), and a smaller factor trades a little more copying for less wasted memory.</p>
+    <p>Try both growth factors in the visualizer and watch the "total copies ÷ appends" ratio settle near a constant:</p>
+    <div class="viz" data-viz="dynamic-array" data-config='{"growth": 2}'></div>
+    <div class="viz" data-viz="dynamic-array" data-config='{"growth": 1.125}'></div>
+
+    <div class="runnable" data-title="Watch CPython over-allocate">
+<textarea>
+import sys
+
+items = []
+last = sys.getsizeof(items)
+print(f"len=0  bytes={last}")
+for i in range(40):
+    items.append(i)
+    size = sys.getsizeof(items)
+    if size != last:
+        print(f"len={len(items):2}  bytes={size}  (grew)")
+        last = size
+</textarea>
+    </div>
+    <p>The size only jumps occasionally: those are the reallocations. Between them, appends write into pre-reserved slots.
+      You will build this mechanism yourself in <a href="m20-arrays.html">M20</a>.</p>
+    <aside class="callout warn"><p>Amortized is not the same as average-case. Average-case depends on a probability
+      assumption about inputs. Amortized is a <em>guarantee</em> about any sequence of operations: no matter what you do,
+      <em>n</em> appends cost O(n) total. Individual appends can still be slow, which matters in real-time systems.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> amortized cost = total cost of a sequence ÷ number of
+      operations. Geometric growth makes resizing amortized O(1).</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="space">
+    <h2>Space complexity</h2>
+    <p>Memory is a resource too. <strong>Space complexity</strong> measures how much <em>extra</em> memory an algorithm needs
+      as a function of <em>n</em>, usually excluding the input itself (called <strong>auxiliary space</strong>).</p>
+    <ul>
+      <li><code>sum(nums)</code> keeps one running total: O(1) extra space.</li>
+      <li><code>sorted(nums)</code> builds a new list: O(n) extra space. <code>nums.sort()</code> sorts in place, but Timsort
+        still uses up to O(n) temporary space for merging.</li>
+      <li>A recursive function with depth <em>d</em> uses O(d) stack space, one frame per active call. Python's default
+        recursion limit (about 1000 frames) is there to protect the C stack.</li>
+      <li>Building a set of seen items to detect duplicates is O(n) space: we bought O(n) time by spending O(n) memory.</li>
+    </ul>
+    <p>That last point is the most common trade-off in all of data structures: <strong>spend memory to save time</strong>.
+      Caches, indexes, hash tables, and memoisation are all versions of it.</p>
+    <div class="runnable" data-title="Lazy vs eager: space in action">
+<textarea>
+import sys
+
+eager = [x * x for x in range(1_000_000)]   # materialises a million results
+lazy = (x * x for x in range(1_000_000))    # generator: one at a time
+
+print("list object:", sys.getsizeof(eager), "bytes (pointers only!)")
+print("generator:  ", sys.getsizeof(lazy), "bytes")
+print("same sums:  ", sum(eager) == sum(lazy))
+</textarea>
+    </div>
+    <p><code>sys.getsizeof</code> on a list reports only the pointer array, not the integers it points to, so the true
+      footprint is even larger. The generator from <a href="m14-iterators.html">M14</a> uses O(1) space no matter how large the range.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> analyse extra memory the same way you analyse time. Recursion
+      depth costs stack space. Trading space for time is usually, but not always, a good deal.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="measuring">
+    <h2>Measuring: timeit, perf_counter, and plots</h2>
+    <p>Analysis predicts; measurement verifies. Python gives you two main tools.</p>
+    <h3><code>time.perf_counter()</code></h3>
+    <p>A high-resolution, monotonic clock (it never jumps backwards when the system clock is adjusted). Call it before and
+      after the code, subtract. Good for timing larger chunks of work once.</p>
+    <h3><code>timeit</code></h3>
+    <p>For small snippets, a single measurement is dominated by noise. <code>timeit</code> runs the code many times, turns
+      off garbage collection during timing, and reports the total. <code>timeit.repeat</code> does that several times so you
+      can take the <strong>minimum</strong>, which is the run least disturbed by other processes.</p>
+    <div class="runnable" data-title="timeit: list vs set membership">
+<textarea>
+import timeit
+
+for n in [1_000, 10_000, 100_000]:
+    setup = f"data_list = list(range({n})); data_set = set(data_list); target = {n - 1}"
+    t_list = min(timeit.repeat("target in data_list", setup=setup, number=200, repeat=3))
+    t_set = min(timeit.repeat("target in data_set", setup=setup, number=200, repeat=3))
+    print(f"n={n:>7}: list {t_list / 200 * 1e6:9.2f} µs   set {t_set / 200 * 1e6:6.3f} µs")
+</textarea>
+    </div>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -m timeit -s "d = list(range(10_000))" "9_999 in d"
+pixi run python -m timeit -s "d = set(range(10_000))" "9_999 in d"</code></pre>
+
+    <h3>Plotting growth</h3>
+    <p>The most convincing evidence is a plot of time against <em>n</em>. Even better is a <strong>log-log plot</strong>: if
+      <em>t</em> ≈ <em>c</em>·<em>n</em><sup><em>k</em></sup>, then log <em>t</em> = log <em>c</em> + <em>k</em>·log <em>n</em>, a
+      straight line whose <strong>slope is the exponent <em>k</em></strong>. Slope 1 means linear, slope 2 means quadratic.</p>
+    <div class="runnable" data-title="Plot the timings (log-log)">
+<textarea>
+import time
+import math
+import matplotlib.pyplot as plt
+
+def linear(n):
+    return sum(range(n))
+
+def quadratic(n):
+    total = 0
+    for i in range(n):
+        for j in range(n):
+            total += 1
+    return total
+
+def best_time(fn, n, repeats=3):
+    best = float("inf")
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        fn(n)
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+sizes = [50, 100, 200, 400, 800]
+results = {}
+for fn in (linear, quadratic):
+    results[fn.__name__] = [best_time(fn, n) for n in sizes]
+
+fig, ax = plt.subplots(figsize=(6, 4))
+for name, times in results.items():
+    ax.loglog(sizes, times, "o-", label=name)
+    slope = math.log(times[-1] / times[0]) / math.log(sizes[-1] / sizes[0])
+    print(f"{name:10} slope ≈ {slope:.2f}")
+ax.set_xlabel("n")
+ax.set_ylabel("seconds (best of 3)")
+ax.set_title("Log-log: slope = exponent")
+ax.legend()
+</textarea>
+    </div>
+    <aside class="callout pro" data-title="Benchmarking hygiene"><p>Professionals repeat measurements and take the minimum
+      (or median), warm up first, keep inputs realistic, and never benchmark with a debugger or tracer attached. Tiny
+      <em>n</em> measures overhead, not growth; use sizes spanning at least a factor of 10. For serious work, profile first
+      to find where time actually goes; <a href="m39-performance.html">M39</a> covers <code>cProfile</code> and sampling profilers.</p></aside>
+    <aside class="callout py315"><p>Python 3.15 adds a <code>profiling</code> package (PEP 799) with
+      <code>profiling.tracing</code> (the cProfile tracer) and <code>profiling.sampling</code>, a low-overhead sampling
+      profiler that can render flame graphs. Sampling is ideal for finding the hot loop that makes your code quadratic.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Preview: the 3.15 sampling profiler">
+<textarea>
+# Save as hot.py and run locally:
+#   pixi exec --spec "python=3.15" python -m profiling.sampling run --flamegraph hot.py
+def slow_unique(items):
+    out = []
+    for x in items:
+        if x not in out:
+            out.append(x)
+    return out
+
+slow_unique(list(range(20_000)))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> use <code>timeit</code> for micro-benchmarks and
+      <code>perf_counter</code> for larger runs. Take the minimum of repeats. On a log-log plot, the slope is the exponent.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="builtin-costs">
+    <h2>What Python's built-ins cost</h2>
+    <p>Knowing these by heart is one of the highest-value things in this module. Here, <em>n</em> is the container size and
+      <em>k</em> the size of the argument or slice. "Avg" means average case for hash-based structures.</p>
+    <div class="tabs">
+      <div class="tab" data-label="list">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><code>a[i]</code>, <code>a[i] = x</code>, <code>len(a)</code></td><td>O(1)</td><td>address arithmetic; length is stored</td></tr>
+            <tr><td><code>a.append(x)</code>, <code>a.pop()</code></td><td>O(1) amortized</td><td>work at the end only</td></tr>
+            <tr><td><code>a.insert(i, x)</code>, <code>a.pop(i)</code></td><td>O(n − i)</td><td>shift everything after <code>i</code></td></tr>
+            <tr><td><code>a.insert(0, x)</code>, <code>a.pop(0)</code></td><td>O(n)</td><td>shift everything</td></tr>
+            <tr><td><code>x in a</code>, <code>a.index(x)</code>, <code>a.count(x)</code>, <code>a.remove(x)</code></td><td>O(n)</td><td>linear scan</td></tr>
+            <tr><td><code>a[i:j]</code></td><td>O(k) where k = j − i</td><td>copies k pointers</td></tr>
+            <tr><td><code>a + b</code>, <code>a.copy()</code>, <code>list(a)</code></td><td>O(n) / O(n + m)</td><td>copies</td></tr>
+            <tr><td><code>a.extend(b)</code></td><td>O(k) amortized</td><td>appends k items</td></tr>
+            <tr><td><code>a.sort()</code>, <code>sorted(a)</code></td><td>O(n log n)</td><td>Timsort; O(n) on already-sorted runs</td></tr>
+            <tr><td><code>a.reverse()</code>, <code>min(a)</code>, <code>sum(a)</code></td><td>O(n)</td><td>touch every item</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="dict">
+        <table>
+          <thead><tr><th>Operation</th><th>Avg</th><th>Worst</th></tr></thead>
+          <tbody>
+            <tr><td><code>d[k]</code>, <code>d[k] = v</code>, <code>del d[k]</code>, <code>k in d</code>, <code>d.get(k)</code></td><td>O(1)</td><td>O(n)</td></tr>
+            <tr><td><code>len(d)</code></td><td>O(1)</td><td>O(1)</td></tr>
+            <tr><td>iterate <code>d</code>, <code>d.keys()</code>, <code>d.items()</code></td><td>O(n)</td><td>O(n)</td></tr>
+            <tr><td><code>d.copy()</code>, <code>d | other</code></td><td>O(n)</td><td>O(n)</td></tr>
+            <tr><td><code>d.popitem()</code></td><td>O(1)</td><td>O(1) amortized</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="set">
+        <table>
+          <thead><tr><th>Operation</th><th>Avg</th></tr></thead>
+          <tbody>
+            <tr><td><code>x in s</code>, <code>s.add(x)</code>, <code>s.discard(x)</code></td><td>O(1)</td></tr>
+            <tr><td><code>s | t</code> (union)</td><td>O(len(s) + len(t))</td></tr>
+            <tr><td><code>s &amp; t</code> (intersection)</td><td>O(min(len(s), len(t)))</td></tr>
+            <tr><td><code>s - t</code> (difference)</td><td>O(len(s))</td></tr>
+            <tr><td><code>set(iterable)</code></td><td>O(n)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tab" data-label="str &amp; others">
+        <table>
+          <thead><tr><th>Operation</th><th>Cost</th></tr></thead>
+          <tbody>
+            <tr><td><code>s[i]</code>, <code>len(s)</code></td><td>O(1)</td></tr>
+            <tr><td><code>sub in s</code>, <code>s.find(sub)</code></td><td>O(n) typical (fast search), up to O(n·m)</td></tr>
+            <tr><td><code>"".join(parts)</code></td><td>O(total length)</td></tr>
+            <tr><td><code>s += t</code> in a loop</td><td>O(n²) in general (strings are immutable)</td></tr>
+            <tr><td><code>deque.append/appendleft/pop/popleft</code></td><td>O(1)</td></tr>
+            <tr><td><code>heapq.heappush/heappop</code></td><td>O(log n)</td></tr>
+            <tr><td><code>bisect.bisect</code> on a sorted list</td><td>O(log n) search (insort is O(n) because of the shift)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p>A printable version lives in the <a href="../reference/complexity-cheatsheet.html">complexity cheatsheet</a>, and the
+      official source is the Python wiki's <a href="https://wiki.python.org/moin/TimeComplexity">TimeComplexity</a> page.</p>
+    <div class="runnable" data-title="pop(0) vs deque.popleft()">
+<textarea>
+import time
+from collections import deque
+
+for n in [10_000, 20_000, 40_000]:
+    a = list(range(n))
+    t0 = time.perf_counter()
+    while a:
+        a.pop(0)              # shifts the rest left every time
+    t1 = time.perf_counter()
+    d = deque(range(n))
+    while d:
+        d.popleft()           # O(1)
+    t2 = time.perf_counter()
+    print(f"n={n:6}  list.pop(0): {t1 - t0:.4f}s   deque.popleft(): {t2 - t1:.4f}s")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>CPython has a special trick that sometimes makes <code>s += t</code> in a loop fast (it
+      resizes the string in place when nothing else references it). Do not rely on it: it is an implementation detail,
+      other Pythons do not do it, and it silently breaks if another name refers to the string. Use
+      <code>"".join(...)</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> lists are fast at the end and slow at the front and for
+      searching. Dicts and sets give O(1) average lookups. Watch for <code>in</code> on lists inside loops.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="beyond-big-o">
+    <h2>Big-O isn't everything</h2>
+    <p>Big-O deliberately throws information away. Sometimes that information is what decides real performance.</p>
+    <ul>
+      <li><strong>Constants matter at realistic sizes.</strong> An O(n) Python loop can lose to an O(n log n) call to
+        <code>sorted()</code>, which runs in C, for all <em>n</em> you will ever see. Insertion sort (O(n²)) beats merge sort
+        for tiny arrays, which is why Timsort uses it for short runs.</li>
+      <li><strong>Memory locality and caches.</strong> Modern CPUs fetch memory in cache lines (typically 64 bytes) and are
+        much faster at reading contiguous memory than at chasing pointers scattered around the heap. Arrays exploit this;
+        linked lists fight it. Two O(n) traversals can differ by 10× because of caching. You will see this in
+        <a href="m21-linked-lists.html">M21</a>.</li>
+      <li><strong>Small n.</strong> If <em>n</em> is always under 50, the simplest correct code usually wins. Optimise what you
+        measure, not what you fear.</li>
+      <li><strong>Worst cases can be attacked.</strong> If an attacker controls your input, average-case guarantees can be
+        weaponised; this is why Python randomises string hashing (see <a href="m23-hash-tables.html">M23</a>).</li>
+      <li><strong>Interpreter overhead.</strong> In CPython every bytecode instruction has overhead. Pushing a loop into a
+        built-in (<code>sum</code>, <code>max</code>, comprehensions, <code>str.join</code>) or into NumPy is often a big
+        constant-factor win without changing the class.</li>
+    </ul>
+    <div class="runnable" data-title="Same class, different constants">
+<textarea>
+import timeit
+
+setup = "data = list(range(100_000))"
+loop = """
+total = 0
+for x in data:
+    total += x
+"""
+print("Python loop:", min(timeit.repeat(loop, setup=setup, number=20, repeat=3)))
+print("sum():      ", min(timeit.repeat("sum(data)", setup=setup, number=20, repeat=3)))
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14's tail-call interpreter (on supported compilers) and the experimental JIT
+      shave constant factors off bytecode execution. They make good code faster; they never turn an O(n²) algorithm into
+      an O(n) one. Choosing the right data structure is still your job.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> Big-O picks the algorithm; measurement picks between
+      algorithms in the same class. Locality, constants, and input size all matter in practice.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m19-e1" data-title="Count the triangle">
+      <div class="exercise-prompt">
+        <p>Write <code>count_steps(n)</code> that <strong>actually runs</strong> the nested loop below and returns how many
+          times the innermost line executes. Then write <code>formula(n)</code> that returns the same number in O(1) using a
+          closed-form expression.</p>
+        <pre><code class="language-python">for i in range(n):
+    for j in range(i):
+        ...  # count this</code></pre>
+      </div>
+<textarea class="starter">
+def count_steps(n):
+    ...
+
+def formula(n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_small_values():
+    for n, expected in [(0, 0), (1, 0), (2, 1), (3, 3), (5, 10)]:
+        assert count_steps(n) == expected, f"count_steps({n}) should be {expected}"
+
+def test_formula_matches_loop():
+    for n in range(0, 60):
+        assert formula(n) == count_steps(n), f"formula({n}) should equal count_steps({n})"
+
+def test_formula_is_integer_and_fast():
+    assert formula(10**9) == 10**9 * (10**9 - 1) // 2, "formula must be exact for huge n (use integer arithmetic)"
+    assert isinstance(formula(10), int), "formula should return an int (use // not /)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The inner loop runs 0, 1, 2, …, n−1 times. That sum is the
+        triangular number n(n−1)/2. Use <code>//</code> so the result stays an <code>int</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def count_steps(n):
+    count = 0
+    for i in range(n):
+        for j in range(i):
+            count += 1
+    return count
+
+def formula(n):
+    return n * (n - 1) // 2</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m19-e2" data-title="Count the halvings">
+      <div class="exercise-prompt">
+        <p>Write <code>halvings(n)</code> that returns how many times you can integer-halve a positive integer
+          <code>n</code> (<code>n = n // 2</code>) before it becomes 1. So <code>halvings(1) == 0</code>,
+          <code>halvings(8) == 3</code>, <code>halvings(9) == 3</code>. This is ⌊log₂ n⌋. Use a loop (do not import
+          <code>math</code>).</p>
+      </div>
+<textarea class="starter">
+def halvings(n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert halvings(1) == 0, "halvings(1) should be 0"
+    assert halvings(2) == 1, "halvings(2) should be 1"
+    assert halvings(8) == 3, "halvings(8) should be 3"
+    assert halvings(9) == 3, "halvings(9) should be 3"
+
+def test_matches_bit_length():
+    for n in range(1, 5000):
+        assert halvings(n) == n.bit_length() - 1, f"halvings({n}) should be {n.bit_length() - 1}"
+
+def test_huge_is_fast():
+    assert halvings(10**30) == (10**30).bit_length() - 1, "should handle 10**30 in about 100 steps"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>while n &gt; 1: n //= 2; count += 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def halvings(n):
+    count = 0
+    while n &gt; 1:
+        n //= 2
+        count += 1
+    return count</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m19-e3" data-title="From O(n²) to O(n)">
+      <div class="exercise-prompt">
+        <p>The function below removes duplicates while keeping first-seen order, but it is O(n²) because
+          <code>x not in out</code> scans a list. Rewrite <code>unique_in_order(items)</code> to be O(n) on average. The
+          tests include a 40,000-item list that must finish in under a second.</p>
+        <pre><code class="language-python">def unique_in_order(items):
+    out = []
+    for x in items:
+        if x not in out:
+            out.append(x)
+    return out</code></pre>
+      </div>
+<textarea class="starter">
+def unique_in_order(items):
+    out = []
+    for x in items:
+        if x not in out:
+            out.append(x)
+    return out
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_keeps_order():
+    assert unique_in_order([3, 1, 3, 2, 1]) == [3, 1, 2], "keep the first occurrence of each value, in order"
+    assert unique_in_order([]) == [], "empty in, empty out"
+    assert unique_in_order(["b", "a", "b"]) == ["b", "a"], "works with strings too"
+
+def test_is_fast():
+    data = list(range(40_000))
+    t0 = time.perf_counter()
+    result = unique_in_order(data)
+    elapsed = time.perf_counter() - t0
+    assert result == data, "all distinct items should be kept"
+    assert elapsed < 1.0, f"took {elapsed:.2f}s; use a set for O(1) membership checks"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a <code>set</code> called <code>seen</code> alongside the output list.
+        Check and add to the set; append to the list. (<code>list(dict.fromkeys(items))</code> also works. Why?)</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def unique_in_order(items):
+    seen = set()
+    out = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m19-e4" data-title="Simulate amortized growth">
+      <div class="exercise-prompt">
+        <p>Write <code>copies_for(n, growth)</code> that simulates appending <code>n</code> items to a dynamic array with
+          initial capacity 1. When an append finds the array full (size equals capacity), the array is resized to
+          <code>max(capacity + 1, int(capacity * growth))</code> and all current items are copied (count <code>size</code>
+          copies). Return the total number of copies.</p>
+        <p>For <code>growth=2</code>: <code>copies_for(1, 2) == 0</code>, <code>copies_for(2, 2) == 1</code>,
+          <code>copies_for(5, 2) == 7</code> (1 + 2 + 4).</p>
+      </div>
+<textarea class="starter">
+def copies_for(n, growth):
+    capacity = 1
+    size = 0
+    copies = 0
+    ...
+    return copies
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_doubling_examples():
+    assert copies_for(0, 2) == 0, "no appends, no copies"
+    assert copies_for(1, 2) == 0, "first item fits in capacity 1"
+    assert copies_for(2, 2) == 1, "second append copies 1 item"
+    assert copies_for(5, 2) == 7, "copies 1 + 2 + 4 = 7"
+    assert copies_for(9, 2) == 15, "copies 1 + 2 + 4 + 8 = 15"
+
+def test_doubling_is_amortized_constant():
+    for n in [100, 1000, 100_000]:
+        assert copies_for(n, 2) < 2 * n, f"doubling should copy fewer than 2n items (n={n})"
+
+def test_growth_one_is_quadratic():
+    assert copies_for(100, 1) == 4950, "growing by 1 slot copies 0+1+...+99 = 4950 items"
+
+def test_small_factor_still_linear():
+    ratio = copies_for(200_000, 1.125) / 200_000
+    assert ratio < 12, f"1.125x growth should still be amortized O(1); got {ratio:.1f} copies per append"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop <code>n</code> times. Inside: if <code>size == capacity</code>,
+        add <code>size</code> to <code>copies</code> and grow the capacity. Then <code>size += 1</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def copies_for(n, growth):
+    capacity = 1
+    size = 0
+    copies = 0
+    for _ in range(n):
+        if size == capacity:
+            copies += size
+            capacity = max(capacity + 1, int(capacity * growth))
+        size += 1
+    return copies</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m19-e5" data-title="Guess the class from timings">
+      <div class="exercise-prompt">
+        <p>Write <code>guess_class(sizes, times)</code>. Given increasing input sizes and the measured times, estimate the
+          log-log slope between the first and last points:
+          <code>k = log(times[-1] / times[0]) / log(sizes[-1] / sizes[0])</code>, then return the nearest of
+          <code>"O(1)"</code> (k≈0), <code>"O(n)"</code> (k≈1), <code>"O(n^2)"</code> (k≈2), or <code>"O(n^3)"</code> (k≈3).
+          Round <code>k</code> to the nearest integer and clamp it to 0..3.</p>
+      </div>
+<textarea class="starter">
+import math
+
+def guess_class(sizes, times):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_linear():
+    assert guess_class([100, 200, 400, 800], [1.0, 2.1, 3.9, 8.2]) == "O(n)", "times double as n doubles: linear"
+
+def test_quadratic():
+    assert guess_class([100, 200, 400], [1.0, 4.2, 15.8]) == "O(n^2)", "times x4 per doubling: quadratic"
+
+def test_constant():
+    assert guess_class([10, 1000, 100000], [0.5, 0.52, 0.49]) == "O(1)", "flat timings: constant"
+
+def test_cubic_and_clamp():
+    assert guess_class([10, 20], [1.0, 8.0]) == "O(n^3)", "x8 per doubling: cubic"
+    assert guess_class([10, 20], [1.0, 64.0]) == "O(n^3)", "anything steeper clamps to O(n^3)"
+    assert guess_class([10, 20], [1.0, 0.4]) == "O(1)", "negative slopes clamp to O(1)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute <code>k</code>, then <code>k = max(0, min(3, round(k)))</code>,
+        and index into a list of labels.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def guess_class(sizes, times):
+    k = math.log(times[-1] / times[0]) / math.log(sizes[-1] / sizes[0])
+    k = max(0, min(3, round(k)))
+    return ["O(1)", "O(n)", "O(n^2)", "O(n^3)"][k]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: an empirical complexity lab</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">complexity_lab.py</span></div>
+      <div class="widget-body">
+        <p>Build a small command-line tool that times functions over growing input sizes, estimates each one's complexity
+          class from the log-log slope, and saves a plot. It is the tool you will reach for whenever you are not sure
+          whether some code is linear or quadratic.</p>
+        <h4>Set up</h4>
+        <pre data-label="Terminal"><code class="language-bash">pixi init complexity-lab
+cd complexity-lab
+pixi add python=3.14 matplotlib
+pixi run python complexity_lab.py</code></pre>
+        <h4>Spec</h4>
+        <ul>
+          <li>A function <code>measure(fn, make_input, sizes, repeats=5) -&gt; list[float]</code> that, for each size, builds
+            a fresh input with <code>make_input(n)</code> (outside the timed region), times <code>fn(input)</code> with
+            <code>time.perf_counter</code>, and keeps the minimum of <code>repeats</code> runs.</li>
+          <li>A function <code>fit_slope(sizes, times) -&gt; float</code> that computes the least-squares slope of
+            <code>log(time)</code> against <code>log(n)</code> using all points, not just the endpoints.</li>
+          <li>A function <code>classify(sizes, times) -&gt; str</code> that maps the slope to O(1), O(log n), O(n),
+            O(n log n), O(n^2), or O(n^3). Hint: log n and n log n have slopes slightly above 0 and 1; compare the fit
+            against <code>log n</code> and <code>n log n</code> curves directly by checking how constant
+            <code>time / g(n)</code> stays.</li>
+          <li>Benchmark at least six candidates: <code>len</code>, binary search via <code>bisect</code>, <code>sum</code>,
+            <code>sorted</code> on shuffled data, the O(n²) pairwise duplicate check, and <code>x in list</code> repeated
+            <em>n</em> times.</li>
+          <li>Print a table (name, slope, guessed class) and save <code>complexity.png</code> with all curves on log-log axes.</li>
+        </ul>
+        <ul class="checklist" data-id="m19-mini">
+          <li>The project runs with <code>pixi run python complexity_lab.py</code> and finishes in under a minute</li>
+          <li>Input construction is excluded from timings, and each point is the minimum of several repeats</li>
+          <li><code>fit_slope</code> uses least squares over all points</li>
+          <li>The linear, quadratic, and constant candidates are classified correctly</li>
+          <li><code>sorted</code> and <code>bisect</code> are distinguished from <code>sum</code> and <code>len</code></li>
+          <li><code>complexity.png</code> is saved with labelled axes and a legend</li>
+          <li>Functions have type hints and docstrings</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a <code>pixi run lab</code> task in <code>pixi.toml</code>.</li>
+          <li>Measure memory as well as time using <code>tracemalloc.get_traced_memory()</code> and classify space complexity.</li>
+          <li>Choose sizes adaptively: keep doubling <em>n</em> until a run takes over 0.2 s.</li>
+          <li>Report a confidence: how well does the best model fit (R² of the regression)?</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m19-quiz">
+<script type="application/json">
+{"title": "Complexity & Big-O quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which is the tightest correct description of <code>4n² + 100n + 7</code>?", "options": ["O(n)", "Θ(n²)", "Θ(n² + n)", "O(100n)"], "answer": 1, "explanation": "<p>A polynomial is Θ of its highest-degree term with the constant dropped. Θ(n² + n) is not wrong but is not simplified; the n term is dominated.</p>"},
+  {"type": "single", "prompt": "Roughly how many halvings take 1,000,000 down to 1?", "options": ["10", "20", "1,000", "500,000"], "answer": 1, "explanation": "<p>2²⁰ ≈ 1,048,576, so log₂ 10⁶ ≈ 20. Doubling n adds only one step, which is why binary search is so fast.</p>"},
+  {"type": "single", "prompt": "What is the complexity of this function?", "code": "def f(items):\n    out = []\n    for x in items:\n        if x not in out:\n            out.append(x)\n    return out", "options": ["O(n)", "O(n log n)", "O(n²)", "O(1)"], "answer": 2, "explanation": "<p><code>x not in out</code> scans a list that can grow to n items, inside a loop of n iterations: O(n²) in the worst case (all distinct). Using a set makes it O(n).</p>"},
+  {"type": "multi", "prompt": "Which <code>list</code> operations are O(n) in the worst case?", "options": ["<code>a.append(x)</code> (single call)", "<code>a.pop(0)</code>", "<code>a[i]</code>", "<code>x in a</code>", "<code>a.insert(0, x)</code>"], "answer": [0, 1, 3, 4], "explanation": "<p>A single append can trigger a resize that copies all n items (it is O(1) <em>amortized</em>, but O(n) worst case for one call). Popping or inserting at the front shifts every element, and membership is a linear scan. Indexing is always O(1).</p>"},
+  {"type": "single", "prompt": "What does amortized O(1) for <code>list.append</code> guarantee?", "options": ["Every single append takes constant time", "Appends are O(1) on random inputs", "Any sequence of n appends takes O(n) total time", "Appends never allocate memory"], "answer": 2, "explanation": "<p>Amortized analysis bounds the total cost of a sequence of operations. Individual appends occasionally cost O(n) for a resize, but geometric growth spreads that cost so n appends cost O(n) overall. It needs no probability assumption, unlike average case.</p>"},
+  {"type": "single", "prompt": "Solve the recurrence T(n) = 2T(n/2) + O(n).", "options": ["O(n)", "O(log n)", "O(n log n)", "O(n²)"], "answer": 2, "explanation": "<p>Draw the recursion tree: log₂ n levels, each level does n total work. Levels × work per level = n log n. This is merge sort.</p>"},
+  {"type": "single", "prompt": "Solve the recurrence T(n) = T(n/2) + O(1).", "options": ["O(1)", "O(log n)", "O(n)", "O(n log n)"], "answer": 1, "explanation": "<p>Each level does constant work and there are log₂ n levels before the size reaches 1. This is binary search.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "count = 0\nfor i in range(5):\n    for j in range(i, 5):\n        count += 1\nprint(count)", "answer": "15", "explanation": "<p>The inner loop runs 5, 4, 3, 2, 1 times: 15 = 5·6/2. It is the triangular number, so the loop is Θ(n²).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "n = 64\nsteps = 0\nwhile n > 1:\n    n //= 2\n    steps += 1\nprint(steps)", "answer": "6", "explanation": "<p>64 → 32 → 16 → 8 → 4 → 2 → 1 is six halvings: log₂ 64 = 6.</p>"},
+  {"type": "single", "prompt": "On a log-log plot of time against n, an algorithm's points lie on a line of slope 2. What class is it?", "options": ["O(log n)", "O(n)", "O(n²)", "O(2ⁿ)"], "answer": 2, "explanation": "<p>If t ≈ c·nᵏ then log t = log c + k·log n: a straight line with slope k. Slope 2 means quadratic. Exponential growth would curve upward on a log-log plot.</p>"},
+  {"type": "multi", "prompt": "Which are good benchmarking practices?", "options": ["Take the minimum of several repeats", "Include input construction in the timed region", "Use sizes spanning at least a factor of 10", "Benchmark with a debugger attached for accuracy", "Use <code>timeit</code> for tiny snippets"], "answer": [0, 2, 4], "explanation": "<p>The minimum is the run least disturbed by noise; a wide range of sizes reveals growth rather than overhead; <code>timeit</code> repeats small snippets and disables GC during timing. Build inputs outside the timed region, and never benchmark under a debugger or tracer.</p>"},
+  {"type": "single", "prompt": "You loop over a list of m words and check each with <code>word in text</code>, where text has length n. What is the cost?", "options": ["O(n)", "O(m)", "O(m·n) in the worst case", "O(m + n)"], "answer": 2, "explanation": "<p>Substring search is O(n) or worse per check, done m times. Keep separate letters for separate inputs; collapsing them into one n hides the real cost.</p>"},
+  {"type": "text", "prompt": "Which function from the <code>time</code> module is the high-resolution monotonic clock recommended for timing code?", "answer": ["perf_counter", "time.perf_counter", "perf_counter()", "time.perf_counter()"], "explanation": "<p><code>time.perf_counter()</code> has the highest available resolution and never goes backwards, unlike <code>time.time()</code>, which follows the wall clock.</p>"},
+  {"type": "single", "prompt": "Why can an O(n) linked-list traversal be much slower than an O(n) array traversal?", "options": ["Linked lists are O(n²)", "Pointer chasing defeats CPU caches; arrays are contiguous", "Python can't iterate linked lists", "Big-O is wrong about linked lists"], "answer": 1, "explanation": "<p>Both are Θ(n), but contiguous memory lets the CPU load neighbours in the same cache line and prefetch ahead, while scattered nodes cause cache misses. Big-O hides this constant factor.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Complexity describes how cost grows with input size <em>n</em>; timing confirms it and supplies constants.</li>
+      <li>Count basic operations; drop constants and lower-order terms. Sequential costs add, nested costs multiply.</li>
+      <li>O is an upper bound, Ω a lower bound, Θ a tight bound. Everyday "O(n)" usually means Θ(n).</li>
+      <li>1 &lt; log n &lt; n &lt; n log n &lt; n² &lt; n³ &lt; 2ⁿ &lt; n!. A logarithm counts halvings.</li>
+      <li>For recursion, write a recurrence; the tree method (levels × work per level) solves most of them.</li>
+      <li>Worst case is the default. Average case needs an input assumption. Amortized bounds a whole sequence.</li>
+      <li>Space complexity counts extra memory, including recursion depth.</li>
+      <li>Measure with <code>timeit</code> or <code>perf_counter</code>; on a log-log plot, the slope is the exponent.</li>
+      <li>Know the built-in costs: list front operations and <code>in</code> are O(n); dict and set lookups are O(1) average.</li>
+      <li>Big-O is not everything: constants, caches, and small <em>n</em> matter.</li>
+    </ul>
+    <div class="flashcards" data-title="Complexity">
+<script type="application/json">
+[{"front": "Formal definition of f ∈ O(g)", "back": "There exist c &gt; 0 and n₀ with f(n) ≤ c·g(n) for all n ≥ n₀."},
+ {"front": "O vs Ω vs Θ", "back": "Upper bound, lower bound, tight bound (both)."},
+ {"front": "log₂ n in plain words", "back": "How many times you can halve n before reaching 1. Doubling n adds 1."},
+ {"front": "Cost of <code>x in some_list</code>", "back": "O(n): a linear scan."},
+ {"front": "Cost of <code>x in some_set</code>", "back": "O(1) on average (hash lookup); O(n) worst case."},
+ {"front": "Cost of <code>list.pop(0)</code>", "back": "O(n): every remaining element shifts left. Use <code>deque.popleft()</code>."},
+ {"front": "T(n) = 2T(n/2) + O(n)", "back": "O(n log n): log n levels × n work per level (merge sort)."},
+ {"front": "Amortized O(1)", "back": "A sequence of n operations costs O(n) total, even if a few individual operations are expensive."},
+ {"front": "Why geometric growth for dynamic arrays?", "back": "Copies form a geometric series summing to O(n), so append is amortized O(1). Fixed-size growth gives O(n) per append."},
+ {"front": "Slope on a log-log timing plot", "back": "The exponent k in t ≈ c·nᵏ: 1 for linear, 2 for quadratic."},
+ {"front": "timeit best practice", "back": "Use <code>timeit.repeat</code> and take the minimum."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://wiki.python.org/moin/TimeComplexity">Python wiki: TimeComplexity</a> for the costs of built-in operations.</li>
+      <li><a href="https://docs.python.org/3/library/timeit.html">timeit</a> and <a href="https://docs.python.org/3/library/time.html#time.perf_counter">time.perf_counter</a> documentation.</li>
+      <li><a href="../reference/complexity-cheatsheet.html">Complexity cheatsheet</a> in this course.</li>
+      <li>Next: <a href="m20-arrays.html">M20 Arrays &amp; Dynamic Arrays</a>, where you build the dynamic array whose amortized cost you just analysed.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

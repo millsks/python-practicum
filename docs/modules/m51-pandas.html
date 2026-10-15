@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M51 · pandas: Series &amp; DataFrames · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m51">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 51</p>
+    <h1>pandas: Series &amp; DataFrames</h1>
+    <p class="lede">Most real data arrives as tables: exports, logs, spreadsheets, survey results. pandas gives you a
+      labelled, typed table in memory and a vocabulary of fast operations for loading, cleaning, combining, summarizing,
+      and reshaping it. This module teaches that vocabulary well enough that you can take a messy CSV and turn it into
+      trustworthy numbers.</p>
+    <div class="lesson-meta"><span>⏱ ~3.5 hours</span><span>Prerequisites: <a href="m48-numpy.html">M48 NumPy</a>,
+      <a href="m50-scipy.html">M50 SciPy</a> (helpful)</span></div>
+    <ul class="objectives">
+      <li>Explain the pandas data model: Index, Series, DataFrame, dtypes, and index alignment</li>
+      <li>Describe the pandas 3.0 defaults (Copy-on-Write and the <code>str</code> dtype) and write code that respects them</li>
+      <li>Load CSV, JSON, and Parquet with explicit types, then inspect and select data with <code>loc</code>, <code>iloc</code>, masks, and <code>query</code></li>
+      <li>Clean missing values, wrong types, duplicates, and messy strings, and create columns with vectorized operations</li>
+      <li>Summarize with <code>groupby</code> (named aggregations and <code>transform</code>), combine with <code>merge</code>/<code>concat</code>, and reshape with pivot and melt</li>
+      <li>Work with time series: parsing, resampling, rolling windows, and time zones</li>
+      <li>Write readable method chains and know the main performance rules</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="data-model">
+    <h2>The data model: Index, Series, DataFrame</h2>
+    <p>In <a href="m48-numpy.html">M48</a> you met the NumPy <code>ndarray</code>: a block of same-typed values with a
+      shape. It is fast, but its rows and columns are only numbered. Real tables have <em>names</em>: a column called
+      <code>price</code>, a row for order <code>A-1007</code>, a date. pandas adds labels on top of arrays.</p>
+    <ul>
+      <li>An <strong>Index</strong> is an immutable sequence of labels. It is how pandas finds rows (and columns). It
+        can hold strings, integers, dates, or combinations of several levels (a <em>MultiIndex</em>).</li>
+      <li>A <strong>Series</strong> is one column: a one-dimensional array of values <em>plus</em> an Index of row
+        labels, a <strong>dtype</strong> (data type), and an optional name.</li>
+      <li>A <strong>DataFrame</strong> is a table: several Series that share one row Index, stored under a second
+        Index of column labels. Each column has its own dtype, so a DataFrame can mix text, numbers, and dates.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 230" role="img" aria-label="Anatomy of a DataFrame: a column index across the top, a row index down the side, and typed columns that are each a Series">
+        <text x="150" y="18" fill="var(--fg-muted)" font-size="11">columns (an Index of column labels)</text>
+        <g font-size="12" fill="var(--fg)" text-anchor="middle">
+          <rect x="110" y="26" width="110" height="26" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/>
+          <rect x="220" y="26" width="110" height="26" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/>
+          <rect x="330" y="26" width="110" height="26" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/>
+          <text x="165" y="44">product</text><text x="275" y="44">qty</text><text x="385" y="44">date</text>
+        </g>
+        <g font-size="12" fill="var(--fg)" text-anchor="middle">
+          <rect x="20" y="52" width="90" height="26" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/>
+          <rect x="20" y="78" width="90" height="26" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/>
+          <rect x="20" y="104" width="90" height="26" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--border-strong)"/>
+          <text x="65" y="70">A-1001</text><text x="65" y="96">A-1002</text><text x="65" y="122">A-1003</text>
+        </g>
+        <g stroke="var(--border-strong)" fill="var(--bg-elev)">
+          <rect x="110" y="52" width="110" height="78"/><rect x="220" y="52" width="110" height="78"/><rect x="330" y="52" width="110" height="78"/>
+        </g>
+        <rect x="220" y="52" width="110" height="78" fill="none" stroke="var(--viz-3)" stroke-width="3"/>
+        <g font-size="12" fill="var(--fg)" text-anchor="middle">
+          <text x="165" y="70">mug</text><text x="165" y="96">lamp</text><text x="165" y="122">mug</text>
+          <text x="275" y="70">2</text><text x="275" y="96">1</text><text x="275" y="122">5</text>
+          <text x="385" y="70">2025-03-01</text><text x="385" y="96">2025-03-01</text><text x="385" y="122">2025-03-02</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="165" y="148">dtype: str</text><text x="275" y="148">dtype: int64</text><text x="385" y="148">datetime64</text>
+        </g>
+        <text x="20" y="150" fill="var(--fg-muted)" font-size="11">index</text>
+        <text x="20" y="164" fill="var(--fg-muted)" font-size="11">(row labels)</text>
+        <path d="M275 160 L275 185" stroke="var(--viz-3)" stroke-width="1.5"/>
+        <text x="200" y="200" fill="var(--viz-3)" font-size="12">df["qty"] is a Series: values + the same index + a name</text>
+        <text x="200" y="218" fill="var(--fg-muted)" font-size="11">each column is stored as its own typed array</text>
+      </svg>
+      <figcaption>A DataFrame is a dictionary-like collection of Series that share one row index.</figcaption>
+    </figure>
+    <aside class="callout note"><p>The first <code>import pandas</code> in a browser cell downloads pandas and NumPy
+      into the page. Expect it to take several seconds; later cells reuse it. Locally, a Pixi project gets pandas with
+      <code>pixi add pandas</code> and runs scripts with <code>pixi run python analysis.py</code>.</p></aside>
+    <div class="runnable" data-title="Build a Series and a DataFrame">
+<textarea>
+import pandas as pd
+
+print("pandas", pd.__version__)
+
+qty = pd.Series([2, 1, 5], index=["A-1001", "A-1002", "A-1003"], name="qty")
+print(qty)
+print("label lookup:", qty["A-1002"])
+
+df = pd.DataFrame(
+    {
+        "product": ["mug", "lamp", "mug"],
+        "qty": [2, 1, 5],
+        "price": [8.50, 24.00, 8.50],
+    },
+    index=pd.Index(["A-1001", "A-1002", "A-1003"], name="order_id"),
+)
+print(df)
+print(df.dtypes)
+print("shape:", df.shape)
+print(type(df["qty"]))
+</textarea>
+    </div>
+    <h3>Index alignment: the rule that surprises everyone once</h3>
+    <p>When you combine two Series, pandas matches values <strong>by label, not by position</strong>. Labels present
+      in only one operand produce a missing value (<code>NaN</code>, "not a number"). This is the single most important
+      behavior to internalize: it is why <code>df["total"] = df["qty"] * df["price"]</code> is safe even after you sort
+      one of them, and why adding two Series with different indexes silently produces holes.</p>
+    <div class="runnable" data-title="Predict: which labels survive?" data-predict>
+<textarea>
+import pandas as pd
+
+a = pd.Series([1, 2, 3], index=["x", "y", "z"])
+b = pd.Series([10, 20, 30], index=["y", "z", "w"])
+total = a + b
+print(list(total.index), total.isna().sum())
+</textarea>
+    </div>
+    <details class="reveal"><summary>Why that output?</summary>
+      <p>The result index is the sorted <em>union</em> of both indexes: <code>w, x, y, z</code>. Only <code>y</code>
+        and <code>z</code> appear in both, so <code>w</code> and <code>x</code> become <code>NaN</code>. Because
+        <code>NaN</code> is a float, the whole result becomes <code>float64</code>. If you want a default instead of a
+        hole, use the method form: <code>a.add(b, fill_value=0)</code>.</p>
+    </details>
+    <aside class="callout pro"><p>Think of a Series as a <em>dictionary that is also an array</em>. Label lookups
+      (<code>s["x"]</code>, <code>s.loc["x"]</code>) behave like a dict; arithmetic and NumPy functions behave like an
+      array, but aligned on labels first.</p></aside>
+    <p><strong>Remember:</strong> an Index holds labels, a Series is labelled values with one dtype, and a DataFrame is
+      columns of Series sharing a row index. Operations align on labels.</p>
+  </section>
+
+  <section class="lesson-section" id="dtypes">
+    <h2>dtypes and the pandas 3.0 defaults</h2>
+    <p>Every column has a <strong>dtype</strong> that decides how values are stored and which operations are valid.
+      The common ones:</p>
+    <table>
+      <thead><tr><th>dtype</th><th>Holds</th><th>Missing value</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>int64</code></td><td>whole numbers</td><td>none (cannot hold NaN)</td><td>a missing value forces <code>float64</code></td></tr>
+        <tr><td><code>Int64</code> (capital I)</td><td>nullable whole numbers</td><td><code>pd.NA</code></td><td>opt in with <code>dtype="Int64"</code></td></tr>
+        <tr><td><code>float64</code></td><td>real numbers</td><td><code>NaN</code></td><td>the NumPy default</td></tr>
+        <tr><td><code>bool</code> / <code>boolean</code></td><td>True/False</td><td>none / <code>pd.NA</code></td><td>masks are <code>bool</code></td></tr>
+        <tr><td><code>str</code></td><td>text</td><td><code>NaN</code></td><td>the default for text in pandas 3.0</td></tr>
+        <tr><td><code>category</code></td><td>a small set of repeated labels</td><td><code>NaN</code></td><td>stores integer codes plus a lookup table</td></tr>
+        <tr><td><code>datetime64[ns]</code>, <code>datetime64[us]</code></td><td>timestamps</td><td><code>NaT</code></td><td>optionally time-zone aware</td></tr>
+        <tr><td><code>object</code></td><td>arbitrary Python objects</td><td><code>None</code>/<code>NaN</code></td><td>slow; avoid when a real dtype exists</td></tr>
+      </tbody>
+    </table>
+    <h3>The default string dtype</h3>
+    <p>Before pandas 3.0, text columns were stored with the generic <code>object</code> dtype: an array of pointers
+      to arbitrary Python objects, so pandas could not even promise the column contained strings. pandas 3.0 infers a
+      dedicated string dtype for text by default. It prints as <code>str</code> (its full name is
+      <code>StringDtype(na_value=nan)</code>), it uses <code>NaN</code> as its missing-value marker so it behaves like
+      the other default dtypes, and it is backed by PyArrow when PyArrow is installed (falling back to a Python-object
+      implementation when it is not). In practice this means text columns use less memory, string methods are faster,
+      and assigning a non-string into a <code>str</code> column raises an error instead of silently mixing types.</p>
+    <aside class="callout warn"><p>Code that checks <code>df["name"].dtype == object</code> to detect text breaks under
+      pandas 3.0. Use <code>pd.api.types.is_string_dtype(df["name"])</code>, which works on every version.</p></aside>
+    <h3>Copy-on-Write</h3>
+    <p>In pandas 3.0, <strong>Copy-on-Write</strong> (CoW) is always on. The rule is simple: <em>any object you get
+      from indexing or from a method behaves as an independent copy</em>. pandas still shares memory behind the scenes
+      for speed, and only copies at the moment one side is modified. Two consequences:</p>
+    <ul>
+      <li>Modifying a Series you pulled out of a DataFrame never changes the DataFrame.</li>
+      <li><strong>Chained assignment</strong> such as <code>df["qty"][0] = 10</code> or
+        <code>df[df.qty &gt; 1]["price"] = 0</code> never updates <code>df</code>. pandas emits a
+        <code>ChainedAssignmentError</code> warning to tell you. Assign in one step with
+        <code>df.loc[row_selector, "col"] = value</code>, or build a new frame with <code>assign</code>.</li>
+    </ul>
+    <p>This replaced the old, confusing <code>SettingWithCopyWarning</code>, where the answer to "did my change stick?"
+      depended on whether pandas happened to return a view or a copy.</p>
+    <div class="runnable" data-title="Predict (pandas 3 behavior): does the frame change?" data-predict>
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({"x": [1, 2, 3]})
+col = df["x"]
+col.iloc[0] = 99
+print(df["x"].tolist())
+</textarea>
+    </div>
+    <details class="reveal"><summary>Explanation</summary>
+      <p>Under Copy-on-Write, <code>col</code> behaves as its own object. Writing to it triggers a private copy, so
+        <code>df</code> still holds <code>[1, 2, 3]</code>. (On pandas 2.x without CoW enabled, the same code printed
+        <code>[99, 2, 3]</code> because <code>col</code> was a view. If the version printed in the first cell is
+        below 3.0, that is what you will see.)</p>
+    </details>
+    <div class="runnable" data-title="The right way to update values">
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({"name": ["Ada", "Grace", None], "score": [90, 72, 85]})
+print(df.dtypes)
+print("text column?", pd.api.types.is_string_dtype(df["name"]))
+
+# One-step assignment with .loc: row selector and column in the same brackets.
+df.loc[df["score"] < 80, "score"] = 80
+print(df)
+
+# Or build a new frame without touching the old one.
+curved = df.assign(score=df["score"] + 5)
+print(curved["score"].tolist(), df["score"].tolist())
+
+# Nullable integers keep integers even with a missing value.
+counts = pd.Series([1, None, 3], dtype="Int64")
+print(counts, counts.dtype)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> check dtypes early (<code>df.dtypes</code>, <code>df.info()</code>); text is
+      <code>str</code> in pandas 3.0; with Copy-on-Write, update data with a single <code>.loc[...] =</code> or with
+      <code>assign</code>, never with chained brackets.</p>
+  </section>
+
+  <section class="lesson-section" id="io-inspect">
+    <h2>Reading data and first inspection</h2>
+    <p>pandas readers turn files into DataFrames: <code>pd.read_csv</code>, <code>pd.read_json</code>,
+      <code>pd.read_parquet</code>, <code>pd.read_excel</code>, <code>pd.read_sql</code>, and more. Each accepts a path,
+      a URL, or a file-like object such as <code>io.StringIO</code> (which is how this page feeds them data, since the
+      browser has no files).</p>
+    <p><code>read_csv</code> guesses types by default. Guessing is convenient for exploration but dangerous in a
+      pipeline: a ZIP code like <code>02134</code> loses its leading zero as an integer, and one bad value turns a
+      numeric column into text. Production code states its expectations:</p>
+    <pre><code class="language-python">df = pd.read_csv(
+    "orders.csv",
+    usecols=["order_id", "date", "region", "amount"],   # read only what you need
+    dtype={"order_id": "str", "region": "category", "amount": "float64"},
+    parse_dates=["date"],                                # turn text into datetime64
+    na_values=["", "n/a", "-"],                          # extra spellings of "missing"
+)</code></pre>
+    <div class="runnable" data-title="Read a CSV and inspect it">
+<textarea>
+import io
+import pandas as pd
+
+raw = """order_id,date,region,product,qty,unit_price
+A-1001,2025-03-01,North,mug,2,8.50
+A-1002,2025-03-01,south,lamp,1,24.00
+A-1003,2025-03-02,North,mug,5,8.50
+A-1004,2025-03-02,East,notebook,,3.25
+A-1005,2025-03-03,South,lamp,2,24.00
+A-1006,2025-03-03,north,pen,10,1.20
+"""
+df = pd.read_csv(io.StringIO(raw), dtype={"order_id": "str"}, parse_dates=["date"])
+
+print(df.head(3))          # first rows
+print(df.shape)            # (rows, columns)
+df.info()                  # dtypes, non-null counts, memory
+print(df.describe())       # count, mean, std, min, quartiles, max of numeric columns
+print(df["region"].value_counts())   # notice 'North' vs 'north'
+</textarea>
+    </div>
+    <p>Read the output like a detective. <code>info()</code> shows <code>qty</code> has 5 non-null values out of 6
+      and became <code>float64</code> (because of the missing value). <code>value_counts()</code> reveals inconsistent
+      casing in <code>region</code>. <code>describe()</code> gives quartiles that hint at outliers. These three calls
+      are the first thing to run on any new dataset.</p>
+    <h3>JSON and Parquet</h3>
+    <p>JSON from APIs is usually a list of records: <code>pd.read_json(io.StringIO(text))</code> handles that, and
+      <code>pd.json_normalize(records)</code> flattens nested objects into dotted column names. <strong>Parquet</strong>
+      is a binary, columnar, compressed file format that stores dtypes with the data, so nothing has to be guessed and
+      reading a few columns skips the rest of the file. It is the standard format for analytical data; M52 explains how
+      it works inside.</p>
+    <div class="runnable" data-title="Nested JSON to a flat table">
+<textarea>
+import io
+import pandas as pd
+
+records = [
+    {"id": 1, "user": {"name": "Ada", "city": "London"}, "items": 3},
+    {"id": 2, "user": {"name": "Linus", "city": "Helsinki"}, "items": 1},
+]
+print(pd.json_normalize(records))
+
+text = '[{"sensor": "t1", "value": 21.5}, {"sensor": "t2", "value": null}]'
+print(pd.read_json(io.StringIO(text)))
+</textarea>
+    </div>
+    <div class="runnable" data-local="Parquet I/O needs pyarrow, which this course runs locally: pixi run python parquet_demo.py" data-title="Parquet round trip (local)">
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({"city": ["Oslo", "Lima", "Pune"], "temp_c": [3.5, 19.0, 31.2]})
+df.to_parquet("cities.parquet", index=False)      # engine="pyarrow" by default when installed
+
+back = pd.read_parquet("cities.parquet", columns=["city"])   # reads only one column from disk
+print(back)
+print(pd.read_parquet("cities.parquet").dtypes)                # dtypes survive the round trip
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>Parquet support comes from <code>pyarrow</code>: <code>pixi add pyarrow</code>. Excel
+      needs <code>pixi add openpyxl</code>. Both come from conda-forge.</p></aside>
+    <p><strong>Remember:</strong> pass <code>dtype</code>, <code>parse_dates</code>, <code>usecols</code>, and
+      <code>na_values</code> explicitly in pipelines; then run <code>head</code>, <code>info</code>,
+      <code>describe</code>, and <code>value_counts</code> before trusting anything.</p>
+  </section>
+
+  <section class="lesson-section" id="selecting">
+    <h2>Selecting rows and columns</h2>
+    <p>pandas has several selection tools. Learn them precisely, because the differences matter:</p>
+    <table>
+      <thead><tr><th>Syntax</th><th>Selects by</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>df["col"]</code>, <code>df[["a", "b"]]</code></td><td>column label(s)</td><td>a Series, or a DataFrame for a list</td></tr>
+        <tr><td><code>df.loc[rows, cols]</code></td><td><strong>labels</strong>; slices <em>include</em> the end</td><td><code>df.loc["A-1002":"A-1004", "qty"]</code></td></tr>
+        <tr><td><code>df.iloc[rows, cols]</code></td><td><strong>integer positions</strong>; slices exclude the end, like lists</td><td><code>df.iloc[0:2, -1]</code></td></tr>
+        <tr><td><code>df[mask]</code>, <code>df.loc[mask, cols]</code></td><td>a boolean Series aligned to the rows</td><td><code>df[df["qty"] &gt; 2]</code></td></tr>
+        <tr><td><code>df.query("expr")</code></td><td>a boolean expression in a string</td><td><code>df.query("qty &gt; 2 and region == 'North'")</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Predict: label slices vs position slices" data-predict>
+<textarea>
+import pandas as pd
+
+s = pd.Series([10, 20, 30, 40], index=["a", "b", "c", "d"])
+print(s.loc["b":"c"].tolist(), s.iloc[1:2].tolist())
+</textarea>
+    </div>
+    <details class="reveal"><summary>Why are they different?</summary>
+      <p>Label slices include both endpoints because "the next label after <code>c</code>" has no meaning for
+        arbitrary labels. Position slices follow normal Python rules: <code>1:2</code> is just position 1.</p>
+    </details>
+    <h3>Boolean masks</h3>
+    <p>A comparison on a Series produces a <strong>mask</strong>: a Series of <code>True</code>/<code>False</code>
+      with the same index. Indexing with the mask keeps the <code>True</code> rows. Combine masks with
+      <code>&amp;</code> (and), <code>|</code> (or), and <code>~</code> (not), and <em>always parenthesize</em> each
+      comparison, because <code>&amp;</code> binds more tightly than <code>&gt;</code>. Python's <code>and</code>/
+      <code>or</code> do not work on Series: they ask "is this whole Series true?", which is ambiguous, and raise
+      <code>ValueError</code>.</p>
+    <div class="runnable" data-title="Masks, isin, between, and query">
+<textarea>
+import io
+import pandas as pd
+
+df = pd.read_csv(io.StringIO("""order_id,region,product,qty,unit_price
+A-1001,North,mug,2,8.50
+A-1002,South,lamp,1,24.00
+A-1003,North,mug,5,8.50
+A-1004,East,notebook,4,3.25
+A-1005,South,lamp,2,24.00
+A-1006,North,pen,10,1.20
+"""), index_col="order_id")
+
+big_north = df[(df["region"] == "North") & (df["qty"] >= 5)]
+print(big_north)
+
+print(df.loc[df["product"].isin(["lamp", "pen"]), ["product", "qty"]])
+print(df[df["unit_price"].between(3, 10)].index.tolist())
+
+threshold = 3
+print(df.query("qty > @threshold and region != 'East'"))   # @name reads a Python variable
+
+print(df.loc["A-1002", "unit_price"], df.iloc[1, -1])         # same cell, two ways
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>df[df.qty &gt; 2 &amp; df.price &lt; 10]</code> is a classic bug: Python
+      evaluates <code>2 &amp; df.price</code> first. Write <code>df[(df.qty &gt; 2) &amp; (df.price &lt; 10)]</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>loc</code> is labels (inclusive slices), <code>iloc</code> is positions
+      (exclusive slices); masks use <code>&amp; | ~</code> with parentheses; <code>query</code> reads well for
+      long filters.</p>
+  </section>
+
+  <section class="lesson-section" id="cleaning">
+    <h2>Cleaning: missing values, types, duplicates, strings, categories</h2>
+    <p>Data cleaning is most of the work in real analysis. Each fix should be a deliberate, documented rule, because
+      every rule changes the answer. The main tools:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Missing values</h4><p><code>isna()</code>/<code>notna()</code> find them;
+        <code>fillna(value)</code> replaces them; <code>dropna(subset=[...])</code> removes rows; <code>ffill()</code>
+        carries the last value forward (useful for sensor readings).</p></div>
+      <div class="card"><h4>Types</h4><p><code>astype("int64")</code> converts when every value is valid;
+        <code>pd.to_numeric(s, errors="coerce")</code> and <code>pd.to_datetime(s, errors="coerce")</code> turn bad
+        values into <code>NaN</code>/<code>NaT</code> so you can count and handle them.</p></div>
+      <div class="card"><h4>Duplicates</h4><p><code>duplicated(subset=..., keep="first")</code> marks repeats;
+        <code>drop_duplicates(...)</code> removes them. Decide which columns define "the same record".</p></div>
+      <div class="card"><h4>Strings</h4><p>The <code>.str</code> accessor vectorizes string methods:
+        <code>.str.strip()</code>, <code>.str.lower()</code>, <code>.str.title()</code>, <code>.str.replace()</code>,
+        <code>.str.contains()</code>, <code>.str.extract(regex)</code>.</p></div>
+    </div>
+    <div class="runnable" data-title="Clean a messy column step by step">
+<textarea>
+import io
+import pandas as pd
+
+raw = pd.read_csv(io.StringIO("""id,customer,city,amount,signup
+1, Ada Lovelace ,london,"$1,200.50",2024-01-05
+2,GRACE HOPPER,New York,$80,2024-02-30
+3,Ada Lovelace,London,"$1,200.50",2024-01-05
+4,alan turing,manchester,n/a,2024-03-11
+5,Katherine Johnson,,$310.00,not known
+"""), dtype=str)
+print(raw)
+
+clean = raw.assign(
+    customer=raw["customer"].str.strip().str.title(),
+    city=raw["city"].str.strip().str.title().fillna("Unknown"),
+    amount=pd.to_numeric(raw["amount"].str.replace(r"[$,]", "", regex=True), errors="coerce"),
+    signup=pd.to_datetime(raw["signup"], format="%Y-%m-%d", errors="coerce"),
+    id=raw["id"].astype("int64"),
+)
+print(clean)
+print("bad amounts:", clean["amount"].isna().sum(), "| bad dates:", clean["signup"].isna().sum())
+
+dupes = clean.duplicated(subset=["customer", "amount", "signup"])
+print("duplicate rows:", clean.loc[dupes, "id"].tolist())
+clean = clean[~dupes]
+print(clean.dtypes)
+</textarea>
+    </div>
+    <p>Notice what <code>errors="coerce"</code> did: <code>2024-02-30</code> and <code>not known</code> became
+      <code>NaT</code> instead of crashing the whole load. That is usually what you want, <em>as long as you count the
+      coerced values afterwards</em>. Silent coercion that turns half a column into <code>NaN</code> is a common way to
+      produce confident, wrong results.</p>
+    <h3>Categorical data</h3>
+    <p>A column with a few distinct values repeated many times (region, status, size) can be stored as
+      <code>category</code>: pandas keeps one small table of the distinct values and an integer code per row. It saves
+      memory, speeds up <code>groupby</code>, and lets you declare a meaningful order.</p>
+    <div class="runnable" data-title="Categories with an order">
+<textarea>
+import pandas as pd
+
+sizes = pd.Series(["M", "S", "L", "M", "XL", "S", "M"] * 1000)
+print("as str:     ", sizes.memory_usage(deep=True), "bytes")
+cat = sizes.astype(pd.CategoricalDtype(["S", "M", "L", "XL"], ordered=True))
+print("as category:", cat.memory_usage(deep=True), "bytes")
+print(cat.cat.codes.head().tolist(), list(cat.cat.categories))
+print((cat > "M").sum(), "items larger than M")      # ordering makes comparisons meaningful
+print(cat.value_counts(sort=False))
+</textarea>
+    </div>
+    <aside class="callout think"><p>A customer table has 3% missing <code>age</code> values. Name three different
+      ways to handle them and one situation where each would bias your result. (Dropping rows, filling with the median,
+      or adding an "age unknown" flag all make different assumptions.)</p></aside>
+    <p><strong>Remember:</strong> coerce bad values to missing, then count them; normalize strings with
+      <code>.str</code>; define duplicates by the columns that identify a record; use <code>category</code> for
+      repeated labels.</p>
+  </section>
+
+  <section class="lesson-section" id="columns">
+    <h2>Creating columns: vectorize first</h2>
+    <p>New columns come from expressions over existing ones. pandas operations on whole columns are
+      <strong>vectorized</strong>: the loop runs in compiled code over the underlying arrays, just like NumPy. The
+      alternatives, in rough order of speed:</p>
+    <ol>
+      <li><strong>Vectorized arithmetic and methods</strong>: <code>df["qty"] * df["price"]</code>,
+        <code>.str</code>, <code>.dt</code>, <code>np.where(cond, a, b)</code>, <code>np.select</code>,
+        <code>pd.cut</code>. Fastest; use these whenever possible.</li>
+      <li><strong><code>Series.map(dict_or_func)</code></strong>: element-wise lookup; fine for mapping codes to labels.</li>
+      <li><strong><code>apply(func)</code></strong>: calls a Python function per element (or per row with
+        <code>axis=1</code>). Flexible but runs at Python speed: often 50-500x slower than vectorized code.</li>
+      <li><strong><code>iterrows()</code> loops</strong>: slowest and easiest to get wrong. Avoid for computation.</li>
+    </ol>
+    <p><code>df.assign(name=expr, ...)</code> returns a <em>new</em> frame with added or replaced columns. Inside
+      <code>assign</code>, a <code>lambda d: ...</code> receives the frame as it is at that point, so later columns can
+      use earlier ones.</p>
+    <div class="runnable" data-title="Vectorized vs apply: same answer, very different speed">
+<textarea>
+import time
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(42)
+n = 200_000
+df = pd.DataFrame({"qty": rng.integers(1, 10, n), "price": rng.uniform(1, 50, n).round(2)})
+
+t0 = time.perf_counter()
+fast = df.assign(
+    revenue=lambda d: d["qty"] * d["price"],
+    tier=lambda d: np.where(d["revenue"] >= 100, "big", "small"),
+    band=lambda d: pd.cut(d["price"], bins=[0, 10, 25, 50], labels=["low", "mid", "high"]),
+)
+t1 = time.perf_counter()
+slow = df.apply(lambda row: row["qty"] * row["price"], axis=1)
+t2 = time.perf_counter()
+
+print(fast.head())
+print("same values:", np.allclose(fast["revenue"], slow))
+print(f"vectorized: {t1 - t0:.3f}s   apply(axis=1): {t2 - t1:.3f}s")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Need several conditions? <code>np.select([cond1, cond2], [value1, value2],
+      default=...)</code> is the vectorized <code>if/elif/else</code>.</p></aside>
+    <p><strong>Remember:</strong> express column logic as whole-column operations; reach for <code>apply</code> only
+      when no vectorized form exists, and measure when in doubt.</p>
+  </section>
+
+  <section class="lesson-section" id="groupby">
+    <h2>groupby: split, apply, combine</h2>
+    <p>"Revenue per region", "average delay per airline", "first purchase per customer": most summaries follow one
+      pattern, named <strong>split-apply-combine</strong> by Hadley Wickham. <em>Split</em> the rows into groups by a
+      key, <em>apply</em> a function to each group, <em>combine</em> the results into a new table.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 540 200" role="img" aria-label="Split rows by region into groups, sum each group, combine into a result table">
+        <g font-size="11" fill="var(--fg)">
+          <text x="10" y="16" fill="var(--fg-muted)">original rows</text>
+          <rect x="10" y="24" width="100" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="38">North  2</text>
+          <rect x="10" y="44" width="100" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="58">South  1</text>
+          <rect x="10" y="64" width="100" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="78">North  5</text>
+          <rect x="10" y="84" width="100" height="20" fill="var(--viz-3)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="98">East   4</text>
+          <rect x="10" y="104" width="100" height="20" fill="var(--viz-2)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="118">South  2</text>
+          <rect x="10" y="124" width="100" height="20" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--border-strong)"/><text x="16" y="138">North 10</text>
+        </g>
+        <text x="150" y="16" fill="var(--fg-muted)" font-size="11">split by region</text>
+        <g font-size="11" fill="var(--fg)">
+          <rect x="150" y="24" width="100" height="56" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--viz-1)"/><text x="158" y="40">North: 2, 5, 10</text>
+          <rect x="150" y="90" width="100" height="36" fill="var(--viz-2)" fill-opacity="0.2" stroke="var(--viz-2)"/><text x="158" y="110">South: 1, 2</text>
+          <rect x="150" y="136" width="100" height="30" fill="var(--viz-3)" fill-opacity="0.2" stroke="var(--viz-3)"/><text x="158" y="155">East: 4</text>
+        </g>
+        <text x="290" y="16" fill="var(--fg-muted)" font-size="11">apply sum()</text>
+        <g font-size="12" fill="var(--fg)">
+          <text x="300" y="56">17</text><text x="300" y="112">3</text><text x="300" y="155">4</text>
+        </g>
+        <g stroke="var(--fg-muted)" stroke-width="1.2" fill="none">
+          <path d="M112 34 L148 40"/><path d="M112 74 L148 50"/><path d="M112 134 L148 60"/>
+          <path d="M112 54 L148 104"/><path d="M112 114 L148 112"/><path d="M112 94 L148 150"/>
+          <path d="M252 52 L292 52"/><path d="M252 108 L292 108"/><path d="M252 151 L292 151"/>
+          <path d="M318 52 L400 70"/><path d="M318 108 L400 90"/><path d="M318 151 L400 110"/>
+        </g>
+        <text x="400" y="16" fill="var(--fg-muted)" font-size="11">combine</text>
+        <g font-size="12" fill="var(--fg)">
+          <rect x="400" y="40" width="120" height="22" fill="var(--bg-sunk)" stroke="var(--border-strong)"/><text x="408" y="56">region | qty</text>
+          <rect x="400" y="62" width="120" height="20" fill="var(--bg-elev)" stroke="var(--border-strong)"/><text x="408" y="77">East   | 4</text>
+          <rect x="400" y="82" width="120" height="20" fill="var(--bg-elev)" stroke="var(--border-strong)"/><text x="408" y="97">North  | 17</text>
+          <rect x="400" y="102" width="120" height="20" fill="var(--bg-elev)" stroke="var(--border-strong)"/><text x="408" y="117">South  | 3</text>
+        </g>
+        <text x="10" y="190" fill="var(--fg-muted)" font-size="11">df.groupby("region")["qty"].sum()  : group keys become the result's index (sorted by default)</text>
+      </svg>
+      <figcaption>Split-apply-combine: the core of <code>groupby</code>.</figcaption>
+    </figure>
+    <p>Here is the same idea in plain Python, which is exactly what pandas does for you, but in compiled code. Step
+      through it to see the dictionary of groups grow:</p>
+    <div class="tracer" data-title="Split-apply-combine by hand">
+<textarea>
+rows = [("North", 2), ("South", 1), ("North", 5), ("East", 4)]
+groups = {}
+for region, qty in rows:
+    groups.setdefault(region, []).append(qty)
+totals = {region: sum(values) for region, values in groups.items()}
+</textarea>
+    </div>
+    <h3>Three kinds of "apply"</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Each group returns</th><th>Result shape</th><th>Use for</th></tr></thead>
+      <tbody>
+        <tr><td><code>agg</code> / <code>sum</code>, <code>mean</code>, ...</td><td>one value per column</td><td>one row per group</td><td>summary tables</td></tr>
+        <tr><td><code>transform</code></td><td>a value per original row</td><td>same length as the input</td><td>group-relative columns: share of total, z-score within group, group mean beside each row</td></tr>
+        <tr><td><code>filter</code></td><td>True/False for the whole group</td><td>a subset of the original rows</td><td>"keep customers with at least 3 orders"</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Named aggregations</strong> make summary tables readable: each keyword becomes an output column, given
+      as <code>(input_column, function)</code>.</p>
+    <div class="runnable" data-title="agg with named aggregations, transform, and filter">
+<textarea>
+import io
+import pandas as pd
+
+df = pd.read_csv(io.StringIO("""region,rep,product,qty,unit_price
+North,Ana,mug,2,8.50
+South,Bo,lamp,1,24.00
+North,Ana,mug,5,8.50
+East,Cy,notebook,4,3.25
+South,Di,lamp,2,24.00
+North,Ed,pen,10,1.20
+South,Bo,mug,3,8.50
+"""))
+df = df.assign(revenue=df["qty"] * df["unit_price"])
+
+summary = df.groupby("region").agg(
+    orders=("revenue", "size"),
+    revenue=("revenue", "sum"),
+    avg_order=("revenue", "mean"),
+    reps=("rep", "nunique"),
+).sort_values("revenue", ascending=False)
+print(summary)
+
+# transform keeps one value per row: each order's share of its region's revenue
+df["share_of_region"] = df["revenue"] / df.groupby("region")["revenue"].transform("sum")
+print(df[["region", "revenue", "share_of_region"]].round(3))
+
+# filter keeps whole groups
+print(df.groupby("rep").filter(lambda g: len(g) >= 2)["rep"].unique().tolist())
+
+# several keys produce a MultiIndex; reset_index turns it back into columns
+print(df.groupby(["region", "product"], as_index=False)["qty"].sum())
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: how long is a transform?" data-predict>
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({"team": ["a", "b", "a", "b", "a"], "pts": [1, 2, 3, 4, 5]})
+print(df.groupby("team")["pts"].sum().to_dict(), len(df.groupby("team")["pts"].transform("sum")))
+</textarea>
+    </div>
+    <aside class="callout note"><p>For categorical group keys, pandas 3.0 defaults to <code>observed=True</code>:
+      only categories that actually appear become groups. Pass <code>observed=False</code> if you want empty groups
+      reported with zero counts.</p></aside>
+    <p><strong>Remember:</strong> <code>agg</code> reduces each group to a row, <code>transform</code> broadcasts a
+      group result back to every row, <code>filter</code> keeps or drops whole groups. Named aggregations make output
+      columns self-documenting.</p>
+  </section>
+
+  <section class="lesson-section" id="combining">
+    <h2>Combining and reshaping tables</h2>
+    <h3>merge: SQL-style joins</h3>
+    <p><code>pd.merge(left, right, on="key", how=...)</code> matches rows whose key values are equal. The
+      <code>how</code> argument decides what happens to rows without a partner:</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 120" role="img" aria-label="Venn diagrams for inner, left, right, and outer joins">
+        <g font-size="12" fill="var(--fg)" text-anchor="middle">
+          <g>
+            <circle cx="50" cy="55" r="30" fill="none" stroke="var(--fg-muted)"/><circle cx="80" cy="55" r="30" fill="none" stroke="var(--fg-muted)"/>
+            <path d="M65 29 A30 30 0 0 1 65 81 A30 30 0 0 1 65 29" fill="var(--viz-1)" fill-opacity="0.5"/>
+            <text x="65" y="108">inner</text>
+          </g>
+          <g>
+            <circle cx="180" cy="55" r="30" fill="var(--viz-1)" fill-opacity="0.5" stroke="var(--fg-muted)"/><circle cx="210" cy="55" r="30" fill="none" stroke="var(--fg-muted)"/>
+            <text x="195" y="108">left</text>
+          </g>
+          <g>
+            <circle cx="310" cy="55" r="30" fill="none" stroke="var(--fg-muted)"/><circle cx="340" cy="55" r="30" fill="var(--viz-1)" fill-opacity="0.5" stroke="var(--fg-muted)"/>
+            <text x="325" y="108">right</text>
+          </g>
+          <g>
+            <circle cx="440" cy="55" r="30" fill="var(--viz-1)" fill-opacity="0.5" stroke="var(--fg-muted)"/><circle cx="470" cy="55" r="30" fill="var(--viz-1)" fill-opacity="0.5" stroke="var(--fg-muted)"/>
+            <text x="455" y="108">outer</text>
+          </g>
+        </g>
+        <text x="10" y="14" fill="var(--fg-muted)" font-size="11">left table circle on the left, right table on the right; shaded rows are kept</text>
+      </svg>
+      <figcaption>Inner keeps matches only; left keeps every left row; right keeps every right row; outer keeps everything.</figcaption>
+    </figure>
+    <p>Unmatched columns are filled with missing values. The silent danger is <strong>duplicate keys</strong>: if a
+      customer ID appears twice in the customer table, every one of that customer's orders is duplicated after the
+      join, and revenue totals inflate without any error. Defend against it with <code>validate=</code>:</p>
+    <ul>
+      <li><code>validate="one_to_one"</code>: keys unique on both sides.</li>
+      <li><code>validate="many_to_one"</code>: keys unique on the right (orders to customers: the usual case).</li>
+      <li><code>validate="one_to_many"</code>, <code>"many_to_many"</code> (the last checks nothing).</li>
+    </ul>
+    <p><code>indicator=True</code> adds a <code>_merge</code> column saying whether each row came from
+      <code>left_only</code>, <code>right_only</code>, or <code>both</code>: a quick audit of what did not match.</p>
+    <div class="runnable" data-title="Joins, validate=, and indicator=">
+<textarea>
+import pandas as pd
+
+orders = pd.DataFrame({"order_id": [1, 2, 3, 4], "cust_id": [10, 11, 10, 99], "amount": [50, 20, 35, 15]})
+customers = pd.DataFrame({"cust_id": [10, 11, 12], "name": ["Ada", "Bo", "Cy"]})
+
+for how in ["inner", "left", "right", "outer"]:
+    print(how, len(pd.merge(orders, customers, on="cust_id", how=how)), "rows")
+
+audit = pd.merge(orders, customers, on="cust_id", how="outer", indicator=True)
+print(audit)
+
+bad_customers = pd.concat([customers, pd.DataFrame({"cust_id": [10], "name": ["Ada (dup)"]})])
+try:
+    pd.merge(orders, bad_customers, on="cust_id", how="left", validate="many_to_one")
+except pd.errors.MergeError as e:
+    print("MergeError:", e)
+</textarea>
+    </div>
+    <h3>concat: stacking tables</h3>
+    <p><code>pd.concat([df1, df2])</code> stacks frames vertically (same columns, more rows), aligning on column
+      names. <code>ignore_index=True</code> renumbers rows; <code>keys=["jan", "feb"]</code> labels where each piece
+      came from. With <code>axis=1</code> it places frames side by side, aligning on the row index. Collect pieces in
+      a list and concat once; concatenating inside a loop copies everything each time (quadratic cost).</p>
+    <h3>Reshaping: wide and long</h3>
+    <p>The same data can be <strong>long</strong> (one row per observation: date, city, temperature) or
+      <strong>wide</strong> (one row per date, one column per city). Long format is best for <code>groupby</code> and
+      plotting libraries; wide format is best for humans reading a table and for computing differences between
+      columns.</p>
+    <ul>
+      <li><code>pivot_table(index=, columns=, values=, aggfunc=)</code>: long to wide, aggregating duplicates.</li>
+      <li><code>melt(id_vars=, var_name=, value_name=)</code>: wide to long.</li>
+      <li><code>stack()</code> / <code>unstack()</code>: move the innermost column level into the row index and back.</li>
+    </ul>
+    <div class="runnable" data-title="pivot_table, melt, stack/unstack">
+<textarea>
+import pandas as pd
+
+long = pd.DataFrame({
+    "month": ["Jan", "Jan", "Feb", "Feb", "Feb", "Mar"],
+    "region": ["North", "South", "North", "South", "North", "South"],
+    "revenue": [100, 80, 120, 90, 30, 70],
+})
+wide = long.pivot_table(index="month", columns="region", values="revenue", aggfunc="sum", fill_value=0, sort=False)
+print(wide)
+
+back = wide.reset_index().melt(id_vars="month", var_name="region", value_name="revenue")
+print(back)
+
+stacked = wide.stack()          # region moves into the row index: a Series with a MultiIndex
+print(stacked)
+print(stacked.unstack())        # and back again
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> pick <code>how</code> deliberately, always <code>validate=</code> joins, audit with
+      <code>indicator=True</code>; concat a list once; long format for computing, wide format for reading.</p>
+  </section>
+
+  <section class="lesson-section" id="time-series">
+    <h2>Time series</h2>
+    <p>When the row index is a <code>DatetimeIndex</code>, pandas gains a whole toolkit for time. Start by parsing
+      text into real timestamps with <code>pd.to_datetime</code>, preferably with an explicit <code>format=</code>
+      (faster and unambiguous: is <code>03/04/2025</code> March 4 or April 3?).</p>
+    <ul>
+      <li>The <code>.dt</code> accessor exposes parts: <code>.dt.year</code>, <code>.dt.month</code>,
+        <code>.dt.day_name()</code>, <code>.dt.hour</code>, <code>.dt.to_period("M")</code>.</li>
+      <li><strong><code>resample(rule)</code></strong> is <code>groupby</code> for time buckets: <code>"D"</code> daily,
+        <code>"W"</code> weekly, <code>"MS"</code> month start, <code>"h"</code> hourly. Follow it with an aggregation.</li>
+      <li><strong><code>rolling(window)</code></strong> computes moving statistics over the last <em>n</em> rows (or a
+        time span like <code>"7D"</code>), smoothing out noise to reveal a trend.</li>
+      <li><code>shift(1)</code> and <code>pct_change()</code> compare each period with the previous one.</li>
+      <li><strong>Time zones</strong>: <code>tz_localize("America/New_York")</code> declares which zone naive
+        timestamps are in; <code>tz_convert("UTC")</code> converts an aware timestamp to another zone. Store and compute
+        in UTC; convert for display.</li>
+    </ul>
+    <div class="runnable" data-title="Resample, rolling, and time zones">
+<textarea>
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(7)
+idx = pd.date_range("2025-01-01", periods=90, freq="D")
+trend = np.linspace(100, 160, 90)
+weekly = 15 * (idx.dayofweek >= 5)                # weekend bump
+sales = pd.Series(trend + weekly + rng.normal(0, 10, 90), index=idx, name="sales").round(1)
+
+print(sales.head())
+print(sales.resample("MS").sum().round(0))             # monthly totals, labelled by month start
+print(sales.resample("W").mean().head(3).round(1))     # weekly averages (weeks end on Sunday)
+
+smooth = sales.rolling(7).mean()                       # 7-day moving average; first 6 are NaN
+print(smooth.iloc[5:9].round(1))
+print(sales.pct_change().iloc[1:4].round(3))
+
+by_weekday = sales.groupby(sales.index.day_name()).mean().round(1)
+print(by_weekday.sort_values(ascending=False))
+
+stamps = pd.Series(pd.to_datetime(["2025-03-09 01:30", "2025-03-09 03:30"]))
+local = stamps.dt.tz_localize("America/New_York")
+print(local)
+print(local.dt.tz_convert("UTC"))     # 2:00-3:00 did not exist that night: clocks sprang forward
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Daylight saving time makes some local times not exist (spring forward) and others
+      happen twice (fall back). <code>tz_localize</code> raises on these unless you choose a policy with
+      <code>nonexistent=</code> and <code>ambiguous=</code>. Another reason to store UTC.</p></aside>
+    <p><strong>Remember:</strong> parse with an explicit format, use <code>resample</code> for calendar buckets and
+      <code>rolling</code> for moving windows, and keep timestamps in UTC internally.</p>
+  </section>
+
+  <section class="lesson-section" id="style-performance">
+    <h2>Method chaining and performance</h2>
+    <p>Because most pandas methods return a new object, you can write an analysis as one readable chain, top to
+      bottom, each line one step. Wrap the chain in parentheses so each method sits on its own line. Use
+      <code>assign</code> for new columns, <code>query</code> or <code>loc[lambda d: ...]</code> for filters, and
+      <code>pipe(func)</code> to drop your own functions into the chain.</p>
+    <div class="runnable" data-title="An analysis as one chain">
+<textarea>
+import io
+import pandas as pd
+
+raw = io.StringIO("""date,region,product,qty,unit_price
+2025-03-01,North,mug,2,8.50
+2025-03-01,south,lamp,1,24.00
+2025-03-02,North,mug,5,8.50
+2025-03-02,East,notebook,,3.25
+2025-03-03,South,lamp,2,24.00
+2025-03-03,north,pen,10,1.20
+2025-03-04,East,mug,3,8.50
+""")
+
+def flag_big(df, threshold):
+    return df.assign(big=df["revenue"] >= threshold)
+
+report = (
+    pd.read_csv(raw, parse_dates=["date"])
+    .assign(region=lambda d: d["region"].str.title(), qty=lambda d: d["qty"].fillna(0).astype("int64"))
+    .assign(revenue=lambda d: d["qty"] * d["unit_price"])
+    .pipe(flag_big, threshold=20)
+    .query("qty > 0")
+    .groupby("region")
+    .agg(revenue=("revenue", "sum"), big_orders=("big", "sum"))
+    .sort_values("revenue", ascending=False)
+)
+print(report)
+</textarea>
+    </div>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["read_csv", "normalize", "derive revenue", "filter", "groupby/agg", "sort"]}'></div>
+    <h3>Performance rules of thumb</h3>
+    <ol>
+      <li><strong>Vectorize.</strong> Whole-column operations beat <code>apply</code>, which beats loops.</li>
+      <li><strong>Read less.</strong> <code>usecols=</code>, the right <code>dtype=</code>, and Parquet with
+        <code>columns=</code> avoid loading what you will not use.</li>
+      <li><strong>Use compact dtypes.</strong> <code>category</code> for repeated labels; <code>str</code> (Arrow-backed)
+        instead of <code>object</code>; downcast with <code>pd.to_numeric(s, downcast="integer")</code> when it matters.</li>
+      <li><strong>Build once.</strong> Append rows to a Python list and create the DataFrame once; concat a list of
+        frames once. Growing a frame row by row is quadratic.</li>
+      <li><strong>Measure</strong> with <code>df.memory_usage(deep=True)</code> and <code>time.perf_counter()</code>.
+        When data no longer fits comfortably in memory, or you need multi-core speed, look at Polars and DuckDB
+        (<a href="m52-polars-arrow.html">M52</a> and <a href="m61-sql-duckdb.html">M61</a>).</li>
+    </ol>
+    <div class="runnable" data-title="Measure the memory win from better dtypes">
+<textarea>
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(0)
+n = 100_000
+df = pd.DataFrame({
+    "region": rng.choice(["North", "South", "East", "West"], n).astype(object),
+    "qty": rng.integers(0, 100, n).astype("int64"),
+})
+before = df.memory_usage(deep=True).sum()
+slim = df.assign(region=df["region"].astype("category"), qty=pd.to_numeric(df["qty"], downcast="integer"))
+after = slim.memory_usage(deep=True).sum()
+print(slim.dtypes)
+print(f"{before / 1e6:.2f} MB -> {after / 1e6:.2f} MB ({before / after:.0f}x smaller)")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> chains read like a recipe and avoid stale intermediate variables; performance comes
+      from vectorization, reading less, and compact dtypes.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Each exercise runs in your browser with pandas (the first run downloads it). Data is built inline.</p>
+
+    <div class="exercise" data-id="m51-e1" data-title="Top products by revenue">
+      <div class="exercise-prompt">
+        <p>Write <code>top_products(df, n)</code> that takes a DataFrame with columns <code>product</code>,
+          <code>qty</code>, and <code>unit_price</code>, and returns a Series of total revenue
+          (<code>qty * unit_price</code>) per product, largest first, keeping only the top <code>n</code>. The Series
+          index holds product names.</p>
+      </div>
+<textarea class="starter">
+import pandas as pd
+
+def top_products(df, n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import pandas as pd
+
+_df = pd.DataFrame({
+    "product": ["mug", "lamp", "mug", "pen", "lamp", "desk"],
+    "qty": [2, 1, 5, 10, 2, 1],
+    "unit_price": [8.5, 24.0, 8.5, 1.2, 24.0, 150.0],
+})
+
+def test_order_and_values():
+    result = top_products(_df, 3)
+    assert list(result.index) == ["desk", "lamp", "mug"], f"expected desk, lamp, mug; got {list(result.index)}"
+    assert [round(v, 2) for v in result.tolist()] == [150.0, 72.0, 59.5], "revenue totals are wrong"
+
+def test_n_limits():
+    assert len(top_products(_df, 2)) == 2, "return only n products"
+
+def test_does_not_modify_input():
+    before = _df.copy()
+    top_products(_df, 3)
+    assert _df.equals(before), "do not add columns to the caller's DataFrame"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute revenue with <code>assign</code>, then
+        <code>groupby("product")["revenue"].sum()</code>, then <code>sort_values(ascending=False).head(n)</code>
+        (or <code>nlargest(n)</code>).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pandas as pd
+
+def top_products(df, n):
+    revenue = df.assign(revenue=df["qty"] * df["unit_price"])
+    return revenue.groupby("product")["revenue"].sum().nlargest(n)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m51-e2" data-title="Parse messy prices">
+      <div class="exercise-prompt">
+        <p>Write <code>clean_prices(s)</code> that takes a Series of text prices such as <code>"$1,234.50"</code>,
+          <code>" 12 "</code>, <code>"n/a"</code>, or a missing value, and returns a <code>float64</code> Series: strip
+          whitespace, remove <code>$</code> and <code>,</code>, and turn anything that is not a number into
+          <code>NaN</code>. Keep the original index.</p>
+      </div>
+<textarea class="starter">
+import pandas as pd
+
+def clean_prices(s):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+import pandas as pd
+
+_s = pd.Series(["$1,234.50", " 12 ", "n/a", None, "$0.99", "free"], index=list("abcdef"))
+
+def test_values():
+    out = clean_prices(_s)
+    assert out["a"] == 1234.5 and out["b"] == 12.0 and out["e"] == 0.99, "numbers should parse"
+    assert math.isnan(out["c"]) and math.isnan(out["d"]) and math.isnan(out["f"]), "non-numbers become NaN"
+
+def test_dtype_and_index():
+    out = clean_prices(_s)
+    assert out.dtype == "float64", f"dtype should be float64, got {out.dtype}"
+    assert list(out.index) == list("abcdef"), "keep the original index"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>s.str.strip().str.replace(r"[$,]", "", regex=True)</code>,
+        then <code>pd.to_numeric(..., errors="coerce")</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pandas as pd
+
+def clean_prices(s):
+    text = s.astype("str").str.strip().str.replace(r"[$,]", "", regex=True)
+    return pd.to_numeric(text, errors="coerce").astype("float64")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m51-e3" data-title="Share of group total with transform">
+      <div class="exercise-prompt">
+        <p>Write <code>add_share(df)</code> that returns a <em>new</em> DataFrame with an extra column
+          <code>share</code>: each row's <code>amount</code> divided by the total <code>amount</code> of its
+          <code>team</code>. The result must have the same rows in the same order as the input, and the input must not
+          change.</p>
+      </div>
+<textarea class="starter">
+import pandas as pd
+
+def add_share(df):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import pandas as pd
+
+_df = pd.DataFrame({"team": ["a", "b", "a", "b", "a"], "amount": [10.0, 30.0, 30.0, 10.0, 60.0]})
+
+def test_shares():
+    out = add_share(_df)
+    assert [round(x, 3) for x in out["share"]] == [0.1, 0.75, 0.3, 0.25, 0.6], f"got {out['share'].tolist()}"
+
+def test_shape_and_order():
+    out = add_share(_df)
+    assert len(out) == len(_df), "transform keeps one value per row"
+    assert out["team"].tolist() == _df["team"].tolist(), "row order must not change"
+
+def test_input_unchanged():
+    add_share(_df)
+    assert "share" not in _df.columns, "return a new DataFrame; do not modify the input"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>df.groupby("team")["amount"].transform("sum")</code>
+        returns a Series aligned with <code>df</code>; combine with <code>assign</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pandas as pd
+
+def add_share(df):
+    totals = df.groupby("team")["amount"].transform("sum")
+    return df.assign(share=df["amount"] / totals)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m51-e4" data-title="Monthly revenue from text dates">
+      <div class="exercise-prompt">
+        <p>Write <code>monthly_revenue(df)</code>. The input has text columns <code>date</code> (format
+          <code>YYYY-MM-DD</code>; some values are invalid) and numeric <code>amount</code>. Drop rows whose date
+          cannot be parsed, then return a Series of total amount per month, indexed by strings like
+          <code>"2025-01"</code>, in chronological order.</p>
+      </div>
+<textarea class="starter">
+import pandas as pd
+
+def monthly_revenue(df):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import pandas as pd
+
+_df = pd.DataFrame({
+    "date": ["2025-01-05", "2025-02-10", "not a date", "2025-01-31", "2025-03-01", "2025-02-30", "2025-02-01"],
+    "amount": [100.0, 50.0, 999.0, 25.0, 10.0, 999.0, 5.0],
+})
+
+def test_totals():
+    out = monthly_revenue(_df)
+    assert [str(k) for k in out.index] == ["2025-01", "2025-02", "2025-03"], f"index was {list(out.index)}"
+    assert out.tolist() == [125.0, 55.0, 10.0], f"totals were {out.tolist()}"
+
+def test_bad_dates_ignored():
+    assert 999.0 not in monthly_revenue(_df).tolist(), "rows with invalid dates must be dropped"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>pd.to_datetime(df["date"], format="%Y-%m-%d",
+        errors="coerce")</code>, drop <code>NaT</code>, then group by <code>dates.dt.strftime("%Y-%m")</code>
+        (string keys sort chronologically in this format).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pandas as pd
+
+def monthly_revenue(df):
+    dates = pd.to_datetime(df["date"], format="%Y-%m-%d", errors="coerce")
+    valid = df.assign(month=dates.dt.strftime("%Y-%m"))[dates.notna()]
+    return valid.groupby("month")["amount"].sum().sort_index()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m51-e5" data-title="A validated join">
+      <div class="exercise-prompt">
+        <p>Write <code>revenue_by_region(orders, customers)</code>. <code>orders</code> has <code>cust_id</code> and
+          <code>amount</code>; <code>customers</code> has <code>cust_id</code> and <code>region</code>. Left-join
+          orders to customers with <code>validate="many_to_one"</code> (so a duplicated customer raises
+          <code>pd.errors.MergeError</code>), label orders whose customer is unknown as region <code>"Unknown"</code>,
+          and return total amount per region as a dict.</p>
+      </div>
+<textarea class="starter">
+import pandas as pd
+
+def revenue_by_region(orders, customers):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import pandas as pd
+
+_orders = pd.DataFrame({"cust_id": [1, 2, 1, 3, 9], "amount": [10.0, 20.0, 5.0, 7.0, 4.0]})
+_customers = pd.DataFrame({"cust_id": [1, 2, 3], "region": ["North", "South", "North"]})
+
+def test_totals():
+    out = revenue_by_region(_orders, _customers)
+    assert out == {"North": 22.0, "South": 20.0, "Unknown": 4.0}, f"got {out}"
+
+def test_total_preserved():
+    assert sum(revenue_by_region(_orders, _customers).values()) == _orders["amount"].sum(), "a left join keeps every order exactly once"
+
+def test_duplicate_customer_rejected():
+    dup = pd.concat([_customers, pd.DataFrame({"cust_id": [1], "region": ["East"]})])
+    try:
+        revenue_by_region(_orders, dup)
+    except pd.errors.MergeError:
+        return
+    raise AssertionError("a duplicated cust_id in customers must raise MergeError (use validate=)")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>pd.merge(orders, customers, on="cust_id", how="left",
+        validate="many_to_one")</code>, then <code>fillna</code> on <code>region</code>, then groupby. Convert with
+        <code>.to_dict()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pandas as pd
+
+def revenue_by_region(orders, customers):
+    joined = pd.merge(orders, customers, on="cust_id", how="left", validate="many_to_one")
+    joined = joined.assign(region=joined["region"].fillna("Unknown"))
+    return {str(k): float(v) for k, v in joined.groupby("region")["amount"].sum().items()}</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: clean and analyze a messy sales export</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Sales cleanup and summary</span></div>
+      <div class="widget-body">
+        <p>A small online shop exported a year of orders, and it is a mess. You will write a script that generates the
+          messy file, cleans it with documented rules, and prints (or saves) a short analysis.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init sales-cleanup &amp;&amp; cd sales-cleanup
+pixi add python=3.14 pandas numpy pyarrow
+pixi run python make_data.py      # writes sales_raw.csv
+pixi run python analyze.py        # cleans and summarizes</code></pre>
+        <p><strong>Generate the data</strong> (<code>make_data.py</code>): use <code>numpy.random.default_rng(2025)</code>
+          to create ~5,000 orders with <code>order_id</code>, <code>order_date</code>, <code>customer</code>,
+          <code>region</code>, <code>product</code>, <code>qty</code>, <code>unit_price</code>. Then deliberately
+          damage it: random casing and whitespace in <code>region</code>/<code>product</code>, prices as text with
+          <code>$</code> and thousands separators, 2% blank quantities, 1% impossible dates, 1% duplicated orders, and a
+          few negative quantities (refunds).</p>
+        <p><strong>Clean and analyze</strong> (<code>analyze.py</code>): load with explicit dtypes, apply each cleaning
+          rule as a small function that returns the cleaned frame and the number of rows it affected, then answer:
+          revenue by month, top 5 products, revenue share by region, average order value per customer segment, and
+          the refund rate per product.</p>
+        <ul class="checklist" data-id="m51-mini">
+          <li>The generator is deterministic (same seed, same file)</li>
+          <li>Loading uses <code>dtype=</code>, <code>parse_dates</code> or a later <code>to_datetime(format=...)</code></li>
+          <li>Every cleaning rule reports how many rows it touched, and the counts match what the generator injected</li>
+          <li>No chained assignment: updates use <code>.loc</code> or <code>assign</code></li>
+          <li>The summary uses <code>groupby</code> with named aggregations and one <code>transform</code></li>
+          <li>Monthly revenue uses <code>resample</code> or <code>to_period("M")</code></li>
+          <li>The cleaned data is saved as Parquet and reloads with the same dtypes</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> write the whole analysis as one method chain with <code>pipe</code>; add
+          pytest tests for each cleaning rule; compare memory before and after converting columns to
+          <code>category</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m51-quiz">
+<script type="application/json">
+{"title": "pandas quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does a pandas Series add on top of a NumPy array?", "options": ["Multiple dtypes per column", "An index of labels (and an optional name)", "Automatic parallelism", "Lazy evaluation"], "answer": 1, "explanation": "<p>A Series is a typed array plus an Index of labels and a name. Operations align on those labels.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import pandas as pd\na = pd.Series([1, 2], index=['x', 'y'])\nb = pd.Series([10, 20], index=['y', 'z'])\nprint((a + b).notna().sum())", "answer": "1", "explanation": "<p>Alignment produces labels x, y, z. Only <code>y</code> is in both, so only one value is not missing.</p>"},
+  {"type": "single", "prompt": "In pandas 3.0, what happens with <code>df['qty'][0] = 10</code>?", "options": ["It updates df in place", "It raises KeyError", "It never updates df, and pandas warns with ChainedAssignmentError", "It updates df only if qty is numeric"], "answer": 2, "explanation": "<p>Under Copy-on-Write, the intermediate <code>df['qty']</code> behaves as a copy, so the chained assignment cannot reach <code>df</code>. Use <code>df.loc[0, 'qty'] = 10</code>.</p>"},
+  {"type": "single", "prompt": "What is the default dtype pandas 3.0 infers for a column of text?", "options": ["object", "str (a StringDtype using NaN for missing values)", "category", "bytes"], "answer": 1, "explanation": "<p>pandas 3.0 infers the dedicated string dtype, shown as <code>str</code>, backed by PyArrow when available. Check for it with <code>pd.api.types.is_string_dtype</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import pandas as pd\ns = pd.Series([5, 6, 7, 8], index=['a', 'b', 'c', 'd'])\nprint(s.loc['a':'c'].sum(), s.iloc[0:2].sum())", "answer": "18 11", "explanation": "<p><code>loc</code> label slices include the end (5+6+7 = 18); <code>iloc</code> slices exclude it (5+6 = 11).</p>"},
+  {"type": "single", "prompt": "Which filter is written correctly?", "options": ["<code>df[df.a &gt; 1 and df.b &lt; 5]</code>", "<code>df[df.a &gt; 1 &amp; df.b &lt; 5]</code>", "<code>df[(df.a &gt; 1) &amp; (df.b &lt; 5)]</code>", "<code>df[(df.a &gt; 1) and (df.b &lt; 5)]</code>"], "answer": 2, "explanation": "<p>Use <code>&amp;</code> for element-wise and, and parenthesize each comparison because <code>&amp;</code> binds tighter than comparison operators. <code>and</code> raises ValueError on a Series.</p>"},
+  {"type": "multi", "prompt": "Which calls turn unparseable values into missing values instead of raising?", "options": ["<code>pd.to_numeric(s, errors='coerce')</code>", "<code>s.astype('int64')</code>", "<code>pd.to_datetime(s, errors='coerce')</code>", "<code>s.astype('float64')</code> on text like 'n/a'"], "answer": [0, 2], "explanation": "<p><code>errors='coerce'</code> produces NaN/NaT for bad values. <code>astype</code> raises on any value it cannot convert.</p>"},
+  {"type": "single", "prompt": "You need each order's share of its region's total revenue as a new column. Which groupby method fits?", "options": ["agg", "transform", "filter", "size"], "answer": 1, "explanation": "<p><code>transform</code> returns a result the same length as the input, aligned to the original rows, so you can divide row values by group totals.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import pandas as pd\ndf = pd.DataFrame({'k': ['a', 'b', 'a'], 'v': [1, 2, 3]})\nprint(len(df.groupby('k')['v'].sum()), len(df.groupby('k')['v'].transform('sum')))", "answer": "2 3", "explanation": "<p>An aggregation gives one row per group (2 groups); transform gives one value per original row (3 rows).</p>"},
+  {"type": "single", "prompt": "Why pass <code>validate='many_to_one'</code> to an orders-to-customers merge?", "options": ["It makes the merge faster", "It raises MergeError if a customer key is duplicated, which would otherwise silently duplicate orders", "It drops unmatched orders", "It sorts the result"], "answer": 1, "explanation": "<p>Duplicate keys on the 'one' side multiply rows and inflate totals without any error. <code>validate=</code> turns that silent bug into an exception.</p>"},
+  {"type": "single", "prompt": "Which reshapes a wide table (one column per city) into a long table (city, value)?", "options": ["pivot_table", "melt", "unstack", "resample"], "answer": 1, "explanation": "<p><code>melt</code> goes wide to long. <code>pivot_table</code> (and <code>unstack</code>) go long to wide.</p>"},
+  {"type": "single", "prompt": "What does <code>sales.rolling(7).mean()</code> compute on a daily series?", "options": ["Weekly totals", "The mean of each calendar week", "For each day, the mean of that day and the six before it", "The mean of every 7th value"], "answer": 2, "explanation": "<p>A rolling window slides one row at a time. The first six results are NaN because the window is not full yet. Calendar buckets come from <code>resample</code>.</p>"},
+  {"type": "multi", "prompt": "Which are good performance habits in pandas?", "options": ["Prefer vectorized column operations over apply(axis=1)", "Grow a DataFrame row by row inside a loop", "Read only needed columns with usecols", "Use category for low-cardinality text columns"], "answer": [0, 2, 3], "explanation": "<p>Vectorize, read less, and use compact dtypes. Appending rows one at a time copies the frame repeatedly and is quadratic.</p>"},
+  {"type": "text", "prompt": "Which DataFrame method returns a new frame with added columns and is commonly used in method chains?", "answer": ["assign", "df.assign", "assign()"], "explanation": "<p><code>assign</code> never modifies the original, and lambdas inside it see the frame as built so far.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A DataFrame is labelled, typed columns sharing a row Index; operations align on labels.</li>
+      <li>pandas 3.0: Copy-on-Write is always on (no chained assignment) and text defaults to the <code>str</code> dtype.</li>
+      <li>Load with explicit dtypes; inspect with <code>head</code>, <code>info</code>, <code>describe</code>, <code>value_counts</code>.</li>
+      <li>Select with <code>loc</code> (labels, inclusive), <code>iloc</code> (positions), masks, and <code>query</code>.</li>
+      <li>Clean with coercion plus counting, <code>.str</code> methods, deliberate duplicate rules, and categories.</li>
+      <li>Summarize with <code>groupby</code>: <code>agg</code> (named), <code>transform</code>, <code>filter</code>.</li>
+      <li>Combine with validated merges and one-shot concat; reshape with <code>pivot_table</code>/<code>melt</code>.</li>
+      <li>Time series: <code>to_datetime</code>, <code>resample</code>, <code>rolling</code>, UTC internally.</li>
+    </ul>
+    <div class="flashcards" data-title="pandas essentials">
+<script type="application/json">
+[{"front": "Series vs DataFrame", "back": "A Series is one labelled, typed column; a DataFrame is several Series sharing a row index."},
+ {"front": "Index alignment", "back": "Arithmetic matches values by label; labels missing on one side give NaN."},
+ {"front": "Copy-on-Write (pandas 3.0)", "back": "Every derived object behaves as a copy; chained assignment never updates the original. Use .loc[rows, col] = value or assign."},
+ {"front": "pandas 3.0 text dtype", "back": "str: a StringDtype with NaN as missing value, PyArrow-backed when available. Test with pd.api.types.is_string_dtype."},
+ {"front": "loc vs iloc", "back": "loc selects by label with inclusive slices; iloc selects by integer position with exclusive slices."},
+ {"front": "errors='coerce'", "back": "In to_numeric/to_datetime, turns unparseable values into NaN/NaT so you can count them."},
+ {"front": "agg vs transform", "back": "agg returns one row per group; transform returns one value per original row."},
+ {"front": "merge validate=", "back": "Checks key uniqueness (one_to_one, many_to_one, ...) and raises MergeError instead of silently duplicating rows."},
+ {"front": "pivot_table vs melt", "back": "pivot_table goes long to wide (with aggregation); melt goes wide to long."},
+ {"front": "resample vs rolling", "back": "resample groups by calendar buckets; rolling slides a fixed window over consecutive rows."},
+ {"front": "Fastest way to add a computed column", "back": "A vectorized expression on whole columns (arithmetic, .str, .dt, np.where), not apply or loops."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://pandas.pydata.org/docs/user_guide/index.html">pandas User Guide</a> (especially "Copy-on-Write" and "Group by")</li>
+      <li><a href="https://pandas.pydata.org/docs/whatsnew/index.html">pandas release notes</a> for the 3.0 changes</li>
+      <li><a href="https://wesmckinney.com/book/">Python for Data Analysis, 3rd ed.</a> by Wes McKinney (free online)</li>
+      <li><a href="https://vita.had.co.nz/papers/tidy-data.pdf">Tidy Data</a> by Hadley Wickham: the theory behind long vs wide</li>
+      <li>Next: <a href="m52-polars-arrow.html">M52 Polars, Arrow &amp; Columnar Data</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

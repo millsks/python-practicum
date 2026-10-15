@@ -1,0 +1,1267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M45 · Web &amp; APIs · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m45">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 45</p>
+    <h1>Web &amp; APIs</h1>
+    <p class="lede">Most professional Python either calls web APIs or serves one. This module takes HTTP apart until it
+      is no longer magic, then shows how to consume APIs robustly (timeouts, retries, pagination, auth) with the
+      standard library and httpx, how to test that code without a network, and how to design and build a REST API
+      with FastAPI.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m38-asyncio.html">M38</a>, <a href="m44-data-databases.html">M44</a>, <a href="m17-testing.html">M17</a></span></div>
+    <ul class="objectives">
+      <li>Describe an HTTP exchange: methods, status codes, headers, bodies, JSON, and statelessness</li>
+      <li>Build and parse URLs safely with <code>urllib.parse</code></li>
+      <li>Consume APIs with <code>urllib.request</code> and httpx (sync and async) using timeouts, auth tokens,
+        pagination, and retries with exponential backoff</li>
+      <li>Test HTTP code without a network using fakes, <code>httpx.MockTransport</code>, and respx</li>
+      <li>Design REST resources and build an API with FastAPI: parameters, Pydantic models, dependency injection, errors,
+        and OpenAPI docs</li>
+      <li>Explain WSGI vs ASGI and the basics of CORS and API authentication</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="http">
+    <h2>How HTTP works</h2>
+    <p><strong>HTTP</strong> (Hypertext Transfer Protocol) is a request/response protocol. A <strong>client</strong>
+      (a browser, your script, another service) opens a connection to a <strong>server</strong> and sends a
+      <strong>request</strong>; the server sends back exactly one <strong>response</strong>. Underneath, HTTP/1.1 runs
+      over a TCP connection (usually wrapped in TLS, which makes it HTTPS); HTTP/2 and HTTP/3 change the wire format for
+      speed but keep the same model of methods, headers, and status codes.</p>
+    <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Client (your code)
+  participant D as DNS
+  participant S as API server
+  C->>D: Where is api.example.com?
+  D-->>C: 203.0.113.7
+  C->>S: TCP + TLS handshake
+  C->>S: GET /v1/notes?page=2 + headers (Accept, Authorization)
+  S->>S: route, authenticate, query database
+  S-->>C: 200 OK + headers (Content-Type: application/json) + JSON body
+  C->>S: POST /v1/notes + JSON body
+  S-->>C: 201 Created + Location: /v1/notes/42
+    </pre>
+    <p>An HTTP/1.1 message is plain text: a start line, header lines, a blank line, and an optional body. Here is a real
+      request and its response:</p>
+<pre data-label="Request"><code>POST /v1/notes HTTP/1.1
+Host: api.example.com
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer eyJhbGciOi...
+Content-Length: 35
+
+{"title": "Buy milk", "done": false}</code></pre>
+<pre data-label="Response"><code>HTTP/1.1 201 Created
+Content-Type: application/json
+Location: /v1/notes/42
+
+{"id": 42, "title": "Buy milk", "done": false}</code></pre>
+    <p>HTTP is <strong>stateless</strong>: each request carries everything the server needs to handle it, and the server
+      does not remember the previous request on that connection. State that must persist between requests (who you
+      are, what is in your cart) is sent every time, as a cookie or an <code>Authorization</code> header, or stored
+      server-side in a database keyed by something the client sends. Statelessness is what lets you run ten copies of a
+      server behind a load balancer: any copy can answer any request.</p>
+    <div class="runnable" data-title="Parse a raw HTTP request">
+<textarea>
+raw = (
+    "POST /v1/notes?draft=1 HTTP/1.1\r\n"
+    "Host: api.example.com\r\n"
+    "Content-Type: application/json\r\n"
+    "Content-Length: 35\r\n"
+    "\r\n"
+    '{"title": "Buy milk", "done": false}'
+)
+
+head, _, body = raw.partition("\r\n\r\n")      # a blank line separates head from body
+start_line, *header_lines = head.split("\r\n")
+method, target, version = start_line.split(" ")
+headers = {}
+for line in header_lines:
+    name, _, value = line.partition(":")
+    headers[name.strip().lower()] = value.strip()   # header names are case-insensitive
+
+print(method, target, version)
+print(headers)
+print("body:", body)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> one request, one response; a start line, headers, blank
+      line, body; header names are case-insensitive; and the protocol is stateless, so identity travels with every
+      request.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="methods-status">
+    <h2>Methods and status codes</h2>
+    <p>The <strong>method</strong> says what the client wants to do with the resource at the path. Two properties
+      matter for correctness. A <strong>safe</strong> method does not change server state. An
+      <strong>idempotent</strong> method has the same effect whether you send it once or five times, which is exactly
+      what makes it safe to <em>retry</em> after a timeout.</p>
+    <table>
+      <thead><tr><th>Method</th><th>Meaning</th><th>Safe</th><th>Idempotent</th><th>Typical success</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET</code></td><td>Read a resource or collection</td><td>yes</td><td>yes</td><td>200</td></tr>
+        <tr><td><code>HEAD</code></td><td>Like GET, headers only</td><td>yes</td><td>yes</td><td>200</td></tr>
+        <tr><td><code>POST</code></td><td>Create a child resource, or run an action</td><td>no</td><td><strong>no</strong></td><td>201 (+ Location) or 200</td></tr>
+        <tr><td><code>PUT</code></td><td>Replace the resource with this representation</td><td>no</td><td>yes</td><td>200 or 204</td></tr>
+        <tr><td><code>PATCH</code></td><td>Partially update</td><td>no</td><td>not guaranteed</td><td>200</td></tr>
+        <tr><td><code>DELETE</code></td><td>Remove</td><td>no</td><td>yes</td><td>204</td></tr>
+        <tr><td><code>OPTIONS</code></td><td>Ask what is allowed (used by CORS preflight)</td><td>yes</td><td>yes</td><td>204</td></tr>
+      </tbody>
+    </table>
+    <p>The <strong>status code</strong> is a three-digit number; the first digit is its class:</p>
+    <div class="card-grid">
+      <div class="card"><h4>1xx informational</h4><p>Rare in application code (101 Switching Protocols for WebSockets).</p></div>
+      <div class="card"><h4>2xx success</h4><p>200 OK, 201 Created, 202 Accepted (queued), 204 No Content.</p></div>
+      <div class="card"><h4>3xx redirection</h4><p>301/308 moved permanently, 302/307 temporarily, 304 Not Modified (use your cache).</p></div>
+      <div class="card"><h4>4xx client error</h4><p>400 Bad Request, 401 Unauthenticated, 403 Forbidden, 404 Not Found,
+        405 Method Not Allowed, 409 Conflict, 422 Unprocessable Content (validation), 429 Too Many Requests.</p></div>
+      <div class="card"><h4>5xx server error</h4><p>500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable,
+        504 Gateway Timeout.</p></div>
+    </div>
+    <p>The distinction between 4xx and 5xx drives client behavior: a 4xx means <em>your request</em> is wrong, so sending
+      it again unchanged will fail again; a 5xx (and 429) may be temporary, so a retry can succeed. The standard library
+      has every code as an enum:</p>
+    <div class="runnable" data-title="http.HTTPStatus">
+<textarea>
+from http import HTTPStatus
+
+for code in (200, 201, 204, 304, 401, 404, 422, 429, 503):
+    status = HTTPStatus(code)
+    print(code, status.phrase, "| client error" if status.is_client_error else "",
+          "| server error" if status.is_server_error else "")
+
+print(HTTPStatus.NOT_FOUND == 404, HTTPStatus.CREATED.description)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: retry or not?" data-predict>
+<textarea>
+def worth_retrying(status):
+    return status == 429 or 500 <= status <= 599
+
+print([s for s in (200, 400, 404, 429, 500, 503) if worth_retrying(s)])
+</textarea>
+    </div>
+    <aside class="callout note"><p>401 is misnamed "Unauthorized" but means <em>unauthenticated</em> ("who are you?").
+      403 Forbidden means "I know who you are, and you may not". <code>is_client_error</code> and friends were added to
+      <code>HTTPStatus</code> in Python 3.12.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="headers-json">
+    <h2>Headers and JSON</h2>
+    <p>Headers are metadata about the message. The ones you will meet constantly:</p>
+    <ul>
+      <li><code>Content-Type</code>: the body's format (<code>application/json</code>, <code>text/html; charset=utf-8</code>).
+        <code>Accept</code>: what the client would like back.</li>
+      <li><code>Authorization</code>: credentials, typically <code>Bearer &lt;token&gt;</code>.</li>
+      <li><code>Cache-Control</code>, <code>ETag</code>, <code>If-None-Match</code>: caching and conditional requests
+        (a 304 response means "unchanged; reuse your copy").</li>
+      <li><code>Location</code>: where a newly created resource (201) or a redirect (3xx) lives.</li>
+      <li><code>Retry-After</code>: how long to wait after a 429 or 503. <code>User-Agent</code>: who is calling.</li>
+    </ul>
+    <p><strong>JSON</strong> (JavaScript Object Notation) is the lingua franca of APIs. It has objects, arrays, strings,
+      numbers, booleans, and <code>null</code>, which map to <code>dict</code>, <code>list</code>, <code>str</code>,
+      <code>int</code>/<code>float</code>, <code>bool</code>, and <code>None</code>. It has no dates, no sets, no
+      tuples, no bytes, and object keys are always strings, so serializing real data needs choices.</p>
+    <div class="runnable" data-title="JSON round trips and their limits">
+<textarea>
+import json
+from datetime import datetime, timezone
+
+payload = {"id": 7, "tags": ("a", "b"), "done": False, "score": None, 1: "int key"}
+text = json.dumps(payload)
+print(text)
+print(json.loads(text))           # the tuple became a list, the int key became "1"
+
+note = {"title": "Ship it", "due": datetime(2026, 5, 1, 9, 30, tzinfo=timezone.utc)}
+try:
+    json.dumps(note)
+except TypeError as exc:
+    print("TypeError:", exc)
+
+def encode(obj):
+    if isinstance(obj, datetime):
+        return obj.isoformat()     # ISO 8601 is the convention for dates in JSON
+    raise TypeError(f"cannot serialize {type(obj).__name__}")
+
+print(json.dumps(note, default=encode, indent=2))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Never trust incoming JSON's shape. A client can send a string where you expect a
+      number, omit a field, or add 10 MB of nested arrays. Validate at the boundary (by hand, or with Pydantic as
+      FastAPI does) and reject bad input with 400 or 422 before it reaches your logic.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="urls">
+    <h2>URLs and urllib.parse</h2>
+    <p>A URL has parts, and each part has its own encoding rules:</p>
+<pre data-label="URL anatomy"><code>https://ada:secret@api.example.com:8443/v1/search?q=caf%C3%A9+au+lait&amp;page=2#results
+└─┬─┘   └───┬────┘ └──────┬──────┘ └┬─┘└───┬───┘ └──────────┬───────────────┘ └──┬──┘
+scheme  userinfo        host      port   path              query              fragment</code></pre>
+    <p>Characters with special meaning (<code>/ ? &amp; = # +</code>, spaces, non-ASCII) must be
+      <strong>percent-encoded</strong> when they appear inside a value. Building URLs with string concatenation is how
+      a search for <code>"R&amp;D"</code> silently becomes two parameters. Use <code>urllib.parse</code>:</p>
+    <div class="runnable" data-title="Build and take apart URLs safely">
+<textarea>
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
+
+base = "https://api.example.com/v1/"
+params = {"q": "R&D café", "page": 2, "tags": ["a", "b"]}
+url = urljoin(base, "search") + "?" + urlencode(params, doseq=True)
+print(url)
+
+parts = urlsplit(url)
+print(parts.scheme, parts.netloc, parts.path)
+print(parse_qs(parts.query))                 # values come back as lists of strings
+
+print(quote("notes/2026 plans"), quote("notes/2026 plans", safe=""))
+print(urljoin("https://x.io/a/b/", "c"), urljoin("https://x.io/a/b", "c"), urljoin("https://x.io/a/b/", "/c"))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: urljoin and the trailing slash" data-predict>
+<textarea>
+from urllib.parse import urljoin
+
+print(urljoin("https://api.io/v1", "users"))
+print(urljoin("https://api.io/v1/", "users"))
+</textarea>
+    </div>
+    <p><code>urljoin</code> follows browser rules: without a trailing slash, the last path segment is treated as a
+      "file" and replaced. Many bugs in API clients come from exactly this.</p>
+  </section>
+
+  <section class="lesson-section" id="consuming">
+    <h2>Consuming APIs: urllib.request and httpx</h2>
+    <p>The browser sandbox that runs this page blocks real network calls from Python, so the cells in this section are
+      marked to run locally. Everything else in the module (URL handling, retries, routing, validation) runs here.</p>
+    <h3>The standard library: urllib.request</h3>
+    <div class="runnable" data-local="Real network access is blocked in the browser. Save as fetch.py and run `pixi run python fetch.py`." data-title="urllib.request with a timeout">
+<textarea>
+import json
+import urllib.error
+import urllib.request
+
+req = urllib.request.Request(
+    "https://api.github.com/repos/python/cpython",
+    headers={"Accept": "application/vnd.github+json", "User-Agent": "practicum-demo"},
+)
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:      # ALWAYS pass a timeout
+        print(resp.status, resp.headers["Content-Type"])
+        data = json.load(resp)
+        print(data["full_name"], data["stargazers_count"])
+except urllib.error.HTTPError as exc:          # 4xx/5xx raise HTTPError
+    print("HTTP error", exc.code, exc.reason)
+except urllib.error.URLError as exc:           # DNS failure, refused connection, timeout
+    print("network error", exc.reason)
+</textarea>
+    </div>
+    <p><code>urllib.request</code> needs no installation and is fine for scripts, but it is low-level: no connection
+      pooling across calls, awkward JSON and form handling, and no async. For real projects, use httpx.</p>
+    <h3>httpx: sync and async</h3>
+    <aside class="callout pixi"><p>Add it to your project with <code>pixi add httpx</code> (it is on conda-forge).
+      Tests will also want <code>pixi add --feature dev respx pytest</code>.</p></aside>
+    <div class="runnable" data-local="httpx and real network calls are not available in the browser. Run `pixi add httpx`, then `pixi run python client.py`." data-title="httpx.Client: base URL, auth, timeouts, pagination">
+<textarea>
+import os
+
+import httpx
+
+token = os.environ["NOTES_API_TOKEN"]          # secrets come from the environment, never the source code
+
+with httpx.Client(
+    base_url="https://api.example.com/v1/",
+    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    timeout=httpx.Timeout(10.0, connect=3.0),  # httpx defaults to 5 s; be explicit anyway
+) as client:                                   # one Client = one connection pool; reuse it
+    resp = client.get("notes", params={"page": 1, "per_page": 50})
+    resp.raise_for_status()                    # turn 4xx/5xx into httpx.HTTPStatusError
+    notes = resp.json()
+
+    created = client.post("notes", json={"title": "Buy milk"})   # json= sets Content-Type for you
+    print(created.status_code, created.headers.get("location"))
+
+    # Cursor pagination: follow "next" until the server stops giving one.
+    items, url = [], "notes"
+    while url:
+        page = client.get(url).raise_for_status().json()
+        items.extend(page["items"])
+        url = page.get("next")                 # a full URL or None
+    print(len(items), "notes")
+</textarea>
+    </div>
+    <p>With <code>httpx.AsyncClient</code> the same calls become awaitable, so you can run many requests concurrently on
+      one thread. This is where the event loop from <a href="m38-asyncio.html">M38</a> pays off: while one request
+      waits for the network, the loop runs the others.</p>
+    <div class="runnable" data-local="Needs httpx and network access. Run `pixi run python fetch_many.py`; locally use asyncio.run(main())." data-title="httpx.AsyncClient: concurrent requests">
+<textarea>
+import asyncio
+
+import httpx
+
+
+async def fetch(client: httpx.AsyncClient, user: str) -> tuple[str, int]:
+    resp = await client.get(f"users/{user}")
+    resp.raise_for_status()
+    return user, resp.json()["public_repos"]
+
+
+async def main() -> None:
+    limits = httpx.Limits(max_connections=10)          # be polite: bound concurrency
+    async with httpx.AsyncClient(base_url="https://api.github.com/", timeout=10, limits=limits) as client:
+        results = await asyncio.gather(*(fetch(client, u) for u in ["gvanrossum", "ambv", "brettcannon"]))
+    for user, repos in results:
+        print(user, repos)
+
+
+asyncio.run(main())
+</textarea>
+    </div>
+    <div class="viz" data-viz="event-loop" data-config='{"scenario": "asyncio"}'></div>
+    <h3>Pagination, simulated</h3>
+    <p>APIs return big collections in <strong>pages</strong>. <em>Offset</em> pagination (<code>?page=3&amp;per_page=50</code>)
+      is simple but can skip or repeat items when data changes between requests. <em>Cursor</em> pagination returns an
+      opaque token pointing at "after the last item you saw", which is stable and fast; GitHub-style APIs put the next
+      URL in a <code>Link</code> header. A generator hides the paging from the caller:</p>
+    <div class="runnable" data-title="A paginating generator over a fake API">
+<textarea>
+FAKE_DB = [f"note-{i}" for i in range(1, 12)]
+
+def fake_api(cursor=None, limit=4):
+    """Pretend server: returns a page of items and the cursor for the next page."""
+    start = int(cursor or 0)
+    items = FAKE_DB[start:start + limit]
+    next_cursor = str(start + limit) if start + limit < len(FAKE_DB) else None
+    return {"items": items, "next": next_cursor}
+
+def iter_items(get_page):
+    cursor = None
+    while True:
+        page = get_page(cursor)
+        yield from page["items"]
+        cursor = page["next"]
+        if cursor is None:
+            return
+
+calls = []
+def logged(cursor):
+    calls.append(cursor)
+    return fake_api(cursor)
+
+print(list(iter_items(logged)))
+print("requests made with cursors:", calls)
+</textarea>
+    </div>
+    <aside class="callout danger" data-title="Timeouts are not optional"><p>Without a timeout, a call to a server that
+      accepts the connection but never answers hangs your program forever, and in a web service, each hung call holds a
+      worker until the whole service stops responding. <code>urllib</code> has <em>no</em> default timeout. Always set
+      one.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="resilience">
+    <h2>Retries, backoff, and idempotency</h2>
+    <p>Networks fail in transient ways: a dropped connection, a 503 during a deploy, a 429 because you are going too
+      fast. The standard remedy is to <strong>retry with exponential backoff</strong>: wait 0.5 s, then 1 s, 2 s, 4 s...,
+      up to a cap and a maximum number of attempts. Add <strong>jitter</strong> (a random fraction of the delay) so
+      that a thousand clients that failed at the same moment do not all retry at the same moment too (the
+      "thundering herd").</p>
+    <ul>
+      <li><strong>Retry</strong>: connection errors, timeouts, 429, 502, 503, 504. Honor <code>Retry-After</code> if
+        present.</li>
+      <li><strong>Do not retry</strong>: other 4xx (the request itself is wrong) and anything after a non-idempotent
+        request might have succeeded, unless you use an <strong>idempotency key</strong>: a unique header (for example
+        <code>Idempotency-Key: 7c9e...</code>) the server uses to recognize and ignore a repeated POST.</li>
+    </ul>
+    <p>Retry logic is a perfect example of code that should take its <em>clock</em> as a parameter: then tests run
+      instantly and deterministically, with no real sleeping.</p>
+    <div class="runnable" data-title="Retry with exponential backoff and a fake clock">
+<textarea>
+import random
+
+class TransientError(Exception):
+    """Something that is worth retrying (timeout, 503, 429)."""
+
+def retry(call, *, attempts=5, base=0.5, cap=8.0, sleep, rng=random.random):
+    for attempt in range(attempts):
+        try:
+            return call()
+        except TransientError as exc:
+            if attempt == attempts - 1:
+                raise
+            delay = min(cap, base * 2 ** attempt)
+            delay = delay / 2 + rng() * delay / 2        # "equal jitter": between delay/2 and delay
+            print(f"attempt {attempt + 1} failed ({exc}); sleeping {delay:.2f}s")
+            sleep(delay)
+
+# A flaky fake server: fails three times, then succeeds.
+responses = iter([TransientError("503"), TransientError("timeout"), TransientError("429"), {"ok": True}])
+def flaky():
+    result = next(responses)
+    if isinstance(result, Exception):
+        raise result
+    return result
+
+slept = []
+print(retry(flaky, sleep=slept.append, rng=lambda: 1.0))
+print("total simulated wait:", sum(slept), "seconds; real wait: 0")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>In production you rarely hand-roll this. httpx supports transport-level retries for
+      connection failures (<code>httpx.HTTPTransport(retries=3)</code>), and the <code>tenacity</code> library
+      (<code>pixi add tenacity</code>) provides decorators such as
+      <code>@retry(wait=wait_exponential_jitter(), stop=stop_after_attempt(5))</code>. Log each retry with structlog
+      (<code>log.warning("http_retry", url=url, attempt=n, status=503)</code>) so you can see flaky dependencies in
+      your dashboards; a <code>print()</code> would be lost.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="testing-http">
+    <h2>Testing HTTP code without a network</h2>
+    <p>Tests that hit real APIs are slow, flaky, rate-limited, and may cost money. Instead, cut the network out at a
+      seam. The cleanest seam is <strong>dependency injection</strong>: your code receives the client (or a function
+      that performs requests) instead of creating it, so a test can pass a fake.</p>
+    <div class="runnable" data-title="Inject the transport, test with a fake">
+<textarea>
+import json
+
+class FakeTransport:
+    """Maps (method, url) to (status, body) and records every request."""
+    def __init__(self, routes):
+        self.routes, self.requests = routes, []
+
+    def __call__(self, method, url, body=None):
+        self.requests.append((method, url, body))
+        status, payload = self.routes.get((method, url), (404, {"detail": "not found"}))
+        return status, json.dumps(payload)
+
+class WeatherClient:
+    def __init__(self, transport, base="https://weather.test"):
+        self.transport, self.base = transport, base
+
+    def temperature(self, city):
+        status, text = self.transport("GET", f"{self.base}/now?city={city}")
+        if status != 200:
+            raise LookupError(f"{city}: HTTP {status}")
+        return json.loads(text)["temp_c"]
+
+fake = FakeTransport({("GET", "https://weather.test/now?city=oslo"): (200, {"temp_c": -3.5})})
+client = WeatherClient(fake)
+assert client.temperature("oslo") == -3.5
+try:
+    client.temperature("atlantis")
+except LookupError as exc:
+    print("raised as expected:", exc)
+print("requests made:", fake.requests)
+</textarea>
+    </div>
+    <p>With httpx you get this seam for free: every client accepts a <code>transport</code>, and
+      <code>httpx.MockTransport(handler)</code> calls your function instead of the network. The <strong>respx</strong>
+      library builds on that with a route-matching API and pytest fixtures:</p>
+    <div class="runnable" data-local="Needs httpx, respx, and pytest. Run `pixi add --feature dev respx pytest`, then `pixi run pytest`." data-title="test_client.py with MockTransport and respx">
+<textarea>
+import httpx
+import pytest
+import respx
+
+
+def get_temp(client: httpx.Client, city: str) -> float:
+    resp = client.get("/now", params={"city": city})
+    resp.raise_for_status()
+    return resp.json()["temp_c"]
+
+
+def test_with_mock_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["city"] == "oslo"
+        return httpx.Response(200, json={"temp_c": -3.5})
+
+    client = httpx.Client(base_url="https://weather.test", transport=httpx.MockTransport(handler))
+    assert get_temp(client, "oslo") == -3.5
+
+
+@respx.mock
+def test_with_respx() -> None:
+    route = respx.get("https://weather.test/now").mock(return_value=httpx.Response(503))
+    with httpx.Client(base_url="https://weather.test") as client, pytest.raises(httpx.HTTPStatusError):
+        get_temp(client, "oslo")
+    assert route.called
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Test the unhappy paths deliberately: 404, 500, malformed JSON, a timeout
+      (<code>side_effect=httpx.ConnectTimeout</code> in respx), and an empty page. Those are where real outages
+      happen.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="rest">
+    <h2>Designing a REST API</h2>
+    <p><strong>REST</strong> (Representational State Transfer) is an architectural style for HTTP APIs. In practice it
+      means: model your domain as <strong>resources</strong> identified by URLs (nouns, not verbs), use the HTTP methods
+      for operations, use status codes honestly, and keep requests stateless.</p>
+    <table>
+      <thead><tr><th>Operation</th><th>Request</th><th>Success</th><th>Common errors</th></tr></thead>
+      <tbody>
+        <tr><td>List notes</td><td><code>GET /v1/notes?done=false&amp;limit=20&amp;cursor=...</code></td><td>200 + page</td><td>400 bad filter</td></tr>
+        <tr><td>Create</td><td><code>POST /v1/notes</code> + JSON</td><td>201 + Location + body</td><td>422 invalid body</td></tr>
+        <tr><td>Read one</td><td><code>GET /v1/notes/42</code></td><td>200</td><td>404</td></tr>
+        <tr><td>Replace</td><td><code>PUT /v1/notes/42</code> + full JSON</td><td>200</td><td>404, 422</td></tr>
+        <tr><td>Update part</td><td><code>PATCH /v1/notes/42</code> + partial JSON</td><td>200</td><td>404, 409 conflict, 422</td></tr>
+        <tr><td>Delete</td><td><code>DELETE /v1/notes/42</code></td><td>204</td><td>404</td></tr>
+        <tr><td>Sub-resource</td><td><code>GET /v1/users/7/notes</code></td><td>200</td><td>404 unknown user</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>Plural nouns</strong> for collections; avoid <code>/getNotes</code> or <code>/createNote</code>.</li>
+      <li><strong>Version</strong> the API (<code>/v1/</code> in the path or a header) so you can change it without
+        breaking clients.</li>
+      <li><strong>Consistent errors</strong>: one JSON shape for all of them. RFC 9457 "Problem Details" is a standard:
+        <code>{"type": "...", "title": "Not found", "status": 404, "detail": "note 42 does not exist"}</code>.</li>
+      <li><strong>Paginate</strong> every collection from day one; adding it later breaks clients.</li>
+    </ul>
+    <p>Under every web framework is the same small idea: match the method and path against a table of
+      <strong>routes</strong>, extract path parameters, validate the body, call a handler, and turn its result (or its
+      error) into a status code and JSON. Here it is in plain Python, so nothing about FastAPI will feel like magic:</p>
+    <div class="runnable" data-title="A tiny router with validation">
+<textarea>
+import json
+import re
+
+ROUTES = []          # (method, compiled pattern, handler)
+NOTES = {1: {"id": 1, "title": "Buy milk", "done": False}}
+
+def route(method, pattern):
+    regex = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>\\d+)", pattern) + "$")
+    def register(handler):
+        ROUTES.append((method, regex, handler))
+        return handler
+    return register
+
+class HTTPError(Exception):
+    def __init__(self, status, detail):
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+def validate_note(data):
+    if not isinstance(data, dict):
+        raise HTTPError(422, "body must be a JSON object")
+    title = data.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise HTTPError(422, "title must be a non-empty string")
+    if not isinstance(data.get("done", False), bool):
+        raise HTTPError(422, "done must be a boolean")
+    return {"title": title.strip(), "done": data.get("done", False)}
+
+@route("GET", "/notes/{note_id}")
+def get_note(note_id, body):
+    if int(note_id) not in NOTES:
+        raise HTTPError(404, f"note {note_id} not found")
+    return 200, NOTES[int(note_id)]
+
+@route("POST", "/notes")
+def create_note(body):
+    note = {"id": max(NOTES) + 1, **validate_note(body)}
+    NOTES[note["id"]] = note
+    return 201, note
+
+def handle(method, path, raw_body=""):
+    allowed = False
+    for m, regex, handler in ROUTES:
+        match = regex.match(path)
+        if match:
+            allowed = True
+            if m == method:
+                try:
+                    body = json.loads(raw_body) if raw_body else None
+                    return handler(**match.groupdict(), body=body)
+                except json.JSONDecodeError:
+                    return 400, {"detail": "malformed JSON"}
+                except HTTPError as exc:
+                    return exc.status, {"detail": exc.detail}
+    return (405, {"detail": "method not allowed"}) if allowed else (404, {"detail": "no such route"})
+
+print(handle("GET", "/notes/1"))
+print(handle("GET", "/notes/99"))
+print(handle("POST", "/notes", '{"title": "  Write tests  "}'))
+print(handle("POST", "/notes", '{"title": ""}'))
+print(handle("POST", "/notes", '{"title": "x", '))
+print(handle("DELETE", "/notes/1"))
+print(handle("GET", "/users"))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="fastapi">
+    <h2>Building an API with FastAPI</h2>
+    <p><strong>FastAPI</strong> is a modern ASGI framework built on two libraries: Starlette (routing, requests,
+      responses) and <strong>Pydantic</strong> (data validation from type hints). You declare what a handler needs
+      with ordinary type annotations, and FastAPI parses, validates, converts, documents, and serializes for you.</p>
+    <aside class="callout pixi"><p>Set up a project:</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init notes-api &amp;&amp; cd notes-api
+pixi add fastapi uvicorn          # the framework and an ASGI server
+pixi add --feature dev pytest httpx   # TestClient uses httpx under the hood
+pixi run uvicorn app:app --reload  # app.py, variable app; --reload restarts on save</code></pre>
+      <p>Then open <code>http://127.0.0.1:8000/docs</code> for interactive Swagger UI documentation generated from your
+        code, <code>/redoc</code> for another view, and <code>/openapi.json</code> for the machine-readable OpenAPI
+        schema (which can generate client libraries in many languages).</p></aside>
+    <div class="runnable" data-local="FastAPI and uvicorn are not available in the browser. Run `pixi add fastapi uvicorn`, save as app.py, then `pixi run uvicorn app:app --reload`." data-title="app.py: a notes API">
+<textarea>
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Notes API", version="1.0.0")
+
+
+class NoteIn(BaseModel):                         # what clients send
+    title: str = Field(min_length=1, max_length=200)
+    done: bool = False
+
+
+class Note(NoteIn):                              # what we return
+    id: int
+
+
+class NoteStore:
+    """A tiny repository; swap for a database-backed one without touching the routes."""
+
+    def __init__(self) -> None:
+        self._notes: dict[int, Note] = {}
+        self._next_id = 1
+
+    def add(self, data: NoteIn) -> Note:
+        note = Note(id=self._next_id, **data.model_dump())
+        self._notes[note.id] = note
+        self._next_id += 1
+        return note
+
+    def get(self, note_id: int) -> Note | None:
+        return self._notes.get(note_id)
+
+    def list_all(self, done: bool | None, limit: int) -> list[Note]:
+        notes = [n for n in self._notes.values() if done is None or n.done == done]
+        return notes[:limit]
+
+    def delete(self, note_id: int) -> bool:
+        return self._notes.pop(note_id, None) is not None
+
+
+_store = NoteStore()
+
+
+def get_store() -> NoteStore:                    # a dependency; tests override it
+    return _store
+
+
+Store = Annotated[NoteStore, Depends(get_store)]
+
+
+@app.get("/notes", response_model=list[Note])
+def list_notes(store: Store, done: bool | None = None, limit: Annotated[int, Query(ge=1, le=100)] = 20):
+    return store.list_all(done, limit)             # query parameters: ?done=true&limit=5
+
+
+@app.post("/notes", response_model=Note, status_code=status.HTTP_201_CREATED)
+def create_note(note: NoteIn, store: Store):     # a Pydantic parameter = the JSON body
+    return store.add(note)
+
+
+@app.get("/notes/{note_id}", response_model=Note)
+def read_note(note_id: int, store: Store):       # path parameter, converted to int (422 if not)
+    note = store.get(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"note {note_id} not found")
+    return note
+
+
+@app.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_note(note_id: int, store: Store) -> None:
+    if not store.delete(note_id):
+        raise HTTPException(status_code=404, detail=f"note {note_id} not found")
+</textarea>
+    </div>
+    <p>What FastAPI did for you from those annotations:</p>
+    <ul>
+      <li><strong>Path parameters</strong> (<code>note_id: int</code>) come from <code>{note_id}</code> in the path
+        and are converted; <code>/notes/abc</code> gets an automatic 422 with a precise error message.</li>
+      <li><strong>Query parameters</strong> are any other simple-typed arguments. Defaults make them optional;
+        <code>Query(ge=1, le=100)</code> adds constraints.</li>
+      <li><strong>Body</strong>: a Pydantic model parameter is parsed from the JSON body and validated.
+        <code>response_model</code> filters and documents what you return.</li>
+      <li><strong>Dependency injection</strong>: <code>Depends(get_store)</code> asks FastAPI to call
+        <code>get_store</code> and pass the result. Dependencies can depend on other dependencies (a DB session, the
+        current user, settings), and tests can replace any of them.</li>
+      <li><strong>Errors</strong>: raising <code>HTTPException</code> produces a JSON error response. For your own
+        domain errors, register a handler with <code>@app.exception_handler(NoteNotFound)</code> so routes stay clean.</li>
+    </ul>
+    <p>Testing uses <code>TestClient</code>, which calls the app in-process (no server, no network) through httpx:</p>
+    <div class="runnable" data-local="Needs fastapi and httpx. Save as test_app.py and run `pixi run pytest`." data-title="test_app.py">
+<textarea>
+import pytest
+from fastapi.testclient import TestClient
+
+from app import NoteStore, app, get_store
+
+
+@pytest.fixture
+def client():
+    fresh = NoteStore()
+    app.dependency_overrides[get_store] = lambda: fresh   # every test gets an empty store
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_create_and_read(client):
+    created = client.post("/notes", json={"title": "Buy milk"})
+    assert created.status_code == 201
+    note_id = created.json()["id"]
+    assert client.get(f"/notes/{note_id}").json() == {"id": note_id, "title": "Buy milk", "done": False}
+
+
+def test_validation_error(client):
+    assert client.post("/notes", json={"title": ""}).status_code == 422
+
+
+def test_missing_note(client):
+    assert client.get("/notes/999").status_code == 404
+    assert client.delete("/notes/999").status_code == 404
+</textarea>
+    </div>
+    <aside class="callout warn"><p>FastAPI runs plain <code>def</code> handlers in a thread pool and <code>async def</code>
+      handlers on the event loop. Never call blocking code (a <code>requests</code> call, <code>time.sleep</code>, a
+      slow sqlite3 query) inside an <code>async def</code> handler: it freezes every request on that worker. Use
+      <code>def</code>, or an async library such as httpx's <code>AsyncClient</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="wsgi-asgi">
+    <h2>WSGI vs ASGI</h2>
+    <p>How does a server such as uvicorn talk to your framework? Through a standard interface, so any server works
+      with any framework.</p>
+    <ul>
+      <li><strong>WSGI</strong> (PEP 3333, 2003) is synchronous: the app is a callable
+        <code>app(environ, start_response)</code> that receives a dict describing the request and returns an iterable of
+        bytes. Flask and classic Django use it; servers include gunicorn and the standard library's
+        <code>wsgiref</code>. One request occupies one worker thread for its whole life.</li>
+      <li><strong>ASGI</strong> is its async successor: the app is <code>async def app(scope, receive, send)</code>,
+        exchanging event dicts with the server. It supports long-lived connections (WebSockets, server-sent events) and
+        thousands of concurrent slow requests on one process. FastAPI, Starlette, and modern Django use it; servers
+        include uvicorn, hypercorn, and granian.</li>
+    </ul>
+    <p>Both are just functions, so you can call them directly with fake inputs:</p>
+    <div class="runnable" data-title="A WSGI app, called by hand">
+<textarea>
+import json
+from wsgiref.util import setup_testing_defaults
+
+def app(environ, start_response):
+    name = environ.get("QUERY_STRING", "").removeprefix("name=") or "world"
+    body = json.dumps({"hello": name}).encode()
+    start_response("200 OK", [("Content-Type", "application/json"), ("Content-Length", str(len(body)))])
+    return [body]
+
+environ = {"PATH_INFO": "/greet", "QUERY_STRING": "name=Ada"}
+setup_testing_defaults(environ)          # fills in the other required WSGI keys
+captured = {}
+def start_response(status, headers):
+    captured["status"], captured["headers"] = status, headers
+
+print(b"".join(app(environ, start_response)), captured)
+</textarea>
+    </div>
+    <div class="runnable" data-title="An ASGI app, driven by hand (top-level await)">
+<textarea>
+import json
+
+async def app(scope, receive, send):
+    assert scope["type"] == "http"
+    event = await receive()                                  # the request body arrives as events
+    data = json.loads(event.get("body") or b"{}")
+    body = json.dumps({"method": scope["method"], "path": scope["path"], "echo": data}).encode()
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": body})
+
+scope = {"type": "http", "method": "POST", "path": "/echo", "headers": []}
+async def receive():
+    return {"type": "http.request", "body": b'{"x": 1}', "more_body": False}
+sent = []
+async def send(message):
+    sent.append(message)
+
+await app(scope, receive, send)      # in a local script: asyncio.run(app(scope, receive, send))
+for message in sent:
+    print(message)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>In production you run uvicorn behind a reverse proxy (nginx, a cloud load balancer)
+      that terminates TLS, with several worker processes:
+      <code>pixi run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4</code>. Configure structlog to emit JSON
+      lines so every request log (method, path, status, duration, request id) is searchable.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="security">
+    <h2>A first look at API security</h2>
+    <p>Security deserves its own course; here are the ideas every API author must know on day one (see also
+      <a href="m43-debugging-security.html">M43</a>).</p>
+    <ul>
+      <li><strong>HTTPS everywhere.</strong> Tokens and passwords sent over plain HTTP can be read by anyone on the
+        path.</li>
+      <li><strong>Authentication vs authorization.</strong> Authentication answers "who are you?" (API keys, OAuth 2.0
+        bearer tokens, session cookies). Authorization answers "may you do this?", and must be checked on
+        <em>every</em> request for <em>every</em> object: fetching <code>/notes/43</code> must verify that note 43
+        belongs to the caller. Missing object-level checks are the number-one API vulnerability in the OWASP API
+        Security Top 10.</li>
+      <li><strong>Tokens.</strong> JSON Web Tokens (JWTs) are signed, not encrypted; never put secrets in them, always
+        verify the signature and expiry. FastAPI provides <code>OAuth2PasswordBearer</code> and
+        <code>HTTPBearer</code> dependencies to extract tokens.</li>
+      <li><strong>CORS</strong> (Cross-Origin Resource Sharing). Browsers block a page on <code>https://app.com</code>
+        from reading responses from <code>https://api.com</code> unless the API answers with
+        <code>Access-Control-Allow-Origin</code>. It protects <em>users' browsers</em>, not your server: curl ignores it.
+        In FastAPI, add <code>CORSMiddleware</code> with an explicit list of origins, never <code>"*"</code> together with
+        credentials.</li>
+      <li><strong>Validate input, limit everything</strong>: body size, page size (<code>le=100</code>), and request rate
+        (429 with <code>Retry-After</code>).</li>
+      <li><strong>Secrets in the environment</strong>, not in code or logs. Scrub <code>Authorization</code> headers
+        from structured logs.</li>
+    </ul>
+<pre><code class="language-python">from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://notes.example.com"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)</code></pre>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises use only the standard library, so they run in the browser and are graded against real Python.</p>
+
+    <div class="exercise" data-id="m45-e1" data-title="Build a URL">
+      <div class="exercise-prompt">
+        <p>Write <code>build_url(base, path, params)</code>. Join <code>path</code> onto <code>base</code> (assume
+          <code>base</code> ends with <code>/</code> and <code>path</code> does not start with one), then append the
+          query string encoded with <code>urlencode</code>, keeping the dict's order and <strong>dropping parameters whose
+          value is <code>None</code></strong>. With no remaining parameters, return the URL without a <code>?</code>.</p>
+      </div>
+<textarea class="starter">
+from urllib.parse import urlencode, urljoin
+
+def build_url(base, path, params):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    assert build_url("https://api.x.io/v1/", "users", {"q": "ada lovelace", "page": 2}) == \
+        "https://api.x.io/v1/users?q=ada+lovelace&page=2", "spaces become + and order is kept"
+
+def test_special_characters_are_encoded():
+    url = build_url("https://api.x.io/", "search", {"q": "R&D #1"})
+    assert url == "https://api.x.io/search?q=R%26D+%231", f"& and # must be percent-encoded, got {url}"
+
+def test_none_is_dropped():
+    assert build_url("https://api.x.io/", "notes", {"done": None, "limit": 5}) == "https://api.x.io/notes?limit=5"
+
+def test_no_params():
+    assert build_url("https://api.x.io/", "notes", {}) == "https://api.x.io/notes", "no '?' without parameters"
+    assert build_url("https://api.x.io/", "notes", {"a": None}) == "https://api.x.io/notes"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Filter with a dict comprehension
+        <code>{k: v for k, v in params.items() if v is not None}</code>, then add <code>"?" + urlencode(...)</code> only
+        if it is non-empty.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from urllib.parse import urlencode, urljoin
+
+def build_url(base, path, params):
+    url = urljoin(base, path)
+    kept = {key: value for key, value in params.items() if value is not None}
+    return f"{url}?{urlencode(kept)}" if kept else url</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m45-e2" data-title="Classify responses">
+      <div class="exercise-prompt">
+        <p>Write <code>classify(status)</code> returning one of <code>"informational"</code>, <code>"success"</code>,
+          <code>"redirect"</code>, <code>"client error"</code>, <code>"server error"</code> (raise
+          <code>ValueError</code> for codes outside 100–599). Then write <code>should_retry(method, status)</code>:
+          retry only for 429, 502, 503, 504, and only if the method is idempotent (<code>GET</code>, <code>HEAD</code>,
+          <code>PUT</code>, <code>DELETE</code>, <code>OPTIONS</code>; compare case-insensitively).</p>
+      </div>
+<textarea class="starter">
+def classify(status):
+    ...
+
+def should_retry(method, status):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_classify():
+    expected = {100: "informational", 200: "success", 204: "success", 301: "redirect", 304: "redirect",
+                404: "client error", 429: "client error", 500: "server error", 599: "server error"}
+    for code, label in expected.items():
+        assert classify(code) == label, f"classify({code}) should be {label!r}"
+
+def test_classify_rejects_nonsense():
+    for code in (99, 600, 0):
+        try:
+            classify(code)
+        except ValueError:
+            continue
+        raise AssertionError(f"classify({code}) should raise ValueError")
+
+def test_retry_idempotent_only():
+    assert should_retry("GET", 503) is True
+    assert should_retry("delete", 429) is True, "method comparison is case-insensitive"
+    assert should_retry("POST", 503) is False, "POST is not idempotent: retrying could create duplicates"
+
+def test_retry_only_transient():
+    for code in (400, 401, 404, 422, 500, 501, 200):
+        assert should_retry("GET", code) is False, f"{code} should not be retried"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>status // 100</code> gives the class digit. Keep the
+        retryable codes and idempotent methods in sets.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">CLASSES = {1: "informational", 2: "success", 3: "redirect", 4: "client error", 5: "server error"}
+RETRYABLE = {429, 502, 503, 504}
+IDEMPOTENT = {"GET", "HEAD", "PUT", "DELETE", "OPTIONS"}
+
+def classify(status):
+    if not 100 &lt;= status &lt;= 599:
+        raise ValueError(f"not an HTTP status: {status}")
+    return CLASSES[status // 100]
+
+def should_retry(method, status):
+    return method.upper() in IDEMPOTENT and status in RETRYABLE</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m45-e3" data-title="Retry with backoff">
+      <div class="exercise-prompt">
+        <p>Write <code>call_with_retry(call, attempts, base, sleep)</code>. Call <code>call()</code>; if it raises
+          <code>TransientError</code> (already defined for you), sleep <code>base * 2**i</code> seconds (i = 0, 1, 2...)
+          using the injected <code>sleep</code> function and try again, up to <code>attempts</code> calls in total. If
+          the last attempt fails, re-raise its error. Other exceptions propagate immediately. Return the call's result.</p>
+      </div>
+<textarea class="starter">
+class TransientError(Exception):
+    pass
+
+def call_with_retry(call, attempts, base, sleep):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _flaky(failures, result="ok"):
+    state = {"n": 0}
+    def call():
+        state["n"] += 1
+        if state["n"] <= failures:
+            raise TransientError(f"failure {state['n']}")
+        return result
+    return call, state
+
+def test_succeeds_after_failures():
+    call, state = _flaky(2)
+    slept = []
+    assert call_with_retry(call, attempts=5, base=0.5, sleep=slept.append) == "ok"
+    assert slept == [0.5, 1.0], f"expected sleeps [0.5, 1.0], got {slept}"
+    assert state["n"] == 3, "two failures then one success is three calls"
+
+def test_gives_up():
+    call, state = _flaky(10)
+    slept = []
+    try:
+        call_with_retry(call, attempts=3, base=1, sleep=slept.append)
+    except TransientError as exc:
+        assert "failure 3" in str(exc), "re-raise the LAST error"
+    else:
+        raise AssertionError("should re-raise after the final attempt")
+    assert state["n"] == 3 and slept == [1, 2], "3 attempts means only 2 sleeps (none after the last)"
+
+def test_other_errors_are_not_retried():
+    slept = []
+    def broken():
+        raise KeyError("bug")
+    try:
+        call_with_retry(broken, attempts=3, base=1, sleep=slept.append)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("non-transient errors must propagate")
+    assert slept == [], "never sleep for a non-transient error"
+
+def test_first_try():
+    slept = []
+    assert call_with_retry(lambda: 42, attempts=3, base=1, sleep=slept.append) == 42 and slept == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop <code>for i in range(attempts)</code>; in
+        <code>except TransientError</code>, re-raise if <code>i == attempts - 1</code>, otherwise sleep.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class TransientError(Exception):
+    pass
+
+def call_with_retry(call, attempts, base, sleep):
+    for i in range(attempts):
+        try:
+            return call()
+        except TransientError:
+            if i == attempts - 1:
+                raise
+            sleep(base * 2 ** i)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m45-e4" data-title="Follow the cursor">
+      <div class="exercise-prompt">
+        <p>An API returns pages shaped like <code>{"items": [...], "next": "abc" or None}</code>. Write
+          <code>fetch_all(get_page, max_pages=100)</code> that calls <code>get_page(None)</code> first, then
+          <code>get_page(next)</code> until <code>next</code> is <code>None</code>, and returns all items in order. If
+          more than <code>max_pages</code> pages would be fetched, raise <code>RuntimeError</code> (a buggy server could
+          loop forever).</p>
+      </div>
+<textarea class="starter">
+def fetch_all(get_page, max_pages=100):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _server(pages):
+    calls = []
+    def get_page(cursor):
+        calls.append(cursor)
+        return pages[cursor]
+    return get_page, calls
+
+def test_collects_all_pages():
+    get_page, calls = _server({None: {"items": [1, 2], "next": "p2"}, "p2": {"items": [3], "next": "p3"},
+                               "p3": {"items": [4, 5], "next": None}})
+    assert fetch_all(get_page) == [1, 2, 3, 4, 5]
+    assert calls == [None, "p2", "p3"], f"cursors used: {calls}"
+
+def test_single_and_empty_page():
+    get_page, _ = _server({None: {"items": [], "next": None}})
+    assert fetch_all(get_page) == []
+
+def test_loop_guard():
+    get_page, calls = _server({None: {"items": [1], "next": "x"}, "x": {"items": [2], "next": "x"}})
+    try:
+        fetch_all(get_page, max_pages=5)
+    except RuntimeError:
+        assert len(calls) == 5, f"stop after max_pages=5 requests, made {len(calls)}"
+    else:
+        raise AssertionError("a server that never ends must trigger RuntimeError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop <code>for _ in range(max_pages)</code>, extend the result,
+        and <code>return</code> as soon as <code>next</code> is <code>None</code>. If the loop finishes, raise.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def fetch_all(get_page, max_pages=100):
+    items, cursor = [], None
+    for _ in range(max_pages):
+        page = get_page(cursor)
+        items.extend(page["items"])
+        cursor = page["next"]
+        if cursor is None:
+            return items
+    raise RuntimeError(f"gave up after {max_pages} pages")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m45-e5" data-title="A router with 404 and 405">
+      <div class="exercise-prompt">
+        <p>Write a <code>Router</code> class. <code>router.add(method, pattern, handler)</code> registers a route where
+          the pattern may contain <code>{name}</code> segments that match one path segment (no <code>/</code>).
+          <code>router.dispatch(method, path)</code> returns <code>handler(**params)</code> for the first matching route.
+          If the path matches no route, return <code>(404, "not found")</code>; if it matches only with other methods,
+          return <code>(405, "method not allowed")</code>.</p>
+      </div>
+<textarea class="starter">
+import re
+
+class Router:
+    def __init__(self):
+        ...
+
+    def add(self, method, pattern, handler):
+        ...
+
+    def dispatch(self, method, path):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _router():
+    r = Router()
+    r.add("GET", "/notes", lambda: (200, "list"))
+    r.add("GET", "/notes/{note_id}", lambda note_id: (200, f"note {note_id}"))
+    r.add("DELETE", "/notes/{note_id}", lambda note_id: (204, ""))
+    r.add("GET", "/users/{user}/notes/{note_id}", lambda user, note_id: (200, f"{user}:{note_id}"))
+    return r
+
+def test_static_and_params():
+    r = _router()
+    assert r.dispatch("GET", "/notes") == (200, "list")
+    assert r.dispatch("GET", "/notes/42") == (200, "note 42"), "path parameters are passed as keyword arguments"
+    assert r.dispatch("GET", "/users/ada/notes/7") == (200, "ada:7")
+
+def test_404():
+    r = _router()
+    assert r.dispatch("GET", "/nope") == (404, "not found")
+    assert r.dispatch("GET", "/notes/1/extra") == (404, "not found"), "a {param} must not match across '/'"
+
+def test_405():
+    r = _router()
+    assert r.dispatch("POST", "/notes/3") == (405, "method not allowed")
+    assert r.dispatch("DELETE", "/notes/3") == (204, "")
+
+def test_whole_path_must_match():
+    r = _router()
+    assert r.dispatch("GET", "/notesX") == (404, "not found"), "anchor the pattern at both ends"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Turn <code>{name}</code> into the regex group
+        <code>(?P&lt;name&gt;[^/]+)</code> with <code>re.sub</code>, escape the rest, and use <code>re.fullmatch</code>.
+        Track whether any pattern matched the path while you loop over routes.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+
+class Router:
+    def __init__(self):
+        self.routes = []
+
+    def add(self, method, pattern, handler):
+        parts = re.split(r"(\{\w+\})", pattern)
+        regex = "".join(
+            f"(?P&lt;{part[1:-1]}&gt;[^/]+)" if part.startswith("{") else re.escape(part) for part in parts
+        )
+        self.routes.append((method.upper(), re.compile(regex), handler))
+
+    def dispatch(self, method, path):
+        path_matched = False
+        for route_method, regex, handler in self.routes:
+            match = regex.fullmatch(path)
+            if match is None:
+                continue
+            path_matched = True
+            if route_method == method.upper():
+                return handler(**match.groupdict())
+        return (405, "method not allowed") if path_matched else (404, "not found")</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a notes REST API with FastAPI</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Notes API with tests</span></div>
+      <div class="widget-body">
+        <p>Build a small but properly engineered notes service: full CRUD, filtering and pagination, consistent errors,
+          SQLite persistence from <a href="m44-data-databases.html">M44</a>, and a pytest suite that never touches the
+          network.</p>
+        <ol>
+          <li><code>pixi init notes-api</code>, then <code>pixi add fastapi uvicorn structlog</code> and
+            <code>pixi add --feature dev pytest httpx ruff mypy</code>. Add tasks:
+            <code>serve = "uvicorn notes_api.app:app --reload"</code> and <code>test = "pytest"</code>.</li>
+          <li>Model <code>NoteIn</code>, <code>NotePatch</code> (all fields optional), and <code>Note</code> with Pydantic,
+            including <code>created_at</code> as a timezone-aware datetime.</li>
+          <li>Write a <code>NoteRepository</code> Protocol with an in-memory and a sqlite3 implementation; provide it to
+            routes through <code>Depends</code>.</li>
+          <li>Implement <code>GET /v1/notes</code> (filters <code>done</code> and <code>q</code>, cursor pagination with
+            <code>limit</code> ≤ 100), <code>POST</code> (201 + <code>Location</code>), <code>GET</code>/<code>PATCH</code>/<code>DELETE /v1/notes/{id}</code>.</li>
+          <li>Return RFC 9457-style problem details for every error via an exception handler.</li>
+          <li>Log one structlog event per request (method, path, status, duration_ms) from a middleware.</li>
+          <li>Run it with <code>pixi run serve</code> and explore <code>/docs</code>.</li>
+        </ol>
+        <ul class="checklist" data-id="m45-mini">
+          <li>All six endpoints work and appear correctly in the OpenAPI docs</li>
+          <li>Status codes are right: 200, 201 with Location, 204, 404, 422</li>
+          <li>Pagination returns a <code>next</code> cursor and never more than <code>limit</code> items</li>
+          <li>Tests override the repository dependency so each test starts empty</li>
+          <li>At least ten pytest tests, including validation and not-found paths, pass with <code>pixi run test</code></li>
+          <li>Logs are structured key=value or JSON; there is no <code>print()</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add bearer-token authentication with a dependency and per-user notes (and a
+          test proving user A cannot read user B's note); add ETags with <code>If-None-Match</code> returning 304; write a
+          small httpx client for your own API and test it with respx.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m45-quiz">
+<script type="application/json">
+{"title": "Web & APIs quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does it mean that HTTP is stateless?", "options": ["Servers cannot use databases", "Each request carries everything needed to handle it; the protocol does not remember earlier requests", "Responses cannot be cached", "Connections close after every request"], "answer": 1, "explanation": "<p>Statelessness means no memory between requests at the protocol level. Identity and context travel with each request (cookies, Authorization headers), which lets any server replica handle any request.</p>"},
+  {"type": "multi", "prompt": "Which methods are idempotent?", "options": ["GET", "POST", "PUT", "DELETE"], "answer": [0, 2, 3], "explanation": "<p>Repeating GET, PUT, or DELETE has the same effect as doing it once. Repeating a POST may create duplicates, so it is not idempotent (unless you add an idempotency key).</p>"},
+  {"type": "single", "prompt": "A client sends a JSON body that is missing a required field. The best status code is:", "options": ["200", "401", "422 (or 400)", "500"], "answer": 2, "explanation": "<p>It is the client's fault, so 4xx. FastAPI uses 422 Unprocessable Content for validation errors; 400 is also common for malformed requests. 500 would wrongly blame the server.</p>"},
+  {"type": "single", "prompt": "What is the difference between 401 and 403?", "options": ["They are synonyms", "401: not authenticated (who are you?); 403: authenticated but not allowed", "401 is for servers, 403 for clients", "403 means the resource does not exist"], "answer": 1, "explanation": "<p>401 asks for (valid) credentials. 403 means the server knows who you are and refuses.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from urllib.parse import urljoin\nprint(urljoin('https://api.io/v1', 'users'))", "answer": "https://api.io/users", "explanation": "<p>Without a trailing slash, <code>v1</code> is treated like a file name and replaced. Use <code>https://api.io/v1/</code> as the base.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from urllib.parse import urlencode\nprint(urlencode({'q': 'a&b c'}))", "answer": "q=a%26b+c", "explanation": "<p><code>&amp;</code> is percent-encoded as <code>%26</code> so it is not mistaken for a parameter separator, and a space becomes <code>+</code> in query strings.</p>"},
+  {"type": "multi", "prompt": "Which responses are generally worth retrying for a GET?", "options": ["400 Bad Request", "429 Too Many Requests", "503 Service Unavailable", "404 Not Found", "A connection timeout"], "answer": [1, 2, 4], "explanation": "<p>429, 503, and network timeouts are transient. 400 and 404 will fail the same way again.</p>"},
+  {"type": "single", "prompt": "Why add random jitter to exponential backoff?", "options": ["To make tests nondeterministic", "So many clients that failed together do not retry in lockstep and overload the server again", "To make the total wait shorter", "HTTP requires it"], "answer": 1, "explanation": "<p>Without jitter, synchronized clients retry at exactly the same moments (the thundering herd). Randomizing spreads the load.</p>"},
+  {"type": "single", "prompt": "What is the main reason to always set a timeout on HTTP calls?", "options": ["Timeouts make requests faster", "A server that never responds would otherwise block your program or worker indefinitely", "Servers reject requests without timeouts", "To enable retries in urllib"], "answer": 1, "explanation": "<p>Hung calls accumulate and exhaust workers. <code>urllib</code> has no default timeout, so a missing one can freeze a process.</p>"},
+  {"type": "single", "prompt": "How does a FastAPI handler receive the parsed JSON body?", "options": ["From request.json() only", "By declaring a parameter whose type is a Pydantic model", "Through a global variable", "As a query parameter named body"], "answer": 1, "explanation": "<p>A Pydantic-model parameter is read from the body, validated, and converted. Simple types become query parameters; names in the path template become path parameters.</p>"},
+  {"type": "single", "prompt": "What does <code>Depends(get_store)</code> give you in tests?", "options": ["Nothing; it is only for documentation", "The ability to replace the dependency with app.dependency_overrides", "Automatic database migrations", "Faster responses"], "answer": 1, "explanation": "<p>Dependency injection lets tests swap real collaborators (a database, the current user) for fakes without changing route code.</p>"},
+  {"type": "single", "prompt": "Which statement about WSGI and ASGI is correct?", "options": ["WSGI is async; ASGI is sync", "ASGI apps are async callables taking (scope, receive, send) and support WebSockets; WSGI apps are sync callables taking (environ, start_response)", "FastAPI is a WSGI framework", "They are two names for the same thing"], "answer": 1, "explanation": "<p>WSGI (PEP 3333) is the synchronous standard used by Flask; ASGI is its async successor used by FastAPI and Starlette.</p>"},
+  {"type": "single", "prompt": "What does CORS protect?", "options": ["Your server from all unauthorized requests", "Users' browsers, by stopping pages from other origins reading your API's responses unless you allow it", "Your database from SQL injection", "TLS certificates"], "answer": 1, "explanation": "<p>CORS is enforced by browsers. Non-browser clients such as curl ignore it, so it is never a substitute for authentication and authorization.</p>"},
+  {"type": "text", "prompt": "Which httpx class lets a test supply a handler function instead of using the network? (class name only)", "answer": ["MockTransport", "httpx.MockTransport"], "explanation": "<p><code>httpx.MockTransport(handler)</code> routes every request to your function, which returns an <code>httpx.Response</code>. respx builds on the same transport mechanism.</p>"},
+  {"type": "text", "prompt": "Which Pixi command adds FastAPI and an ASGI server to a project?", "answer": ["pixi add fastapi uvicorn", "pixi add uvicorn fastapi"], "explanation": "<p><code>pixi add fastapi uvicorn</code> installs both from conda-forge and records them in pixi.toml and pixi.lock. Then <code>pixi run uvicorn app:app --reload</code>.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>HTTP is stateless request/response: method + path + headers + body in, status + headers + body out.</li>
+      <li>Safe methods do not change state; idempotent ones can be retried. POST is neither.</li>
+      <li>4xx means fix the request; 5xx and 429 may be transient. Build URLs with <code>urllib.parse</code>, not string
+        concatenation.</li>
+      <li>Robust clients set timeouts, reuse a client (connection pool), read secrets from the environment, follow
+        pagination, and retry transient failures with exponential backoff and jitter.</li>
+      <li>Inject the HTTP client or transport so tests use fakes, <code>MockTransport</code>, or respx.</li>
+      <li>REST: plural-noun resources, honest status codes, versioning, pagination, one error format.</li>
+      <li>FastAPI turns type hints into parsing, validation, docs, and dependency injection; test it with
+        <code>TestClient</code> and <code>dependency_overrides</code>.</li>
+      <li>WSGI is sync, ASGI is async; CORS protects browsers, and authorization must be checked per object.</li>
+    </ul>
+    <div class="flashcards" data-title="Web & APIs">
+<script type="application/json">
+[{"front": "Safe vs idempotent", "back": "Safe: no state change (GET, HEAD). Idempotent: same effect once or many times (GET, PUT, DELETE)."},
+ {"front": "201 Created", "back": "Success for POST that created a resource; include a Location header pointing at it."},
+ {"front": "401 vs 403", "back": "401: not authenticated. 403: authenticated but not permitted."},
+ {"front": "422", "back": "Unprocessable Content: the request was well-formed but failed validation (FastAPI's default)."},
+ {"front": "urlencode / quote / urljoin", "back": "Encode a query string; percent-encode one value; resolve a relative URL against a base (mind the trailing slash)."},
+ {"front": "Exponential backoff with jitter", "back": "Wait base·2^n (capped), randomized, between retries of transient failures."},
+ {"front": "Idempotency key", "back": "A unique request header the server uses to ignore repeats, making POST safe to retry."},
+ {"front": "Cursor pagination", "back": "The server returns an opaque token for the next page; stable when data changes, unlike offset."},
+ {"front": "httpx.MockTransport", "back": "A transport that calls your handler instead of the network: tests without sockets."},
+ {"front": "FastAPI Depends", "back": "Declares a dependency FastAPI resolves per request; override it in tests with app.dependency_overrides."},
+ {"front": "WSGI vs ASGI signatures", "back": "app(environ, start_response) vs async app(scope, receive, send)."},
+ {"front": "CORS", "back": "Browser-enforced rules (Access-Control-Allow-Origin) for cross-origin reads; not server security."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview">MDN: An overview of HTTP</a> and <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Status">HTTP status codes</a></li>
+      <li><a href="https://docs.python.org/3/library/urllib.parse.html">urllib.parse</a>, <a href="https://docs.python.org/3/library/urllib.request.html">urllib.request</a>, and <a href="https://docs.python.org/3/library/http.html">http</a> (Python docs)</li>
+      <li><a href="https://www.python-httpx.org/">HTTPX documentation</a> and <a href="https://lundberg.github.io/respx/">RESPX</a></li>
+      <li><a href="https://fastapi.tiangolo.com/tutorial/">FastAPI tutorial</a> and <a href="https://docs.pydantic.dev/latest/">Pydantic</a></li>
+      <li><a href="https://peps.python.org/pep-3333/">PEP 3333 (WSGI)</a> and the <a href="https://asgi.readthedocs.io/">ASGI specification</a></li>
+      <li><a href="https://www.rfc-editor.org/rfc/rfc9457">RFC 9457: Problem Details for HTTP APIs</a> and the <a href="https://owasp.org/API-Security/">OWASP API Security Top 10</a></li>
+      <li>Next: <a href="m46-design.html">M46 · Software Design &amp; Architecture</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

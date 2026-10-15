@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M56 · scikit-learn in Practice · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m56">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Module 56</p>
+    <h1>scikit-learn in Practice</h1>
+    <p class="lede">In M55 you built models by hand. Professionals use scikit-learn: one consistent API for dozens of
+      models, preprocessing that cannot leak, honest cross-validation, and tuning in a few lines. This module teaches the
+      library the way it is used on real tabular data, and ends with an end-to-end workflow you can reuse.</p>
+    <div class="lesson-meta"><span>⏱ ~3.5 hours</span><span>Prerequisites: <a href="m55-ml-foundations.html">M55</a>, <a href="m51-pandas.html">M51</a></span></div>
+    <ul class="objectives">
+      <li>Use the estimator API (<code>fit</code>, <code>predict</code>, <code>transform</code>) and tell hyperparameters from learned <code>attributes_</code></li>
+      <li>Preprocess mixed numeric and categorical data with <code>SimpleImputer</code>, <code>StandardScaler</code>, <code>OneHotEncoder</code>, and <code>ColumnTransformer</code></li>
+      <li>Wrap preprocessing and a model in a <code>Pipeline</code> and explain how that prevents leakage</li>
+      <li>Choose among linear models, k-nearest neighbors, decision trees, random forests, gradient boosting, and SVMs</li>
+      <li>Estimate performance with <code>KFold</code>/<code>StratifiedKFold</code> cross-validation and tune with <code>GridSearchCV</code> and <code>RandomizedSearchCV</code></li>
+      <li>Handle class imbalance and explain models with impurity and permutation importance</li>
+      <li>Save and load models safely with joblib or skops, knowing why unpickling untrusted files is dangerous</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="estimator-api">
+    <h2>The estimator API</h2>
+    <p>scikit-learn's great idea is that every algorithm is an object with the same few methods. Learn the pattern once
+      and you can use any of its hundreds of classes:</p>
+    <ul>
+      <li>An <strong>estimator</strong> is any object with <code>fit(X, y)</code> (or <code>fit(X)</code> for
+        unsupervised methods). <code>fit</code> learns from data and returns <code>self</code>, so calls can be
+        chained.</li>
+      <li>A <strong>predictor</strong> adds <code>predict(X)</code> (and for classifiers often
+        <code>predict_proba(X)</code> and <code>score(X, y)</code>).</li>
+      <li>A <strong>transformer</strong> adds <code>transform(X)</code>, which returns a new feature matrix, and the
+        shortcut <code>fit_transform(X)</code>. Scalers, encoders, and imputers are transformers.</li>
+    </ul>
+    <p>Two kinds of numbers live on an estimator, and the naming convention tells them apart.
+      <strong>Hyperparameters</strong> are settings you choose, passed to the constructor: <code>LogisticRegression(C=0.5)</code>.
+      <strong>Learned attributes</strong> are computed by <code>fit</code> and end in an underscore: <code>coef_</code>,
+      <code>intercept_</code>, <code>classes_</code>, <code>mean_</code>. If an attribute ends in <code>_</code> and you
+      have not called <code>fit</code>, it does not exist yet.</p>
+    <aside class="callout note"><p>The first cell that imports scikit-learn in your browser takes several seconds while
+      Pyodide downloads it (and NumPy and SciPy). After that, cells are quick. Locally, add it to a project with
+      <code>pixi add scikit-learn</code> (the conda-forge package name; you import it as <code>sklearn</code>).</p></aside>
+    <div class="runnable" data-title="fit, predict, and learned attributes">
+<textarea>
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_iris(return_X_y=True)
+
+scaler = StandardScaler()                 # a transformer
+X_scaled = scaler.fit_transform(X)        # learns mean_ and scale_, then applies them
+print("learned means:", scaler.mean_.round(2))
+
+clf = LogisticRegression(C=1.0, max_iter=500)   # hyperparameters go in the constructor
+print("hyperparameters:", {k: clf.get_params()[k] for k in ("C", "max_iter", "tol")})
+print("fitted yet?", hasattr(clf, "coef_"))
+clf.fit(X_scaled, y)                      # returns clf itself
+print("fitted yet?", hasattr(clf, "coef_"), " coef_ shape:", clf.coef_.shape, " classes_:", clf.classes_)
+print("predictions:", clf.predict(X_scaled[:5]))
+print("probabilities of first row:", clf.predict_proba(X_scaled[:1]).round(3))
+print("training accuracy:", round(clf.score(X_scaled, y), 3))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: what happens before fit?" data-predict>
+<textarea>
+from sklearn.preprocessing import StandardScaler
+s = StandardScaler(with_mean=False)
+print(s.get_params()["with_mean"], hasattr(s, "scale_"))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Because the API is uniform, swapping <code>LogisticRegression()</code> for
+      <code>RandomForestClassifier()</code> is a one-line change. Write your code against the API, not the algorithm.</p></aside>
+    <p><strong>Remember:</strong> <code>fit</code> learns, <code>predict</code>/<code>transform</code> apply.
+      Constructor arguments are hyperparameters; trailing-underscore attributes are learned.</p>
+  </section>
+
+  <section class="lesson-section" id="preprocessing">
+    <h2>Preprocessing mixed tabular data</h2>
+    <p>Real tables mix numbers ("age", "monthly_spend"), categories ("plan", "country"), and holes (missing values).
+      Most models need a purely numeric matrix with no missing values, so we transform each column type differently:</p>
+    <ul>
+      <li><code>SimpleImputer(strategy="median")</code> fills missing numbers with the training median (robust to
+        outliers); <code>strategy="most_frequent"</code> works for categories.</li>
+      <li><code>StandardScaler</code> rescales numbers to mean 0, standard deviation 1 (M55's standardization).</li>
+      <li><code>OneHotEncoder</code> turns a category with <em>k</em> values into <em>k</em> 0/1 columns.
+        <code>handle_unknown="ignore"</code> makes a category never seen in training encode as all zeros instead of
+        crashing in production.</li>
+      <li><code>ColumnTransformer</code> applies a different transformer to each group of columns and concatenates the
+        results side by side.</li>
+    </ul>
+    <aside class="callout warn"><p>Never encode categories as integers 0, 1, 2 for a linear model or k-NN ("basic" = 0,
+      "pro" = 1, "team" = 2). The model would believe "team" is twice "pro". One-hot encoding avoids inventing an order.
+      (Tree models tolerate ordinal codes better, and <code>HistGradientBoostingClassifier</code> has native categorical
+      support.)</p></aside>
+    <div class="runnable" data-title="A ColumnTransformer on a messy DataFrame">
+<textarea>
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+df = pd.DataFrame({
+    "age": [34, 51, np.nan, 23, 45],
+    "monthly_spend": [20.0, 75.5, 33.0, np.nan, 50.0],
+    "plan": ["basic", "pro", "pro", "team", np.nan],
+    "country": ["NZ", "US", "US", "DE", "NZ"],
+})
+numeric = ["age", "monthly_spend"]
+categorical = ["plan", "country"]
+
+preprocess = ColumnTransformer([
+    ("num", Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), numeric),
+    ("cat", Pipeline([("impute", SimpleImputer(strategy="most_frequent")),
+                      ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))]), categorical),
+])
+Xt = preprocess.fit_transform(df)
+print(pd.DataFrame(Xt, columns=preprocess.get_feature_names_out()).round(2))
+
+new = pd.DataFrame({"age": [30], "monthly_spend": [40.0], "plan": ["enterprise"], "country": ["FR"]})
+print("unseen categories encode as zeros:", preprocess.transform(new).round(2))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> impute, then scale numbers; impute, then one-hot categories; glue them with
+      <code>ColumnTransformer</code>; set <code>handle_unknown="ignore"</code> for production safety.</p>
+  </section>
+
+  <section class="lesson-section" id="pipelines">
+    <h2>Pipelines prevent leakage</h2>
+    <p>A <code>Pipeline</code> chains transformers and a final estimator into one estimator. Calling
+      <code>pipe.fit(X_train, y_train)</code> fits each step on the <em>training</em> data in order; calling
+      <code>pipe.predict(X_test)</code> only <em>applies</em> the already-fitted steps. That ordering is exactly the
+      "statistics from train only" rule of M55, enforced by code instead of discipline.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 170" role="img" aria-label="Pipeline: raw DataFrame flows through ColumnTransformer (imputer, scaler, one-hot) into a model; fit learns each step on train data, predict only applies them">
+        <defs><marker id="m56-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
+        <g font-size="12" text-anchor="middle" fill="var(--fg)">
+          <rect x="10" y="55" width="90" height="50" rx="6" fill="var(--viz-1)" opacity="0.2" stroke="var(--viz-1)"/>
+          <text x="55" y="78">raw</text><text x="55" y="94">DataFrame</text>
+          <rect x="140" y="20" width="200" height="120" rx="8" fill="none" stroke="var(--border-strong)" stroke-dasharray="5 3"/>
+          <text x="240" y="36" fill="var(--fg-muted)">ColumnTransformer</text>
+          <rect x="155" y="48" width="80" height="34" rx="5" fill="var(--viz-2)" opacity="0.25" stroke="var(--viz-2)"/>
+          <text x="195" y="69">impute+scale</text>
+          <rect x="245" y="48" width="80" height="34" rx="5" fill="var(--viz-3)" opacity="0.25" stroke="var(--viz-3)"/>
+          <text x="285" y="69">impute+1-hot</text>
+          <text x="195" y="104" fill="var(--fg-muted)" font-size="11">numeric cols</text>
+          <text x="285" y="104" fill="var(--fg-muted)" font-size="11">categorical cols</text>
+          <rect x="380" y="55" width="80" height="50" rx="6" fill="var(--viz-4)" opacity="0.25" stroke="var(--viz-4)"/>
+          <text x="420" y="84">model</text>
+          <rect x="490" y="55" width="60" height="50" rx="6" fill="var(--viz-5)" opacity="0.2" stroke="var(--viz-5)"/>
+          <text x="520" y="84">ŷ</text>
+        </g>
+        <g stroke="var(--fg-muted)" stroke-width="1.5" marker-end="url(#m56-arr)">
+          <line x1="100" y1="80" x2="138" y2="80"/><line x1="340" y1="80" x2="378" y2="80"/><line x1="460" y1="80" x2="488" y2="80"/>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)">
+          <text x="10" y="160">fit(X_train, y_train): each step learns from train only, then passes transformed data on</text>
+          <text x="10" y="150"></text>
+        </g>
+      </svg>
+      <figcaption>The whole chain behaves like one model. Cross-validation refits it inside every fold.</figcaption>
+    </figure>
+    <p>The danger is subtle, so here is a dramatic demonstration. We generate <em>pure noise</em>: 60 samples, 2,000
+      random features, random labels. There is nothing to learn; honest accuracy is 50%. If we select the 20 "best"
+      features on all the data and <em>then</em> cross-validate, the selection step has already peeked at every test
+      fold's labels.</p>
+    <div class="runnable" data-title="Leakage makes noise look learnable">
+<textarea>
+import numpy as np
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import make_pipeline
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(60, 2000))          # random features
+y = rng.integers(0, 2, size=60)          # random labels: nothing to learn
+
+X_leaky = SelectKBest(f_classif, k=20).fit_transform(X, y)      # selection saw ALL labels
+leaky = cross_val_score(LogisticRegression(), X_leaky, y, cv=5).mean()
+
+pipe = make_pipeline(SelectKBest(f_classif, k=20), LogisticRegression())
+honest = cross_val_score(pipe, X, y, cv=5).mean()                # selection refit inside each fold
+
+print(f"selection outside CV: {leaky:.2f}   <- looks brilliant, is fake")
+print(f"selection inside a Pipeline: {honest:.2f}   <- the truth")
+</textarea>
+    </div>
+    <aside class="callout pro"><p><code>make_pipeline(a, b)</code> names steps automatically
+      (<code>"standardscaler"</code>, <code>"logisticregression"</code>); <code>Pipeline([("scale", a), ("model", b)])</code>
+      lets you choose names. You address a step's hyperparameter as <code>step__param</code>, for example
+      <code>model__C</code>. That double underscore is how grid search reaches inside pipelines.</p></aside>
+    <p><strong>Remember:</strong> put every data-dependent step inside the Pipeline, and cross-validate the Pipeline,
+      not pre-transformed data.</p>
+  </section>
+
+  <section class="lesson-section" id="models">
+    <h2>A tour of the models</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Linear models</h4><p><code>LinearRegression</code>, <code>Ridge</code>,
+        <code>Lasso</code>, <code>LogisticRegression</code>. Fast, interpretable coefficients, good baselines. Need scaled
+        features and cannot bend unless you add features.</p></div>
+      <div class="card"><h4>k-nearest neighbors</h4><p><code>KNeighborsClassifier(n_neighbors=5)</code> predicts the
+        majority label of the <em>k</em> closest training points. No training cost, slow prediction on big data,
+        sensitive to scaling and to many features.</p></div>
+      <div class="card"><h4>Decision trees</h4><p><code>DecisionTreeClassifier(max_depth=3)</code> asks yes/no questions
+        ("petal length ≤ 2.45?"). Readable, no scaling needed, but a deep tree overfits badly.</p></div>
+      <div class="card"><h4>Random forests</h4><p><code>RandomForestClassifier</code> averages many deep trees, each on
+        a bootstrap sample with random feature subsets. Averaging cancels their variance. Strong default, little tuning.</p></div>
+      <div class="card"><h4>Gradient boosting</h4><p><code>HistGradientBoostingClassifier</code> adds shallow trees one at
+        a time, each fixing the previous ensemble's errors. Usually the most accurate choice on tabular data; handles
+        missing values natively. <code>GradientBoostingClassifier</code> is the older, slower version.</p></div>
+      <div class="card"><h4>Support vector machines</h4><p><code>SVC(kernel="rbf")</code> finds the widest-margin
+        boundary, with kernels for curved boundaries. Excellent on small/medium data; scales poorly beyond ~100k rows;
+        needs scaling.</p></div>
+    </div>
+    <p>A decision tree is the easiest model to look inside. Each box shows the question, the impurity
+      (<strong>Gini</strong>: the chance two random samples in the box have different labels), how many samples reach
+      it, and the class counts.</p>
+    <div class="runnable" data-title="Plot a decision tree">
+<textarea>
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_iris
+from sklearn.tree import DecisionTreeClassifier, plot_tree, export_text
+
+iris = load_iris()
+tree = DecisionTreeClassifier(max_depth=2, random_state=0).fit(iris.data, iris.target)
+print(export_text(tree, feature_names=iris.feature_names))
+
+fig, ax = plt.subplots(figsize=(9, 4.5))
+plot_tree(tree, feature_names=iris.feature_names, class_names=iris.target_names.tolist(),
+          filled=True, rounded=True, fontsize=8, ax=ax)
+</textarea>
+    </div>
+    <p>Different models draw different decision boundaries. On the curved <code>make_moons</code> data, compare:</p>
+    <div class="runnable" data-title="Decision boundaries of six models">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_moons
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+
+X, y = make_moons(n_samples=300, noise=0.25, random_state=0)
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0)
+models = {
+    "logistic": make_pipeline(StandardScaler(), LogisticRegression()),
+    "k-NN (k=15)": make_pipeline(StandardScaler(), KNeighborsClassifier(15)),
+    "tree (depth 8)": DecisionTreeClassifier(max_depth=8, random_state=0),
+    "random forest": RandomForestClassifier(n_estimators=60, random_state=0),
+    "hist boosting": HistGradientBoostingClassifier(max_iter=60, random_state=0),
+    "SVC (rbf)": make_pipeline(StandardScaler(), SVC()),
+}
+xx, yy = np.meshgrid(np.linspace(-2, 3, 150), np.linspace(-1.5, 2, 150))
+grid = np.column_stack([xx.ravel(), yy.ravel()])
+fig, axes = plt.subplots(2, 3, figsize=(11, 6), sharex=True, sharey=True)
+for ax, (name, model) in zip(axes.ravel(), models.items()):
+    model.fit(X_tr, y_tr)
+    ax.contourf(xx, yy, model.predict(grid).reshape(xx.shape), alpha=0.3, cmap="RdBu")
+    ax.scatter(X_te[:, 0], X_te[:, 1], c=y_te, cmap="RdBu", edgecolor="k", s=12)
+    ax.set_title(f"{name}: test acc {model.score(X_te, y_te):.2f}", fontsize=10)
+fig.tight_layout()
+</textarea>
+    </div>
+    <aside class="callout think"><p>Look at the depth-8 tree's boundary: blocky islands around single points. That is
+      overfitting (high variance). The forest averages many such trees, and its boundary is much smoother. Which
+      models cannot represent the curve at all?</p></aside>
+    <p><strong>Remember:</strong> start with a linear baseline, then try a random forest and a histogram gradient
+      booster; scale features for linear models, k-NN, and SVMs.</p>
+  </section>
+
+  <section class="lesson-section" id="cross-validation">
+    <h2>Cross-validation</h2>
+    <p>A single validation split is noisy: with 150 samples, a lucky split can swing accuracy by several points.
+      <strong>k-fold cross-validation</strong> splits the data into <em>k</em> folds, trains <em>k</em> times, each time
+      holding out a different fold, and averages the <em>k</em> scores. Every sample is used for validation exactly once,
+      and the spread of the scores tells you how stable the estimate is.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 150" role="img" aria-label="Five-fold cross-validation: five rows, each with a different fold held out for validation">
+        <g font-size="11" fill="var(--fg-muted)">
+          <text x="10" y="32">fold 1</text><text x="10" y="58">fold 2</text><text x="10" y="84">fold 3</text><text x="10" y="110">fold 4</text><text x="10" y="136">fold 5</text>
+        </g>
+        <g>
+          <rect x="60" y="20" width="80" height="18" fill="var(--viz-2)"/><rect x="140" y="20" width="320" height="18" fill="var(--viz-1)" opacity="0.5"/>
+          <rect x="60" y="46" width="80" height="18" fill="var(--viz-1)" opacity="0.5"/><rect x="140" y="46" width="80" height="18" fill="var(--viz-2)"/><rect x="220" y="46" width="240" height="18" fill="var(--viz-1)" opacity="0.5"/>
+          <rect x="60" y="72" width="160" height="18" fill="var(--viz-1)" opacity="0.5"/><rect x="220" y="72" width="80" height="18" fill="var(--viz-2)"/><rect x="300" y="72" width="160" height="18" fill="var(--viz-1)" opacity="0.5"/>
+          <rect x="60" y="98" width="240" height="18" fill="var(--viz-1)" opacity="0.5"/><rect x="300" y="98" width="80" height="18" fill="var(--viz-2)"/><rect x="380" y="98" width="80" height="18" fill="var(--viz-1)" opacity="0.5"/>
+          <rect x="60" y="124" width="320" height="18" fill="var(--viz-1)" opacity="0.5"/><rect x="380" y="124" width="80" height="18" fill="var(--viz-2)"/>
+        </g>
+        <g stroke="var(--bg)" stroke-width="2"><line x1="140" y1="18" x2="140" y2="144"/><line x1="220" y1="18" x2="220" y2="144"/><line x1="300" y1="18" x2="300" y2="144"/><line x1="380" y1="18" x2="380" y2="144"/></g>
+        <g font-size="11" fill="var(--fg)"><text x="470" y="32">score 1</text><text x="470" y="58">score 2</text><text x="470" y="84">score 3</text><text x="470" y="110">score 4</text><text x="470" y="136">score 5</text></g>
+      </svg>
+      <figcaption>5-fold CV: train on four folds (light), validate on one (dark), rotate, average.</figcaption>
+    </figure>
+    <ul>
+      <li><code>KFold(n_splits=5, shuffle=True, random_state=0)</code>: plain folds. Use for regression.</li>
+      <li><code>StratifiedKFold</code>: each fold keeps the class proportions. The default for classifiers when you pass
+        <code>cv=5</code>; essential with imbalanced classes.</li>
+      <li><code>GroupKFold</code> keeps all rows of one group (customer, patient) in the same fold;
+        <code>TimeSeriesSplit</code> always validates on data later than the training data.</li>
+    </ul>
+    <div class="runnable" data-title="Compare models with stratified 5-fold CV">
+<textarea>
+from sklearn.datasets import load_wine
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_wine(return_X_y=True)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+models = {
+    "logistic": make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
+    "k-NN": make_pipeline(StandardScaler(), KNeighborsClassifier()),
+    "k-NN unscaled": KNeighborsClassifier(),
+    "random forest": RandomForestClassifier(n_estimators=50, random_state=0),
+    "hist boosting": HistGradientBoostingClassifier(max_iter=50, random_state=0),
+}
+for name, model in models.items():
+    scores = cross_val_score(model, X, y, cv=cv)
+    print(f"{name:14s} {scores.mean():.3f} ± {scores.std():.3f}   folds: {scores.round(2)}")
+</textarea>
+    </div>
+    <p>Notice "k-NN unscaled": wine's features range from about 0.1 to over 1,000, so the large ones dominate the
+      distance. Scaling is not optional for distance-based models.</p>
+    <p><strong>Remember:</strong> report the mean and spread of CV scores; stratify classification folds; group or
+      time-order folds when rows are not independent.</p>
+  </section>
+
+  <section class="lesson-section" id="tuning">
+    <h2>Hyperparameter tuning</h2>
+    <p><code>GridSearchCV</code> tries every combination in a grid, scoring each with cross-validation, then refits the
+      best on all the data you gave it. <code>RandomizedSearchCV</code> samples a fixed number of combinations from
+      distributions, which finds good settings far faster when there are many hyperparameters (most of them usually do not
+      matter much).</p>
+    <div class="runnable" data-title="Grid search over a pipeline">
+<textarea>
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_breast_cancer(return_X_y=True)
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
+
+pipe = Pipeline([("scale", StandardScaler()), ("model", LogisticRegression(max_iter=2000))])
+grid = GridSearchCV(pipe, {"model__C": [0.01, 0.1, 1, 10, 100]}, cv=5, scoring="roc_auc")
+grid.fit(X_tr, y_tr)
+
+for C, mean in zip(grid.cv_results_["param_model__C"], grid.cv_results_["mean_test_score"]):
+    print(f"C={C:<6} CV ROC-AUC {mean:.4f}")
+print("best:", grid.best_params_, " CV:", round(grid.best_score_, 4))
+print("held-out test ROC-AUC:", round(grid.score(X_te, y_te), 4))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Randomized search with distributions">
+<textarea>
+from scipy.stats import loguniform, randint
+from sklearn.datasets import load_digits
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
+
+X, y = load_digits(return_X_y=True)
+search = RandomizedSearchCV(
+    RandomForestClassifier(n_estimators=40, random_state=0),
+    {"max_depth": randint(3, 20), "min_samples_leaf": randint(1, 10), "max_features": loguniform(0.05, 1.0)},
+    n_iter=8, cv=3, random_state=0,
+)
+search.fit(X, y)
+print("best params:", {k: round(float(v), 3) if isinstance(v, float) else v for k, v in search.best_params_.items()})
+print("best CV accuracy:", round(search.best_score_, 3))
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>grid.best_score_</code> is slightly optimistic: you picked the maximum of several
+      noisy estimates. That is why the example keeps a held-out test split that the search never saw. For a rigorous
+      estimate on small data, use <strong>nested cross-validation</strong>: run the search inside each outer fold
+      (<code>cross_val_score(grid, X, y, cv=5)</code>).</p></aside>
+    <p><strong>Remember:</strong> grids for one or two knobs, randomized search for many; use <code>step__param</code>
+      names; keep a test set the search never touches.</p>
+  </section>
+
+  <section class="lesson-section" id="imbalance">
+    <h2>Class imbalance</h2>
+    <p>Fraud, churn, defects, disease: the interesting class is usually rare. With 5% positives, a model can reach 95%
+      accuracy by never predicting the positive class. Tools that help:</p>
+    <ul>
+      <li><strong>Better metrics</strong>: recall, precision, F1, <code>balanced_accuracy</code> (mean recall across
+        classes), and <code>average_precision</code> (area under the precision-recall curve, which is more informative
+        than ROC-AUC when positives are rare).</li>
+      <li><strong>Stratified splits and folds</strong> so every fold has some positives.</li>
+      <li><strong>Class weights</strong>: <code>class_weight="balanced"</code> makes each mistake on a rare sample count
+        more in the loss.</li>
+      <li><strong>Threshold tuning</strong>: 0.5 is arbitrary. Pick the probability threshold that fits the business cost
+        of false positives vs false negatives, on validation data. (scikit-learn 1.5+ also offers
+        <code>TunedThresholdClassifierCV</code>.)</li>
+      <li>Resampling (oversampling the minority, for example with SMOTE from the separate imbalanced-learn package) is
+        sometimes useful, but try weights and thresholds first.</li>
+    </ul>
+    <div class="runnable" data-title="Accuracy lies; class weights and thresholds help">
+<textarea>
+import numpy as np
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, balanced_accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+
+X, y = make_classification(n_samples=4000, n_features=10, n_informative=4, weights=[0.95], flip_y=0.01, random_state=1)
+print("positive rate:", y.mean().round(3))
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, stratify=y, random_state=0)
+
+for weight in (None, "balanced"):
+    model = LogisticRegression(class_weight=weight, max_iter=1000).fit(X_tr, y_tr)
+    pred = model.predict(X_te)
+    proba = model.predict_proba(X_te)[:, 1]
+    print(f"\nclass_weight={weight}: accuracy {np.mean(pred == y_te):.3f}, "
+          f"balanced acc {balanced_accuracy_score(y_te, pred):.3f}, avg precision {average_precision_score(y_te, proba):.3f}")
+    print(classification_report(y_te, pred, digits=3))
+
+model = LogisticRegression(max_iter=1000).fit(X_tr, y_tr)
+proba = model.predict_proba(X_te)[:, 1]
+for t in (0.5, 0.3, 0.15):
+    pred = proba >= t
+    print(f"threshold {t}: recall {pred[y_te == 1].mean():.2f}, precision {y_te[pred].mean():.2f}")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> with rare classes, judge by recall/precision/average precision, stratify, use class
+      weights, and tune the threshold to the costs.</p>
+  </section>
+
+  <section class="lesson-section" id="importance">
+    <h2>Feature importance and permutation importance</h2>
+    <p>Stakeholders ask "why?". Tree ensembles expose <code>feature_importances_</code>: how much each feature reduced
+      impurity across all splits. It is free but biased: it favors features with many distinct values (an ID column can
+      look important) and is computed on training data.</p>
+    <p><strong>Permutation importance</strong> is model-agnostic and more honest: on held-out data, shuffle one column
+      (breaking its relationship to the target) and measure how much the score drops. A big drop means the model relies
+      on that feature. If two features are strongly correlated, shuffling one barely hurts because the other carries the
+      same information, so read low scores with care.</p>
+    <div class="runnable" data-title="Impurity vs permutation importance (with a random ID column)">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_breast_cancer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
+from sklearn.model_selection import train_test_split
+
+data = load_breast_cancer()
+rng = np.random.default_rng(0)
+X = np.column_stack([data.data, rng.permutation(len(data.target))])   # add a meaningless "row id"
+names = list(data.feature_names) + ["random_id"]
+X_tr, X_te, y_tr, y_te = train_test_split(X, data.target, random_state=0, stratify=data.target)
+
+forest = RandomForestClassifier(n_estimators=100, random_state=0).fit(X_tr, y_tr)
+perm = permutation_importance(forest, X_te, y_te, n_repeats=5, random_state=0)
+
+top = np.argsort(forest.feature_importances_)[-8:]
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 3.8))
+a1.barh([names[i] for i in top], forest.feature_importances_[top]); a1.set_title("impurity importance (train)")
+order = np.argsort(perm.importances_mean)[-8:]
+a2.barh([names[i] for i in order], perm.importances_mean[order], xerr=perm.importances_std[order])
+a2.set_title("permutation importance (test)")
+fig.tight_layout()
+print("random_id impurity importance:", forest.feature_importances_[-1].round(4),
+      " permutation:", perm.importances_mean[-1].round(4))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> importance explains the <em>model</em>, not the world; prefer permutation importance on
+      held-out data; correlated features share credit.</p>
+  </section>
+
+  <section class="lesson-section" id="persistence">
+    <h2>Saving and loading models</h2>
+    <p>Training can take hours; serving must take milliseconds. So we fit once, save the fitted pipeline to a file, and
+      load it in the serving process. scikit-learn's documented options:</p>
+    <ul>
+      <li><strong>joblib</strong> (installed with scikit-learn): <code>joblib.dump(pipe, "model.joblib")</code>,
+        <code>joblib.load("model.joblib")</code>. Efficient for large NumPy arrays. Built on pickle.</li>
+      <li><strong>skops</strong>: <code>skops.io.dump</code> / <code>skops.io.load</code> use a format that does not
+        execute arbitrary code when loading, and you list which types you trust. Add it with
+        <code>pixi add skops</code> (it is on conda-forge).</li>
+      <li><strong>ONNX</strong> (via <code>skl2onnx</code>) exports to a portable format served without Python.</li>
+    </ul>
+    <aside class="callout danger"><p><strong>Never unpickle (or <code>joblib.load</code>) a file you do not trust.</strong>
+      Loading a pickle can run any code its author chose, for example deleting files or stealing credentials. Treat model
+      files like executables: load only your own, from storage you control, and verify a checksum if they travel.</p></aside>
+    <div class="runnable" data-title="joblib round trip (in the browser's virtual file system)">
+<textarea>
+import hashlib
+import tempfile
+from pathlib import Path
+
+import joblib
+import sklearn
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+X, y = load_iris(return_X_y=True)
+pipe = make_pipeline(StandardScaler(), LogisticRegression(max_iter=500)).fit(X, y)
+
+workdir = Path(tempfile.mkdtemp())        # keeps the demo from littering your project folder
+model_path = workdir / "iris.joblib"
+joblib.dump({"model": pipe, "sklearn_version": sklearn.__version__}, model_path)
+digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+print("saved; sha256 =", digest[:16], "...")
+
+bundle = joblib.load(model_path)          # only because we created this file ourselves
+print("trained with scikit-learn", bundle["sklearn_version"])
+print("same predictions:", (bundle["model"].predict(X) == pipe.predict(X)).all())
+</textarea>
+    </div>
+    <div class="runnable" data-title="skops: a safer format" data-local="skops is not part of the browser runtime; run locally after `pixi add skops`.">
+<textarea>
+import skops.io as sio
+from sklearn.datasets import load_iris
+from sklearn.linear_model import LogisticRegression
+
+X, y = load_iris(return_X_y=True)
+model = LogisticRegression(max_iter=500).fit(X, y)
+sio.dump(model, "iris.skops")
+
+unknown = sio.get_untrusted_types(file="iris.skops")   # types that are not trusted by default
+print("untrusted types to review:", unknown)
+loaded = sio.load("iris.skops", trusted=unknown)       # only after you have reviewed the list
+print(loaded.predict(X[:3]))
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>A pickled model is only guaranteed to load with the <em>same</em> scikit-learn
+      version. Pixi's <code>pixi.lock</code> pins exact versions of every package, so the training and serving
+      environments match. Store the version next to the model (as above) and check it on load.</p></aside>
+    <p><strong>Remember:</strong> save the whole fitted pipeline; joblib for your own files, skops when files cross trust
+      boundaries; pin versions with <code>pixi.lock</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="workflow">
+    <h2>An end-to-end workflow</h2>
+    <p>Here is the shape of a real project on a tabular dataset: predict whether a subscriber will cancel ("churn")
+      from mixed numeric and categorical data with missing values. We generate the data so the cell works offline, but
+      every step is what you would do with a real CSV loaded by <code>pd.read_csv</code>.</p>
+    <ol>
+      <li>Hold out a test set first, stratified.</li>
+      <li>Build a preprocessing <code>ColumnTransformer</code> and a baseline model inside a <code>Pipeline</code>.</li>
+      <li>Compare candidates with cross-validation on the training set.</li>
+      <li>Tune the best candidate.</li>
+      <li>Evaluate once on test; inspect errors and importances.</li>
+      <li>Save the fitted pipeline with its metadata.</li>
+    </ol>
+    <div class="runnable" data-title="Churn: from DataFrame to evaluated model">
+<textarea>
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+rng = np.random.default_rng(7)
+n = 1000
+df = pd.DataFrame({
+    "tenure_months": rng.integers(1, 72, n),
+    "monthly_spend": rng.gamma(4, 12, n).round(2),
+    "support_calls": rng.poisson(1.2, n),
+    "plan": rng.choice(["basic", "pro", "team"], n, p=[0.5, 0.35, 0.15]),
+    "region": rng.choice(["north", "south", "east", "west"], n),
+})
+logit = -1.0 - 0.05 * df.tenure_months + 0.6 * df.support_calls + 0.8 * (df.plan == "basic") + 0.01 * df.monthly_spend
+df["churned"] = (rng.random(n) < 1 / (1 + np.exp(-logit))).astype(int)
+df.loc[rng.random(n) < 0.05, "monthly_spend"] = np.nan          # realistic holes
+df.loc[rng.random(n) < 0.03, "plan"] = np.nan
+print(df.head(), "\nchurn rate:", df.churned.mean().round(3))
+
+X, y = df.drop(columns="churned"), df["churned"]
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)
+numeric, categorical = ["tenure_months", "monthly_spend", "support_calls"], ["plan", "region"]
+pre = ColumnTransformer([
+    ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), numeric),
+    ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("oh", OneHotEncoder(handle_unknown="ignore"))]), categorical),
+])
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+candidates = {
+    "dummy (always majority)": DummyClassifier(),
+    "logistic": LogisticRegression(max_iter=1000),
+    "hist boosting": HistGradientBoostingClassifier(max_iter=40, max_depth=3, random_state=0),
+}
+for name, model in candidates.items():
+    pipe = Pipeline([("pre", pre), ("model", model)])
+    print(f"{name:24s} CV ROC-AUC {cross_val_score(pipe, X_tr, y_tr, cv=cv, scoring='roc_auc').mean():.3f}")
+
+search = GridSearchCV(Pipeline([("pre", pre), ("model", LogisticRegression(max_iter=1000))]),
+                      {"model__C": [0.03, 0.3, 3]}, cv=cv, scoring="roc_auc").fit(X_tr, y_tr)
+print("\nbest:", search.best_params_)
+proba = search.predict_proba(X_te)[:, 1]
+print("TEST ROC-AUC:", round(roc_auc_score(y_te, proba), 3))
+print(classification_report(y_te, proba >= 0.5, digits=3))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Always include a <code>DummyClassifier</code> (or <code>DummyRegressor</code>) baseline.
+      If your fancy model barely beats "always predict the majority class", the features probably do not carry the
+      signal, and no amount of tuning will fix that.</p></aside>
+    <p><strong>Remember:</strong> split first, pipeline everything, compare with CV against a dummy baseline, tune,
+      test once, save the pipeline.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>scikit-learn, NumPy, and pandas are available in these exercises.</p>
+
+    <div class="exercise" data-id="m56-e1" data-title="Build a ColumnTransformer">
+      <div class="exercise-prompt">
+        <p>Write <code>build_preprocessor(numeric, categorical)</code> returning an unfitted <code>ColumnTransformer</code>
+          that, for the <code>numeric</code> column names, imputes the median then standardizes, and for the
+          <code>categorical</code> names imputes the most frequent value then one-hot encodes with
+          <code>handle_unknown="ignore"</code> and <code>sparse_output=False</code>.</p>
+      </div>
+<textarea class="starter">
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+def build_preprocessor(numeric, categorical):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+
+df = pd.DataFrame({"a": [1.0, np.nan, 3.0, 5.0], "b": [10.0, 20.0, 30.0, 40.0],
+                   "c": ["x", "y", np.nan, "x"]})
+
+def test_type():
+    assert isinstance(build_preprocessor(["a", "b"], ["c"]), ColumnTransformer), "return a ColumnTransformer"
+
+def test_shape_and_no_nan():
+    out = build_preprocessor(["a", "b"], ["c"]).fit_transform(df)
+    assert out.shape == (4, 4), f"2 numeric + 2 one-hot columns expected, got shape {out.shape}"
+    assert not np.isnan(out).any(), "missing values must be imputed"
+
+def test_numeric_scaled():
+    out = build_preprocessor(["a", "b"], ["c"]).fit_transform(df)
+    assert np.allclose(out[:, :2].mean(axis=0), 0, atol=1e-9), "numeric columns should have mean 0 after scaling"
+    assert np.isclose(out[1, 0], (3.0 - 3.0) / np.std([1.0, 3.0, 3.0, 5.0])), "the NaN in 'a' becomes the median 3, then scaled"
+
+def test_unknown_category():
+    pre = build_preprocessor(["a", "b"], ["c"]).fit(df)
+    new = pd.DataFrame({"a": [2.0], "b": [25.0], "c": ["never-seen"]})
+    out = pre.transform(new)
+    assert np.allclose(out[0, 2:], 0), "an unknown category must encode as all zeros"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Two tuples of <code>(name, transformer, columns)</code>; each
+        transformer is a small <code>Pipeline</code> of an imputer and a scaler/encoder.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+def build_preprocessor(numeric, categorical):
+    num = Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())])
+    cat = Pipeline([
+        ("impute", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+    ])
+    return ColumnTransformer([("num", num, list(numeric)), ("cat", cat, list(categorical))])</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m56-e2" data-title="A leak-proof pipeline">
+      <div class="exercise-prompt">
+        <p>Write <code>make_model(C=1.0)</code> returning a <code>Pipeline</code> with two steps named
+          <code>"scale"</code> (a <code>StandardScaler</code>) and <code>"clf"</code> (a <code>LogisticRegression</code>
+          with the given <code>C</code> and <code>max_iter=2000</code>). Then write <code>cv_accuracy(model, X, y)</code>
+          that returns the mean accuracy of 5-fold <code>StratifiedKFold(shuffle=True, random_state=0)</code>
+          cross-validation as a float.</p>
+      </div>
+<textarea class="starter">
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+def make_model(C=1.0):
+    ...
+
+def cv_accuracy(model, X, y):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from sklearn.datasets import load_breast_cancer
+from sklearn.pipeline import Pipeline
+
+X, y = load_breast_cancer(return_X_y=True)
+
+def test_structure():
+    m = make_model(C=0.5)
+    assert isinstance(m, Pipeline), "return a Pipeline"
+    assert [name for name, _ in m.steps] == ["scale", "clf"], "steps must be named 'scale' then 'clf'"
+    assert m.get_params()["clf__C"] == 0.5, "C must reach the LogisticRegression step"
+
+def test_cv_accuracy():
+    score = cv_accuracy(make_model(), X, y)
+    assert isinstance(score, float), "return a float"
+    assert 0.95 < score <= 1.0, f"scaled logistic regression should exceed 95% CV accuracy, got {score:.3f}"
+
+def test_deterministic():
+    assert cv_accuracy(make_model(), X, y) == cv_accuracy(make_model(), X, y), "a fixed random_state gives the same score"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>cross_val_score(model, X, y, cv=StratifiedKFold(5, shuffle=True,
+        random_state=0)).mean()</code>, wrapped in <code>float(...)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+def make_model(C=1.0):
+    return Pipeline([("scale", StandardScaler()), ("clf", LogisticRegression(C=C, max_iter=2000))])
+
+def cv_accuracy(model, X, y):
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+    return float(cross_val_score(model, X, y, cv=cv).mean())</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m56-e3" data-title="Tune k for k-NN">
+      <div class="exercise-prompt">
+        <p>Write <code>tune_knn(X, y)</code> that grid-searches <code>n_neighbors</code> over
+          <code>[1, 3, 5, 7, 9, 11, 15]</code> for a pipeline <code>make_pipeline(StandardScaler(), KNeighborsClassifier())</code>
+          with <code>cv=5</code>, and returns a tuple <code>(best_k, best_cv_score)</code> (an int and a float).</p>
+      </div>
+<textarea class="starter">
+from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+def tune_knn(X, y):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from sklearn.datasets import load_wine
+
+X, y = load_wine(return_X_y=True)
+
+def test_returns_k_in_grid():
+    k, score = tune_knn(X, y)
+    assert k in [1, 3, 5, 7, 9, 11, 15], f"best k must come from the grid, got {k}"
+    assert isinstance(k, int) and isinstance(score, float), "return (int, float)"
+
+def test_score_good():
+    _, score = tune_knn(X, y)
+    assert score > 0.93, f"scaled k-NN on wine should exceed 0.93 CV accuracy, got {score:.3f}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>make_pipeline</code> names the step
+        <code>"kneighborsclassifier"</code>, so the grid key is <code>"kneighborsclassifier__n_neighbors"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+def tune_knn(X, y):
+    pipe = make_pipeline(StandardScaler(), KNeighborsClassifier())
+    grid = GridSearchCV(pipe, {"kneighborsclassifier__n_neighbors": [1, 3, 5, 7, 9, 11, 15]}, cv=5)
+    grid.fit(X, y)
+    return int(grid.best_params_["kneighborsclassifier__n_neighbors"]), float(grid.best_score_)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m56-e4" data-title="Top features by permutation importance">
+      <div class="exercise-prompt">
+        <p>Write <code>top_features(model, X_val, y_val, names, k=3)</code> that runs
+          <code>permutation_importance(model, X_val, y_val, n_repeats=10, random_state=0)</code> and returns the
+          <code>k</code> feature names with the largest mean importance, most important first.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+from sklearn.inspection import permutation_importance
+
+def top_features(model, X_val, y_val, names, k=3):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(400, 5))
+y = 5 * X[:, 2] + 2 * X[:, 0] + rng.normal(0, 0.1, 400)
+names = ["a", "b", "c", "d", "e"]
+model = RandomForestRegressor(n_estimators=50, random_state=0).fit(X[:300], y[:300])
+
+def test_order():
+    top = top_features(model, X[300:], y[300:], names, k=2)
+    assert top == ["c", "a"], f"'c' drives the target most, then 'a'; got {top}"
+
+def test_length_and_type():
+    top = top_features(model, X[300:], y[300:], names)
+    assert len(top) == 3 and all(isinstance(t, str) for t in top), "return k names as strings"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>np.argsort(result.importances_mean)[::-1][:k]</code> gives the
+        indexes of the top <code>k</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+from sklearn.inspection import permutation_importance
+
+def top_features(model, X_val, y_val, names, k=3):
+    result = permutation_importance(model, X_val, y_val, n_repeats=10, random_state=0)
+    order = np.argsort(result.importances_mean)[::-1][:k]
+    return [str(names[i]) for i in order]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m56-e5" data-title="Choose a threshold for recall">
+      <div class="exercise-prompt">
+        <p>Write <code>threshold_for_recall(y_true, proba, target_recall)</code> that returns the <em>largest</em>
+          threshold <code>t</code> among the distinct values of <code>proba</code> such that predicting
+          <code>proba &gt;= t</code> achieves recall of at least <code>target_recall</code>. A larger threshold means fewer
+          false alarms, so we want the largest one that still meets the recall goal.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def threshold_for_recall(y_true, proba, target_recall):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+y = np.array([0, 1, 0, 1, 1, 0, 1, 0])
+p = np.array([0.1, 0.9, 0.4, 0.35, 0.8, 0.2, 0.6, 0.7])
+
+def test_full_recall():
+    t = threshold_for_recall(y, p, 1.0)
+    assert t == 0.35, f"to catch all four positives the threshold must drop to 0.35, got {t}"
+
+def test_half_recall():
+    t = threshold_for_recall(y, p, 0.5)
+    assert t == 0.8, f"0.9 and 0.8 are two of four positives, so 0.8 suffices; got {t}"
+
+def test_meets_target():
+    for target in (0.25, 0.75):
+        t = threshold_for_recall(y, p, target)
+        recall = np.mean(p[y == 1] >= t)
+        assert recall >= target, f"threshold {t} gives recall {recall}, below {target}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop over <code>sorted(set(proba), reverse=True)</code> and return the
+        first threshold whose recall <code>np.mean(proba[y_true == 1] &gt;= t)</code> reaches the target.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def threshold_for_recall(y_true, proba, target_recall):
+    y_true, proba = np.asarray(y_true), np.asarray(proba)
+    positives = proba[y_true == 1]
+    for t in sorted(set(proba.tolist()), reverse=True):
+        if np.mean(positives &gt;= t) &gt;= target_recall:
+            return t
+    return float(proba.min())</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">End-to-end classification with a model-selection report</span></div>
+      <div class="widget-body">
+        <p>Build a reproducible script that selects, tunes, evaluates, and saves a classifier, and writes a Markdown
+          report a colleague could review. Set up with <code>pixi init churn-model</code>, then
+          <code>pixi add scikit-learn pandas matplotlib</code>.</p>
+        <ol>
+          <li>Data: generate the churn DataFrame from the workflow section (or use <code>load_breast_cancer(as_frame=True)</code>
+            plus one categorical column you derive), and save it as a CSV so the script starts from a file like real work.</li>
+          <li><code>train.py</code>: stratified train/test split; a <code>ColumnTransformer</code>; at least four candidates
+            (a dummy baseline, logistic regression, random forest, histogram gradient boosting) compared with stratified
+            5-fold CV on two metrics (ROC-AUC and average precision).</li>
+          <li>Tune the best two candidates (grid or randomized search); pick a winner by CV, not by test.</li>
+          <li>Evaluate the winner once on test: confusion matrix, classification report, ROC-AUC, and a threshold chosen
+            for a stated business goal (for example "catch 80% of churners").</li>
+          <li>Permutation importance on test; save the bar chart as PNG.</li>
+          <li>Save the fitted pipeline with joblib together with the scikit-learn version, the chosen threshold, and the
+            feature list. Write <code>report.md</code> with a comparison table of every candidate.</li>
+          <li>Add a <code>[tasks]</code> entry so <code>pixi run train</code> runs the whole thing.</li>
+        </ol>
+        <ul class="checklist" data-id="m56-mini">
+          <li>All preprocessing lives inside the pipeline; nothing is fitted before the split</li>
+          <li>The report's table shows mean ± std CV scores for every candidate, including the dummy baseline</li>
+          <li>The test set is used exactly once, after model selection</li>
+          <li>The decision threshold is justified by a stated cost or recall goal</li>
+          <li>The saved file reloads in a fresh process and gives identical predictions</li>
+          <li><code>pixi run train</code> reproduces the same numbers twice in a row</li>
+        </ul>
+        <p><strong>Stretch:</strong> nested cross-validation for an unbiased estimate of the whole tuning procedure;
+          calibrate probabilities with <code>CalibratedClassifierCV</code> (see <a href="m59-ml-production.html">M59</a>);
+          save with skops instead of joblib.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m56-quiz">
+<script type="application/json">
+{"title": "scikit-learn quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "In <code>LogisticRegression(C=0.1).fit(X, y)</code>, which of these is a <em>learned</em> attribute?", "options": ["<code>C</code>", "<code>max_iter</code>", "<code>coef_</code>", "<code>tol</code>"], "answer": 2, "explanation": "<p>Learned attributes are set by <code>fit</code> and end with an underscore. <code>C</code>, <code>max_iter</code>, and <code>tol</code> are hyperparameters passed to the constructor.</p>"},
+  {"type": "single", "prompt": "What does <code>fit_transform</code> on a <code>StandardScaler</code> do?", "options": ["Applies scaling learned earlier", "Learns the mean and std from the data, then scales that same data", "Fits a model and predicts", "Scales without learning anything"], "answer": 1, "explanation": "<p>It is <code>fit(X)</code> followed by <code>transform(X)</code>. On test data you call only <code>transform</code>.</p>"},
+  {"type": "single", "prompt": "Why use <code>OneHotEncoder(handle_unknown=\"ignore\")</code>?", "options": ["It makes training faster", "Categories unseen during training encode as all zeros instead of raising an error", "It removes rare categories", "It sorts the categories"], "answer": 1, "explanation": "<p>Production data always contains surprises (a new country, a new plan). Ignoring unknowns keeps the service running.</p>"},
+  {"type": "single", "prompt": "Feature selection on all data, then cross-validation, gave 95% accuracy on pure noise. Why?", "options": ["Logistic regression is very powerful", "The selection step saw the labels of every validation fold: leakage", "Five folds are too few", "The data was not scaled"], "answer": 1, "explanation": "<p>Any data-dependent step outside the CV loop leaks. Put it inside a Pipeline so it is refitted on each training fold.</p>"},
+  {"type": "text", "prompt": "In a Pipeline with a step named <code>model</code>, what parameter name sets its <code>C</code> in a grid search?", "answer": ["model__C"], "explanation": "<p>Step name, two underscores, parameter name: <code>model__C</code>.</p>"},
+  {"type": "multi", "prompt": "Which models need feature scaling to work well?", "options": ["k-nearest neighbors", "Random forest", "SVC with an RBF kernel", "Logistic regression with regularization"], "answer": [0, 2, 3], "explanation": "<p>Distance- and penalty-based models depend on feature scale. Trees split on one feature at a time with thresholds, so scaling does not change them.</p>"},
+  {"type": "single", "prompt": "Why does a random forest usually generalize better than a single deep decision tree?", "options": ["Each tree is shallower", "Averaging many decorrelated high-variance trees reduces variance", "Forests use gradient descent", "Forests ignore noisy features"], "answer": 1, "explanation": "<p>Bootstrap samples plus random feature subsets make the trees different; averaging their predictions cancels much of their individual overfitting.</p>"},
+  {"type": "single", "prompt": "Which splitter keeps class proportions the same in every fold?", "options": ["KFold", "StratifiedKFold", "TimeSeriesSplit", "GroupKFold"], "answer": 1, "explanation": "<p>StratifiedKFold stratifies by label. It is the default when you pass <code>cv=5</code> to a classifier.</p>"},
+  {"type": "single", "prompt": "You have 8 hyperparameters to tune and limited time. Which is usually the better tool?", "options": ["GridSearchCV", "RandomizedSearchCV", "Tune each by hand", "No tuning"], "answer": 1, "explanation": "<p>A full grid explodes combinatorially. Random sampling covers the important dimensions well with a fixed budget.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\ny = np.array([0] * 95 + [1] * 5)\npred = np.zeros(100, dtype=int)\nprint(np.mean(pred == y), np.mean(pred[y == 1] == 1))", "answer": "0.95 0.0", "explanation": "<p>Always predicting 0 is 95% accurate and has zero recall for the rare class. That is why accuracy misleads with imbalance.</p>"},
+  {"type": "single", "prompt": "A random ID column gets noticeable <code>feature_importances_</code> in a random forest. What is the best check?", "options": ["Trust it", "Permutation importance on held-out data, which should show it near zero", "Remove the most important feature", "Increase n_estimators"], "answer": 1, "explanation": "<p>Impurity importance is biased toward high-cardinality features and computed on training data. Permutation importance on held-out data measures real reliance.</p>"},
+  {"type": "single", "prompt": "Someone emails you <code>model.joblib</code>. What is the risk of <code>joblib.load</code>-ing it?", "options": ["None, it is just numbers", "Loading can execute arbitrary code chosen by the file's author", "It may use too much RAM", "It only works on Linux"], "answer": 1, "explanation": "<p>joblib is built on pickle, and unpickling can run code. Load only files you trust, or use a safer format such as skops with an explicit trusted-types list.</p>"},
+  {"type": "single", "prompt": "Why include a <code>DummyClassifier</code> in model comparison?", "options": ["It is the most accurate", "It shows the score you get with no learning, so you know whether real models add value", "It speeds up CV", "It handles missing values"], "answer": 1, "explanation": "<p>A baseline turns a raw score into evidence: 0.94 accuracy means little if the dummy gets 0.93.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Every estimator has <code>fit</code>; predictors add <code>predict</code>; transformers add <code>transform</code>. Learned attributes end in <code>_</code>.</li>
+      <li>Impute, scale, and one-hot encode with a <code>ColumnTransformer</code>; set <code>handle_unknown="ignore"</code>.</li>
+      <li>Pipelines tie preprocessing to the model so fitting happens only on training folds: no leakage.</li>
+      <li>Linear models are fast baselines; random forests are robust; histogram gradient boosting usually wins on tables; scale for k-NN, SVM, and linear models.</li>
+      <li>Cross-validate (stratified for classification) and report mean ± std.</li>
+      <li>Tune with GridSearchCV or RandomizedSearchCV using <code>step__param</code> names; keep a final test set.</li>
+      <li>For imbalance: better metrics, class weights, and threshold tuning.</li>
+      <li>Explain with permutation importance on held-out data.</li>
+      <li>Persist the whole pipeline; never load untrusted pickles; pin versions with <code>pixi.lock</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="scikit-learn">
+<script type="application/json">
+[
+  {"front": "Estimator, predictor, transformer", "back": "Estimator: has fit. Predictor: adds predict. Transformer: adds transform/fit_transform."},
+  {"front": "Hyperparameter vs learned attribute", "back": "Hyperparameters go in the constructor (C=1.0). Learned attributes are set by fit and end in _ (coef_)."},
+  {"front": "ColumnTransformer", "back": "Applies different transformers to different column groups and concatenates the outputs."},
+  {"front": "Why Pipelines?", "back": "Every step is fitted only on training data, even inside cross-validation, so nothing leaks."},
+  {"front": "step__param", "back": "How to address a parameter inside a pipeline for set_params or grid search, e.g. model__C."},
+  {"front": "StratifiedKFold", "back": "k-fold CV that keeps class proportions equal in each fold."},
+  {"front": "GridSearchCV vs RandomizedSearchCV", "back": "Grid: every combination. Randomized: n_iter samples from distributions; better for many hyperparameters."},
+  {"front": "class_weight=\"balanced\"", "back": "Weights each class inversely to its frequency so rare-class mistakes cost more."},
+  {"front": "Permutation importance", "back": "Score drop when one feature is shuffled on held-out data; model-agnostic and unbiased by cardinality."},
+  {"front": "HistGradientBoostingClassifier", "back": "Fast gradient-boosted trees; strong default on tabular data; handles missing values natively."},
+  {"front": "Pickle safety", "back": "Loading a pickle/joblib file can execute arbitrary code. Only load trusted files; skops offers a safer format."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://scikit-learn.org/stable/getting_started.html">scikit-learn: getting started</a></li>
+      <li><a href="https://scikit-learn.org/stable/modules/compose.html">Pipelines and composite estimators</a></li>
+      <li><a href="https://scikit-learn.org/stable/modules/cross_validation.html">Cross-validation: evaluating estimator performance</a></li>
+      <li><a href="https://scikit-learn.org/stable/model_persistence.html">Model persistence</a> (joblib, skops, ONNX, and security)</li>
+      <li><a href="https://scikit-learn.org/stable/modules/permutation_importance.html">Permutation feature importance</a></li>
+      <li>Next: <a href="m57-unsupervised-embeddings.html">M57 · Unsupervised Learning &amp; Embeddings</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M37 · Concurrency: Threads, Processes &amp; Interpreters · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m37">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 5 · Advanced Python · Module 37</p>
+    <h1>Concurrency: Threads, Processes &amp; Interpreters</h1>
+    <p class="lede">Python 3.14 gives you more ways to do several things at once than any previous release: threads,
+      processes, subinterpreters with their own GIL, and an officially supported free-threaded build with no GIL at
+      all. Each has a different cost model. This module explains the machinery underneath so you can pick the right
+      tool, predict its performance, and avoid the bugs that come with shared state.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m36-metaprogramming.html">M36 Metaprogramming</a>, <a href="m14-iterators.html">M14 Iterators &amp; Generators</a></span></div>
+    <ul class="objectives">
+      <li>Distinguish concurrency from parallelism and I/O-bound from CPU-bound work, and estimate speedups with Amdahl's law</li>
+      <li>Explain what the GIL protects, when it is released, and why it makes some code fast and some code serial</li>
+      <li>Use <code>threading</code> primitives (<code>Lock</code>, <code>RLock</code>, <code>Event</code>, <code>Condition</code>, <code>Semaphore</code>) and recognize race conditions</li>
+      <li>Build producer/consumer pipelines with <code>queue.Queue</code> and run work with <code>concurrent.futures</code></li>
+      <li>Use <code>multiprocessing</code> correctly: pickling, start methods (forkserver by default on Linux in 3.14), and shared memory</li>
+      <li>Install and verify free-threaded Python 3.14 with Pixi, and reason about thread safety without a GIL</li>
+      <li>Run parallel work in subinterpreters with <code>concurrent.interpreters</code> and <code>InterpreterPoolExecutor</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="concepts">
+    <h2>Concurrency, parallelism, and the shape of your workload</h2>
+    <p><dfn>Concurrency</dfn> is about <em>structure</em>: a program has several tasks in progress at the same time,
+      and their steps interleave. <dfn>Parallelism</dfn> is about <em>execution</em>: several steps literally run at
+      the same instant on different CPU cores. A single-core machine can run a concurrent program (by switching between
+      tasks) but cannot run it in parallel. Rob Pike's summary: concurrency is <em>dealing with</em> lots of things at
+      once; parallelism is <em>doing</em> lots of things at once.</p>
+    <p>Which one you need depends on where your program spends its time:</p>
+    <div class="two-col">
+      <div><h4>I/O-bound</h4><p>Most time is spent <em>waiting</em>: for the network, a disk, a database, a
+        subprocess. The CPU is idle. Concurrency helps enormously, because while one task waits, another can run. You
+        don't need more cores; you need to stop waiting serially. Tools: threads, <code>asyncio</code> (<a href="m38-asyncio.html">M38</a>).</p></div>
+      <div><h4>CPU-bound</h4><p>Most time is spent <em>computing</em>: parsing, compressing, numeric loops, image
+        processing. Interleaving tasks on one core gains nothing (it adds switching overhead). You need parallelism:
+        more cores executing Python bytecode simultaneously. Tools: processes, subinterpreters, free-threaded Python,
+        or native code that releases the GIL (NumPy).</p></div>
+    </div>
+    <p>Before parallelizing, estimate the ceiling. <dfn>Amdahl's law</dfn> says that if a fraction <em>p</em> of the
+      runtime can be parallelized across <em>n</em> workers, the best possible speedup is
+      <code>1 / ((1 - p) + p / n)</code>. The serial part dominates quickly: with 90% parallel code, even infinite cores
+      give at most 10×.</p>
+    <div class="runnable" data-title="Amdahl's law: how much can parallelism help?">
+<textarea>
+def amdahl(p, n):
+    """Upper bound on speedup when fraction p of the work runs on n workers."""
+    return 1 / ((1 - p) + p / n)
+
+print(f"{'parallel %':>10} | " + " | ".join(f"{n:>5} cores" for n in (2, 4, 8, 16, 1_000_000)))
+for p in (0.5, 0.75, 0.9, 0.95, 0.99):
+    print(f"{p:>10.0%} | " + " | ".join(f"{amdahl(p, n):>10.2f}x" for n in (2, 4, 8, 16, 1_000_000)))
+</textarea>
+    </div>
+    <p>Real speedups are lower still, because parallel workers pay <dfn>coordination costs</dfn>: starting workers,
+      copying data to them, waiting for locks, and combining results. A recurring theme of this module is that each
+      tool sits at a different point on the trade-off between <em>isolation</em> (safety, but expensive data transfer)
+      and <em>sharing</em> (cheap data access, but you must synchronize).</p>
+    <aside class="callout think"><p>Your web scraper downloads 500 pages, then parses each one (5 ms of CPU per page).
+      Downloads take 300 ms each. Which part is I/O-bound, which is CPU-bound, and which tool would you use for each?
+      Keep your answer in mind for the decision table at the end.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="gil">
+    <h2>The GIL, explained</h2>
+    <p>CPython manages memory with <dfn>reference counting</dfn>: every object has a counter of how many references
+      point at it, and the object is freed when it drops to zero. Incrementing and decrementing those counters happens
+      constantly, on every assignment and function call. If two threads updated the same counter at once without
+      synchronization, counts would be corrupted and objects freed while still in use.</p>
+    <p>The classic solution is the <dfn>Global Interpreter Lock</dfn> (GIL): one mutex per interpreter that a thread
+      must hold to execute Python bytecode or touch Python objects. It makes reference counting and the internals of
+      <code>dict</code>, <code>list</code>, and friends safe without fine-grained locks, and makes single-threaded code
+      fast. The cost: in a standard build, <strong>only one thread executes Python bytecode at a time</strong>, so
+      threads never speed up pure-Python CPU work.</p>
+    <p>Threads still help with I/O because the GIL is <em>released</em> at the right moments:</p>
+    <ul>
+      <li><strong>Blocking system calls</strong>: socket reads, file I/O, <code>time.sleep</code>, waiting on a lock or
+        a subprocess. The thread drops the GIL while the OS does the waiting.</li>
+      <li><strong>C extensions that opt in</strong>: NumPy's large array operations, <code>hashlib</code> on big
+        buffers, <code>zlib</code>/<code>compression.zstd</code>, many image libraries. Their inner loops don't touch
+        Python objects, so they run in parallel with other threads.</li>
+      <li><strong>Periodically</strong>: a thread running pure Python is asked to drop the GIL every
+        <dfn>switch interval</dfn> (5 ms by default, see <code>sys.getswitchinterval()</code>) so other threads get a
+        turn. This is why threads are <em>preemptive</em>: a switch can happen between almost any two bytecode
+        instructions.</li>
+    </ul>
+    <p>That last point is the root of race conditions. The GIL makes individual bytecode instructions atomic, but a
+      line like <code>counter += 1</code> compiles to several instructions: load, add, store. A switch between the load
+      and the store loses an update.</p>
+    <div class="runnable" data-title="Why counter += 1 is not atomic">
+<textarea>
+import dis
+import sys
+
+counter = 0
+def increment():
+    global counter
+    counter += 1
+
+dis.dis(increment)
+print("switch interval (s):", sys.getswitchinterval())
+print("GIL enabled in this interpreter:", sys._is_gil_enabled())
+</textarea>
+    </div>
+    <p>A thread switch after <code>LOAD_GLOBAL counter</code> but before <code>STORE_GLOBAL counter</code> lets another
+      thread read the same old value. Both store <code>old + 1</code>, and one increment vanishes. In a GIL build this
+      is rare for such a tiny window (and recent CPython versions make it rarer still), which is exactly what makes it
+      dangerous: tests pass, production loses data. In a free-threaded build it happens constantly.</p>
+    <aside class="callout warn"><p><strong>The GIL never made your code thread-safe.</strong> It protects the
+      interpreter's internals, not your program's invariants. Any read-modify-write on shared state ("check balance,
+      then withdraw", "if key not in cache: compute and store") needs a lock, a queue, or a design that avoids sharing.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="threading">
+    <h2>Threads and race conditions</h2>
+    <p>A <dfn>thread</dfn> is an independent flow of execution inside one process. All threads share the same memory:
+      the same modules, globals, and objects. That makes communication free and bugs easy. The
+      <a href="https://docs.python.org/3/library/threading.html"><code>threading</code></a> module wraps the operating
+      system's threads (each Python thread is a real OS thread).</p>
+    <p>The timeline below compares running three I/O waits sequentially with running them in threads. Notice that the
+      threads overlap their <em>waiting</em>, which is where the time goes in I/O-bound work.</p>
+    <div class="viz" data-viz="event-loop" data-config='{"scenario": "threads"}'></div>
+    <div class="runnable" data-local="Browsers running Pyodide can't start OS threads. Save as threads_io.py and run with: pixi run python threads_io.py" data-title="Threads overlap I/O waits">
+<textarea>
+import threading
+import time
+
+def download(name: str, seconds: float, results: dict[str, float]) -> None:
+    time.sleep(seconds)                 # stands in for a network call; releases the GIL
+    results[name] = seconds
+
+results: dict[str, float] = {}
+start = time.perf_counter()
+threads = [threading.Thread(target=download, args=(f"page{i}", 0.5, results), name=f"dl-{i}") for i in range(10)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()                            # wait for each to finish
+print(f"10 downloads of 0.5s took {time.perf_counter() - start:.2f}s")   # ~0.5s, not 5s
+print(sorted(results))
+</textarea>
+    </div>
+    <h3>A race condition you can watch</h3>
+    <p>Real threads can't run in your browser, but the essence of a race is just <em>interleaving</em>. We can simulate
+      a preemptive scheduler with generators: each <code>yield</code> marks a point where the "OS" may switch to
+      another task. Run it a few times; change the seed; then turn on <code>USE_LOCK</code>.</p>
+    <div class="runnable" data-title="Simulated threads: lost updates">
+<textarea>
+import random
+
+USE_LOCK = False
+SEED = 7
+balance = 100
+approved = []
+lock_owner = None
+
+def withdraw(name, amount):
+    """Check-then-act with a switch point between the check and the update."""
+    global balance, lock_owner
+    if USE_LOCK:
+        while lock_owner is not None:       # spin until the lock is free
+            yield f"{name} waits for lock"
+        lock_owner = name
+    current = balance                        # read
+    yield f"{name} read balance={current}"
+    if current >= amount:                    # check
+        approved.append(amount)
+        yield f"{name} approved {amount}"
+        balance = current - amount           # act (write)
+        yield f"{name} wrote balance={balance}"
+    else:
+        yield f"{name} declined"
+    if USE_LOCK:
+        lock_owner = None
+
+def run(tasks, seed):
+    rng = random.Random(seed)
+    tasks = list(tasks)
+    while tasks:
+        task = rng.choice(tasks)             # a preemptive scheduler picks any runnable task
+        try:
+            print("  ", next(task))
+        except StopIteration:
+            tasks.remove(task)
+
+run([withdraw("alice", 80), withdraw("bob", 70)], SEED)
+print(f"approved {approved}: paid out {sum(approved)} from an account holding 100; final balance {balance}")
+if sum(approved) > 100:
+    print("RACE: both checks saw the old balance, and money was created out of thin air")
+</textarea>
+    </div>
+    <p>With the lock off, both withdrawals can be approved against the same balance of 100, which a bank would not
+      enjoy. The lock makes the read-check-write sequence a <dfn>critical section</dfn>: only one task may be inside
+      it at a time. Here is the same bug with real threads (the <code>time.sleep(0)</code> forces a switch inside the
+      window to make the race reproducible):</p>
+    <div class="runnable" data-local="Needs real OS threads. Run locally with pixi run python race.py" data-title="A real race, and the fix">
+<textarea>
+import threading
+import time
+
+counter = 0
+lock = threading.Lock()
+
+def unsafe(n: int) -> None:
+    global counter
+    for _ in range(n):
+        tmp = counter
+        time.sleep(0)            # yield the GIL inside the read-modify-write window
+        counter = tmp + 1
+
+def safe(n: int) -> None:
+    global counter
+    for _ in range(n):
+        with lock:               # acquire ... release, even if an exception is raised
+            tmp = counter
+            time.sleep(0)
+            counter = tmp + 1
+
+for fn in (unsafe, safe):
+    counter = 0
+    threads = [threading.Thread(target=fn, args=(1000,)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    print(f"{fn.__name__:>6}: expected 4000, got {counter}")
+</textarea>
+    </div>
+    <h3>The synchronization toolbox</h3>
+    <table>
+      <thead><tr><th>Primitive</th><th>What it does</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td><code>Lock</code></td><td>Mutual exclusion; <code>with lock:</code> acquires and releases</td><td>Protect a shared invariant</td></tr>
+        <tr><td><code>RLock</code></td><td>Re-entrant lock: the owning thread may acquire it again (must release as many times)</td><td>Methods that call other locked methods of the same object</td></tr>
+        <tr><td><code>Event</code></td><td>A boolean flag threads can <code>wait()</code> on; <code>set()</code> wakes all waiters</td><td>"Start now" or "shut down" signals</td></tr>
+        <tr><td><code>Condition</code></td><td>A lock plus <code>wait()</code>/<code>notify()</code>; <code>wait_for(predicate)</code> re-checks after waking</td><td>"Wait until the buffer is non-empty"</td></tr>
+        <tr><td><code>Semaphore(n)</code></td><td>A counter: at most <em>n</em> holders at once (<code>BoundedSemaphore</code> catches over-release)</td><td>Limit concurrent connections</td></tr>
+        <tr><td><code>Barrier(n)</code></td><td>Blocks until <em>n</em> threads arrive</td><td>Phase-based algorithms</td></tr>
+        <tr><td><code>threading.local()</code></td><td>Per-thread attribute storage</td><td>Per-thread DB connection</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-local="Needs real OS threads. Run locally with pixi run python primitives.py" data-title="Event, Semaphore, RLock, and Condition together">
+<textarea>
+import threading
+import time
+
+start = threading.Event()
+pool = threading.Semaphore(2)            # at most 2 "connections" at once
+active = 0
+active_lock = threading.Lock()
+
+def worker(i: int) -> None:
+    global active
+    start.wait()                         # all workers block until the event is set
+    with pool:
+        with active_lock:
+            active += 1
+            print(f"worker {i} connected, active={active}")
+        time.sleep(0.1)
+        with active_lock:
+            active -= 1
+
+threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+for t in threads:
+    t.start()
+time.sleep(0.05)
+start.set()                              # release everyone at once
+for t in threads:
+    t.join()
+
+class Account:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()   # re-entrant: deposit_twice() calls deposit() while holding it
+        self.balance = 0
+    def deposit(self, amount: int) -> None:
+        with self._lock:
+            self.balance += amount
+    def deposit_twice(self, amount: int) -> None:
+        with self._lock:
+            self.deposit(amount)         # a plain Lock would deadlock here
+            self.deposit(amount)
+
+acct = Account()
+acct.deposit_twice(5)
+print("balance", acct.balance)
+
+items: list[int] = []
+cond = threading.Condition()
+def consumer() -> None:
+    with cond:
+        cond.wait_for(lambda: len(items) >= 3)   # sleeps, re-checks after every notify
+        print("consumer saw", items)
+c = threading.Thread(target=consumer)
+c.start()
+for n in range(3):
+    with cond:
+        items.append(n)
+        cond.notify()
+c.join()
+</textarea>
+    </div>
+    <aside class="callout danger"><p><strong>Deadlock</strong>: thread A holds lock 1 and waits for lock 2 while thread
+      B holds lock 2 and waits for lock 1. Neither can proceed. Prevent it by always acquiring locks in one global
+      order, holding locks for as short a time as possible, never calling unknown code (callbacks, I/O) while holding a
+      lock, and using <code>lock.acquire(timeout=...)</code> in code that must not hang forever.</p></aside>
+    <p><strong>Remember:</strong> threads share memory; any compound operation on shared state needs a critical
+      section. Prefer designs that share less (next section) over designs with more locks.</p>
+  </section>
+
+  <section class="lesson-section" id="queues">
+    <h2>Producer/consumer with <code>queue.Queue</code></h2>
+    <p>The safest way to share data between threads is to not share it: pass it. <code>queue.Queue</code> is a
+      thread-safe FIFO with the locking done for you. Producers <code>put()</code> work items; consumers
+      <code>get()</code> them. A <code>maxsize</code> gives <dfn>back-pressure</dfn>: when the queue is full,
+      producers block instead of piling up unbounded memory. <code>task_done()</code> and <code>join()</code> let the
+      main thread wait until every item has been processed, and a <dfn>sentinel</dfn> (often <code>None</code>) tells
+      consumers to exit.</p>
+    <p>The API itself works fine without threads, so you can explore it here:</p>
+    <div class="runnable" data-title="The queue.Queue API (single thread)">
+<textarea>
+import queue
+
+q: queue.Queue[str] = queue.Queue(maxsize=2)
+q.put("a")
+q.put("b")
+print("size", q.qsize(), "full?", q.full())
+try:
+    q.put("c", block=False)          # same as put_nowait
+except queue.Full:
+    print("queue.Full: a real producer thread would block here (back-pressure)")
+
+print(q.get(), q.get())
+q.task_done(); q.task_done()          # one task_done per processed item
+try:
+    q.get_nowait()
+except queue.Empty:
+    print("queue.Empty: a real consumer would block until an item arrives")
+
+lifo = queue.LifoQueue(); pq = queue.PriorityQueue()
+for x in (3, 1, 2):
+    lifo.put(x); pq.put((x, f"job{x}"))
+print([lifo.get() for _ in range(3)], [pq.get()[1] for _ in range(3)])
+</textarea>
+    </div>
+    <div class="runnable" data-local="Needs real OS threads. Run locally with pixi run python pipeline.py" data-title="A threaded pipeline with back-pressure and sentinels">
+<textarea>
+import queue
+import threading
+import time
+
+SENTINEL = None
+jobs: queue.Queue[int | None] = queue.Queue(maxsize=5)
+results: queue.Queue[tuple[str, int, int]] = queue.Queue()
+
+def producer(n: int) -> None:
+    for i in range(n):
+        jobs.put(i)                     # blocks when 5 items are waiting
+    print("producer done")
+
+def consumer() -> None:
+    name = threading.current_thread().name
+    while True:
+        item = jobs.get()
+        try:
+            if item is SENTINEL:
+                return
+            time.sleep(0.01)            # simulated I/O
+            results.put((name, item, item * item))
+        finally:
+            jobs.task_done()            # always, even for the sentinel or on error
+
+workers = [threading.Thread(target=consumer, name=f"c{i}") for i in range(3)]
+for w in workers:
+    w.start()
+producer(20)
+jobs.join()                             # every real item processed
+for _ in workers:
+    jobs.put(SENTINEL)                  # one sentinel per consumer
+for w in workers:
+    w.join()
+print(results.qsize(), "results; sample:", sorted(results.queue)[:3])
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Pair every <code>get()</code> with exactly one <code>task_done()</code> in a
+      <code>finally</code> block. A missing <code>task_done()</code> makes <code>join()</code> hang forever, which is
+      the single most common queue bug (you will meet its asyncio twin in <a href="../projects/p05-async-crawler.html">Project 5</a>).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="futures">
+    <h2><code>concurrent.futures</code>: executors and futures</h2>
+    <p>Managing threads by hand is verbose. <a href="https://docs.python.org/3/library/concurrent.futures.html"><code>concurrent.futures</code></a>
+      provides one interface over three kinds of worker pools: <code>ThreadPoolExecutor</code>,
+      <code>ProcessPoolExecutor</code>, and (new in 3.14) <code>InterpreterPoolExecutor</code>. You submit callables
+      and get back <dfn>futures</dfn>: placeholder objects for a result that doesn't exist yet.</p>
+    <ul>
+      <li><code>executor.submit(fn, *args)</code> returns a <code>Future</code>. <code>future.result(timeout=None)</code>
+        blocks until it's done and returns the value <em>or re-raises the worker's exception</em>.</li>
+      <li><code>executor.map(fn, iterable)</code> returns results <em>in input order</em> (lazily).</li>
+      <li><code>as_completed(futures)</code> yields futures <em>as they finish</em>, which is best for progress bars
+        and for acting on fast results first.</li>
+      <li><code>wait(futures, return_when=FIRST_EXCEPTION)</code> gives you <code>(done, not_done)</code> sets.</li>
+      <li><code>with Executor(...) as ex:</code> calls <code>shutdown(wait=True)</code> on exit;
+        <code>shutdown(cancel_futures=True)</code> drops pending work.</li>
+    </ul>
+    <p>A <code>Future</code> is just a thread-safe box with callbacks; you can drive one by hand to see its lifecycle:</p>
+    <div class="runnable" data-title="The Future object, by hand">
+<textarea>
+from concurrent.futures import Future, CancelledError
+
+f: Future[int] = Future()
+f.add_done_callback(lambda fut: print("callback: done, result =", fut.result()))
+print("state:", f._state, "done?", f.done())
+f.set_result(42)                      # an executor's worker does this
+print("state:", f._state, "result:", f.result())
+
+g: Future[int] = Future()
+g.set_exception(ValueError("worker crashed"))
+try:
+    g.result()                        # the exception is re-raised in the caller
+except ValueError as e:
+    print("re-raised:", e, "| exception():", repr(g.exception()))
+
+h: Future[int] = Future()
+print("cancel pending future:", h.cancel())
+try:
+    h.result()
+except CancelledError:
+    print("CancelledError")
+</textarea>
+    </div>
+    <div class="runnable" data-local="Needs real worker threads and processes. Run locally with pixi run python futures_demo.py" data-title="Executors, as_completed, and error handling">
+<textarea>
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+
+def fetch(url: str) -> int:
+    time.sleep(0.2)                        # I/O-bound: threads are ideal
+    if "bad" in url:
+        raise ConnectionError(url)
+    return len(url)
+
+def crunch(n: int) -> int:
+    return sum(i * i for i in range(n))   # CPU-bound: processes (or interpreters) are ideal
+
+if __name__ == "__main__":                # REQUIRED for process pools with spawn/forkserver
+    urls = [f"https://example.com/{i}" for i in range(8)] + ["https://bad.example"]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(fetch, u): u for u in urls}
+        for fut in as_completed(futures):
+            url = futures[fut]
+            try:
+                print(f"{url:<26} -> {fut.result()}")
+            except ConnectionError as e:
+                print(f"{url:<26} -> failed: {e!r}")
+
+    start = time.perf_counter()
+    with ProcessPoolExecutor() as ex:      # defaults to os.process_cpu_count() workers
+        totals = list(ex.map(crunch, [3_000_000] * 8, chunksize=2))
+    print(f"8 CPU tasks in processes: {time.perf_counter() - start:.2f}s")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Size pools deliberately. For CPU-bound pools, more workers than cores only adds
+      overhead (<code>os.process_cpu_count()</code>, new in 3.13, respects CPU affinity). For I/O-bound thread pools
+      the right size depends on what you're waiting for: the server's rate limits and your connection limit matter more
+      than your core count.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="multiprocessing">
+    <h2><code>multiprocessing</code>: true parallelism with isolation</h2>
+    <p>A <dfn>process</dfn> has its own memory space and its own interpreter (and so its own GIL). Running Python in
+      several processes gives real CPU parallelism on a standard build. The price is isolation: processes don't share
+      objects, so arguments and results must be <strong>serialized with <code>pickle</code></strong>, sent through a
+      pipe, and deserialized on the other side. That means:</p>
+    <ul>
+      <li>Functions and arguments must be picklable. Module-level functions pickle (by reference to their qualified
+        name); lambdas, nested functions, open files, sockets, and locks don't.</li>
+      <li>Sending large data is expensive. Parallelizing a task that takes 1 ms but ships 10 MB is a slowdown.</li>
+      <li>Workers must be able to <em>import</em> your function, which is why the
+        <code>if __name__ == "__main__":</code> guard is mandatory with the spawn and forkserver start methods.
+        Without it, each child re-runs your script's top level as it imports it.</li>
+    </ul>
+    <div class="runnable" data-title="What can be sent to another process?">
+<textarea>
+import pickle
+
+def square(x):
+    return x * x
+
+candidates = {
+    "module-level function": square,
+    "lambda": lambda x: x * x,
+    "list of tuples": [(1, "a"), (2, "b")],
+    "generator": (i for i in range(3)),
+    "bound method of a list": [1, 2].append,
+}
+for label, obj in candidates.items():
+    try:
+        data = pickle.dumps(obj)
+        print(f"OK   {label:<24} {len(data):>4} bytes")
+    except (pickle.PicklingError, TypeError, AttributeError) as e:
+        print(f"FAIL {label:<24} {type(e).__name__}: {str(e)[:60]}")
+</textarea>
+    </div>
+    <h3>Start methods</h3>
+    <p>How a child process is created matters for speed, safety, and what state it inherits:</p>
+    <table>
+      <thead><tr><th>Method</th><th>How</th><th>Pros</th><th>Cons</th><th>Default on</th></tr></thead>
+      <tbody>
+        <tr><td><code>fork</code></td><td>Copy the parent process (copy-on-write)</td><td>Fast start; child inherits everything</td><td>Unsafe with threads: locks held by other threads are copied in a locked state; can deadlock or crash</td><td>none since 3.14</td></tr>
+        <tr><td><code>spawn</code></td><td>Start a fresh interpreter, import the main module</td><td>Clean, safe, portable</td><td>Slowest start; everything is pickled</td><td>Windows, macOS</td></tr>
+        <tr><td><code>forkserver</code></td><td>A clean single-threaded server process forks children on request</td><td>Fast-ish and thread-safe</td><td>POSIX only; still pickles arguments</td><td>Linux (and other POSIX except macOS) <span class="tag v314">3.14</span></td></tr>
+      </tbody>
+    </table>
+    <aside class="callout py314"><p>Python 3.14 changed the default start method on Linux from <code>fork</code> to
+      <code>forkserver</code>, because forking a process that has threads (very common once libraries start background
+      threads) is a source of rare, nasty deadlocks. Code that relied on <code>fork</code> inheriting global state (for
+      example passing a lambda or a module-level object set up after import) may break; fix it by passing data
+      explicitly or, if you must, by choosing a context: <code>multiprocessing.get_context("fork")</code>.</p></aside>
+    <h3>Sharing memory instead of copying it</h3>
+    <p>For big numeric data, pickling every chunk is wasteful. <code>multiprocessing.shared_memory.SharedMemory</code>
+      creates a named block of memory that several processes map; wrap it in a NumPy array and workers read and write
+      the same bytes with no copying. You are back to shared state, so coordinate writes (each worker owns a slice, or
+      use a <code>multiprocessing.Lock</code>). Simpler options: <code>multiprocessing.Value</code>/<code>Array</code>
+      for small typed buffers, and <code>Manager()</code> for proxied dicts and lists (convenient but slow: every
+      access is an IPC round-trip).</p>
+    <div class="runnable" data-local="Needs real processes. Run locally with pixi run python shm.py" data-title="Workers filling one shared NumPy array">
+<textarea>
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import shared_memory
+
+N, WORKERS = 4_000_000, 4
+
+def fill(name: str, start: int, stop: int) -> float:
+    shm = shared_memory.SharedMemory(name=name)          # attach by name, no copy
+    try:
+        arr = np.ndarray((N,), dtype=np.float64, buffer=shm.buf)
+        arr[start:stop] = np.sqrt(np.arange(start, stop))   # each worker owns a slice
+        return float(arr[start:stop].sum())
+    finally:
+        shm.close()
+
+if __name__ == "__main__":
+    shm = shared_memory.SharedMemory(create=True, size=N * 8)
+    try:
+        bounds = [(i * N // WORKERS, (i + 1) * N // WORKERS) for i in range(WORKERS)]
+        with ProcessPoolExecutor(WORKERS) as ex:
+            partials = list(ex.map(fill, [shm.name] * WORKERS, *zip(*bounds)))
+        arr = np.ndarray((N,), dtype=np.float64, buffer=shm.buf)
+        print(round(sum(partials), 2), round(float(arr.sum()), 2))
+        del arr                                           # release the buffer view before closing
+    finally:
+        shm.close()
+        shm.unlink()                                      # free the block; only the creator does this
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="free-threading">
+    <h2>Free-threaded Python 3.14: no GIL</h2>
+    <p><a href="https://peps.python.org/pep-0703/">PEP 703</a> introduced an optional CPython build without the GIL in
+      3.13 (experimental). In 3.14, <a href="https://peps.python.org/pep-0779/">PEP 779</a> promoted it to
+      <strong>officially supported</strong> (phase II): it is a separate build you choose, not the default. In this
+      build, threads run Python bytecode truly in parallel on multiple cores. To make that safe, CPython uses
+      <dfn>biased reference counting</dfn> (cheap counts for the owning thread, atomic ones for others),
+      <dfn>immortal objects</dfn> (like <code>None</code> and small ints, whose counts never change), per-object
+      locks inside built-in containers, and a thread-safe memory allocator (mimalloc).</p>
+    <p>The interpreter binary is conventionally called <code>python3.14t</code> (the <code>t</code> stands for
+      "threaded"). You can tell which build you're on, and whether the GIL is actually off right now:</p>
+    <div class="runnable" data-title="Which build am I running?">
+<textarea>
+import sys
+import sysconfig
+
+free_threaded_build = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+print("free-threaded build:", free_threaded_build)
+print("GIL currently enabled:", sys._is_gil_enabled())
+print("version:", sys.version.split()[0], "| ABI flags:", getattr(sys, "abiflags", "n/a"))
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>On conda-forge, the free-threaded interpreter is provided through the
+      <code>python-freethreading</code> package. In a Pixi workspace (ideally in its own feature/environment so your main
+      environment keeps the standard build):</p>
+<pre data-label="Terminal"><code class="language-bash">pixi add --feature ft python-freethreading      # check availability first: pixi search python-freethreading
+pixi workspace environment add ft --feature ft
+pixi run -e ft python -c "import sys; print(sys._is_gil_enabled())"   # expect False</code></pre>
+      <p>Package names and pins on conda-forge can change, so confirm with <code>pixi search</code> and always verify the
+        result with <code>sys._is_gil_enabled()</code> rather than trusting the environment name.</p></aside>
+    <p>The GIL can come back. If you import a C extension that hasn't declared itself free-threading compatible, the
+      interpreter re-enables the GIL (and warns) to stay safe. You can force the choice with the environment variable
+      <code>PYTHON_GIL=0</code> or <code>PYTHON_GIL=1</code>, or with <code>-X gil=0</code>. Most of the scientific
+      stack (NumPy, SciPy, and others) publishes free-threaded builds, but check each dependency.</p>
+    <h3>Thread safety without a GIL</h3>
+    <p>Free threading doesn't change Python's semantics, but it removes the accidental protection many programs
+      relied on. What still holds and what doesn't:</p>
+    <table>
+      <thead><tr><th>Operation</th><th>Free-threaded behavior</th></tr></thead>
+      <tbody>
+        <tr><td>Single operations on built-ins (<code>list.append</code>, <code>dict[k] = v</code>, <code>d.get(k)</code>)</td><td>Safe: internally locked per object; no crashes or corruption</td></tr>
+        <tr><td>Compound operations (<code>x += 1</code>, <code>if k not in d: d[k] = ...</code>, iterate-while-mutating)</td><td>Racy, and now races happen <em>often</em>. Use a lock or an atomic design.</td></tr>
+        <tr><td>Sharing one iterator or generator between threads</td><td>Not safe; give each thread its own</td></tr>
+        <tr><td><code>queue.Queue</code>, <code>threading</code> primitives, <code>concurrent.futures</code></td><td>Designed for this; your best tools</td></tr>
+        <tr><td>Your own classes with mutable state</td><td>As unsafe as they always were, minus the luck</td></tr>
+      </tbody>
+    </table>
+    <h3>Performance expectations</h3>
+    <ul>
+      <li><strong>Single-threaded code is somewhat slower</strong> on the free-threaded build (the 3.14 docs put the
+        overhead at roughly 5–10% for typical code, down from much higher in 3.13), because of atomic reference counts
+        and fine-grained locking. Some specializations of the adaptive interpreter are also more limited.</li>
+      <li><strong>CPU-bound multi-threaded Python code scales</strong> with cores, which is the whole point:
+        <em>n</em> threads on <em>n</em> cores can approach <em>n</em>× for embarrassingly parallel work.</li>
+      <li><strong>Contention kills scaling</strong>: threads hammering one shared dict, list, or lock serialize on its
+        per-object lock. Partition data so each thread works on its own objects and combine at the end.</li>
+      <li>Memory use is somewhat higher, and extensions that re-enable the GIL silently remove all the gains. Measure
+        on your workload with the benchmark in the mini-project.</li>
+    </ul>
+    <aside class="callout py315"><p>Looking ahead: a major obstacle for free threading is that C extensions must be
+      compiled separately for the free-threaded ABI (the <code>cp314t</code> wheel tag) because the limited/stable ABI
+      (<code>abi3</code>) didn't support it. Work toward a stable ABI usable by free-threaded builds is targeted at
+      Python 3.15 (see <a href="https://peps.python.org/pep-0803/">PEP 803</a>); if it lands as proposed, one extension
+      wheel could serve both builds across versions. Check the 3.15 "What's New" before relying on it.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="interpreters">
+    <h2>Subinterpreters: <code>concurrent.interpreters</code></h2>
+    <p>A third model sits between threads and processes. A <dfn>subinterpreter</dfn> is a separate Python interpreter
+      inside the same process: its own modules, its own <code>sys</code>, its own objects, and, since 3.12
+      (<a href="https://peps.python.org/pep-0684/">PEP 684</a>), its own GIL. Several subinterpreters running in
+      different threads execute Python truly in parallel, even on a standard GIL build. Python 3.14 exposes this through
+      the new <code>concurrent.interpreters</code> module (<a href="https://peps.python.org/pep-0734/">PEP 734</a>) and
+      <code>concurrent.futures.InterpreterPoolExecutor</code>.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Like processes</h4><p>Isolated: no shared Python objects, so no data races on your objects.
+        Communicate by passing data (queues, pickling).</p></div>
+      <div class="card"><h4>Like threads</h4><p>One OS process: faster to start than a process and lower memory; no
+        <code>fork</code> hazards; cheap to exchange certain data such as <code>bytes</code> and
+        <code>memoryview</code> buffers.</p></div>
+      <div class="card"><h4>Caveats</h4><p>New and evolving. Extension modules must support multiple interpreters
+        (many do not yet). Startup still costs (each imports its own modules). Not available in the browser.</p></div>
+    </div>
+    <div class="runnable" data-local="Subinterpreters need CPython 3.14 locally (not Pyodide). Run with pixi run python interp_demo.py" data-title="Low-level API and InterpreterPoolExecutor">
+<textarea>
+import time
+from concurrent import interpreters
+from concurrent.futures import InterpreterPoolExecutor
+
+def crunch(n: int) -> int:
+    return sum(i * i for i in range(n))
+
+if __name__ == "__main__":
+    interp = interpreters.create()
+    try:
+        interp.exec("import sys; print('hello from interpreter', sys.implementation.name)")
+        print("call ->", interp.call(crunch, 1000))          # the function is shared by pickling
+        q = interpreters.create_queue()
+        interp.prepare_main(q=q)                             # bind the queue into the interpreter's __main__
+        interp.exec("q.put(sum(range(10)))")
+        print("from queue ->", q.get())
+    finally:
+        interp.close()
+
+    start = time.perf_counter()
+    with InterpreterPoolExecutor(max_workers=4) as ex:      # same API as the other executors
+        totals = list(ex.map(crunch, [3_000_000] * 4))
+    print(f"4 CPU tasks in 4 interpreters: {time.perf_counter() - start:.2f}s")
+</textarea>
+    </div>
+    <aside class="callout note"><p>Only "shareable" objects cross between interpreters directly
+      (<code>interpreters.is_shareable(obj)</code>): <code>None</code>, <code>bool</code>, <code>int</code>,
+      <code>float</code>, <code>str</code>, <code>bytes</code>, tuples of shareable objects, <code>memoryview</code>,
+      and interpreter queues. Other objects passed through <code>call()</code> or the executor are pickled, with the
+      same constraints as multiprocessing.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="choosing">
+    <h2>Choosing the right tool</h2>
+    <table>
+      <thead><tr><th>Workload</th><th>Best first choice</th><th>Why</th><th>Watch out for</th></tr></thead>
+      <tbody>
+        <tr><td>Many network calls (hundreds to thousands)</td><td><code>asyncio</code> (<a href="m38-asyncio.html">M38</a>)</td><td>One thread, thousands of cheap tasks, explicit switch points</td><td>Needs async libraries; blocking calls stall everything</td></tr>
+        <tr><td>Some I/O with blocking libraries (requests, DB drivers)</td><td><code>ThreadPoolExecutor</code></td><td>GIL released during I/O; simple; works with any library</td><td>Shared state needs locks</td></tr>
+        <tr><td>CPU-bound pure Python, standard build</td><td><code>ProcessPoolExecutor</code></td><td>Real parallelism, mature, robust isolation</td><td>Pickling cost; start-up time; <code>__main__</code> guard</td></tr>
+        <tr><td>CPU-bound pure Python, want lower overhead than processes</td><td><code>InterpreterPoolExecutor</code></td><td>Parallel, isolated, single process</td><td>New; extension module support varies</td></tr>
+        <tr><td>CPU-bound with shared in-memory data structures</td><td>Free-threaded build + threads</td><td>Parallel with zero-copy sharing</td><td>You own thread safety; extension compatibility; ~5–10% single-thread cost</td></tr>
+        <tr><td>Numeric arrays</td><td>NumPy (vectorize first), then threads</td><td>NumPy releases the GIL in heavy loops</td><td>Make sure the work is really in C, not a Python loop</td></tr>
+        <tr><td>Huge data, many machines</td><td>A distributed framework (Dask, Ray, Spark; Part 9)</td><td>Beyond one machine</td><td>Operational complexity</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Predict: how long, sequential vs threaded vs processes?" data-predict>
+<textarea>
+# Each task takes 1.0 s. On a 4-core machine with a standard (GIL) build, estimate
+# wall time for 4 tasks run sequentially, with 4 threads, and with 4 processes.
+io_task = {"sequential": 4.0, "threads": 1.0, "processes": 1.0}       # time.sleep(1)
+cpu_task = {"sequential": 4.0, "threads": 4.0, "processes": 1.0}      # pure-Python loop
+print("I/O :", io_task)
+print("CPU :", cpu_task)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Before any of this, make the single-threaded version fast (<a href="m39-performance.html">M39</a>).
+      A better algorithm or a NumPy vectorization often beats eight cores of a slow loop, and it doesn't add
+      concurrency bugs.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m37-e1" data-title="Amdahl's law">
+      <div class="exercise-prompt">
+        <p>Write <code>speedup(p, n)</code> returning the Amdahl speedup for parallel fraction <code>p</code> (0 to 1)
+          on <code>n</code> workers, and <code>workers_needed(p, target)</code> returning the smallest integer
+          <code>n</code> whose speedup is at least <code>target</code>, or <code>None</code> if the target is impossible
+          (at or above the limit <code>1 / (1 - p)</code>). Raise <code>ValueError</code> if <code>p</code> is outside
+          [0, 1] or <code>n &lt; 1</code>.</p>
+      </div>
+<textarea class="starter">
+def speedup(p, n):
+    ...
+
+def workers_needed(p, target):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_speedup_values():
+    assert math.isclose(speedup(0.9, 10), 1 / (0.1 + 0.09)), "p=0.9, n=10"
+    assert speedup(1.0, 8) == 8, "fully parallel scales linearly"
+    assert speedup(0.0, 8) == 1, "fully serial gains nothing"
+
+def test_validation():
+    for args in ((1.5, 2), (-0.1, 2), (0.5, 0)):
+        try:
+            speedup(*args)
+        except ValueError:
+            continue
+        raise AssertionError(f"speedup{args} should raise ValueError")
+
+def test_workers_needed():
+    assert workers_needed(0.9, 5) == 9, f"expected 9, got {workers_needed(0.9, 5)}"
+    assert workers_needed(0.5, 1.5) == 3, "p=0.5 needs 3 workers for 1.5x"
+    assert workers_needed(0.9, 10) is None, "10x is the asymptote for p=0.9: impossible"
+    assert workers_needed(0.9, 1) == 1, "one worker already gives 1x"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Solve <code>1 / ((1 - p) + p / n) &gt;= target</code> for
+        <code>n</code>, or just loop upward from 1 (the loop terminates because you've already excluded impossible
+        targets). Beware floating-point: compare with a tiny tolerance.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def speedup(p, n):
+    if not 0 &lt;= p &lt;= 1 or n &lt; 1:
+        raise ValueError("need 0 &lt;= p &lt;= 1 and n &gt;= 1")
+    return 1 / ((1 - p) + p / n)
+
+def workers_needed(p, target):
+    if p &lt; 1 and target &gt;= 1 / (1 - p) - 1e-12:
+        return None
+    n = 1
+    while speedup(p, n) &lt; target - 1e-12:
+        n += 1
+    return n</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m37-e2" data-title="Simulate a lost update">
+      <div class="exercise-prompt">
+        <p>Using generators as simulated threads, write <code>run_round_robin(tasks)</code> that advances each
+          generator one step at a time in round-robin order (task 0, 1, 2, 0, 1, 2, ...) until all are exhausted,
+          dropping finished ones. Then write <code>simulate(n_tasks, increments, atomic)</code> that resets a shared
+          <code>state = {"count": 0}</code>, creates <code>n_tasks</code> generators that each increment
+          <code>state["count"]</code> <code>increments</code> times, runs them round-robin, and returns the final count.
+          When <code>atomic</code> is <code>False</code>, each increment must <code>yield</code> between reading and
+          writing (a switch point inside the read-modify-write); when <code>True</code>, read and write happen with no
+          yield in between (yield once after the write instead).</p>
+      </div>
+<textarea class="starter">
+def run_round_robin(tasks):
+    ...
+
+def simulate(n_tasks, increments, atomic):
+    state = {"count": 0}
+    ...
+    return state["count"]
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_round_robin_order():
+    log = []
+    def t(name, n):
+        for i in range(n):
+            log.append(f"{name}{i}")
+            yield
+    run_round_robin([t("a", 2), t("b", 3), t("c", 1)])
+    assert log == ["a0", "b0", "c0", "a1", "b1", "b2"], f"wrong interleaving: {log}"
+
+def test_atomic_is_correct():
+    assert simulate(4, 5, atomic=True) == 20, "atomic increments must not lose updates"
+
+def test_non_atomic_loses_updates():
+    assert simulate(4, 5, atomic=False) == 5, "with round-robin, all tasks read the same value each round"
+    assert simulate(1, 5, atomic=False) == 5, "a single task can't race with itself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a list of live generators; loop over a copy, call
+        <code>next(g)</code> inside <code>try</code>, and remove it on <code>StopIteration</code>. Define the worker
+        generator inside <code>simulate</code> so it closes over <code>state</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def run_round_robin(tasks):
+    live = list(tasks)
+    while live:
+        for task in list(live):
+            try:
+                next(task)
+            except StopIteration:
+                live.remove(task)
+
+def simulate(n_tasks, increments, atomic):
+    state = {"count": 0}
+
+    def worker():
+        for _ in range(increments):
+            if atomic:
+                state["count"] += 1
+                yield
+            else:
+                value = state["count"]
+                yield                      # switch point inside read-modify-write
+                state["count"] = value + 1
+
+    run_round_robin([worker() for _ in range(n_tasks)])
+    return state["count"]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m37-e3" data-title="Split work into chunks">
+      <div class="exercise-prompt">
+        <p>Parallel workers usually get contiguous slices of the input. Write <code>chunk_ranges(n, workers)</code>
+          returning a list of <code>(start, stop)</code> pairs that cover <code>range(n)</code> exactly once, in order,
+          with sizes differing by at most one (larger chunks first). Never return empty chunks: if
+          <code>workers &gt; n</code>, return <code>n</code> chunks of size 1. <code>n == 0</code> returns
+          <code>[]</code>. Raise <code>ValueError</code> if <code>workers &lt; 1</code> or <code>n &lt; 0</code>.</p>
+      </div>
+<textarea class="starter">
+def chunk_ranges(n, workers):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_even():
+    assert chunk_ranges(12, 4) == [(0, 3), (3, 6), (6, 9), (9, 12)], f"got {chunk_ranges(12, 4)}"
+
+def test_uneven_larger_first():
+    assert chunk_ranges(10, 4) == [(0, 3), (3, 6), (6, 8), (8, 10)], f"got {chunk_ranges(10, 4)}"
+
+def test_more_workers_than_items():
+    assert chunk_ranges(3, 8) == [(0, 1), (1, 2), (2, 3)], "no empty chunks"
+    assert chunk_ranges(0, 4) == [], "nothing to do"
+
+def test_cover_exactly():
+    for n in range(0, 40):
+        for w in range(1, 9):
+            chunks = chunk_ranges(n, w)
+            covered = [i for a, b in chunks for i in range(a, b)]
+            assert covered == list(range(n)), f"chunks for n={n}, w={w} don't cover range(n) exactly"
+            sizes = [b - a for a, b in chunks]
+            assert not sizes or max(sizes) - min(sizes) <= 1, f"unbalanced sizes {sizes}"
+
+def test_validation():
+    for args in ((5, 0), (-1, 2)):
+        try:
+            chunk_ranges(*args)
+        except ValueError:
+            continue
+        raise AssertionError(f"chunk_ranges{args} should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>size, extra = divmod(n, k)</code> with
+        <code>k = min(workers, n)</code>; the first <code>extra</code> chunks get <code>size + 1</code> items.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def chunk_ranges(n, workers):
+    if workers &lt; 1 or n &lt; 0:
+        raise ValueError("need workers &gt;= 1 and n &gt;= 0")
+    k = min(workers, n)
+    if k == 0:
+        return []
+    size, extra = divmod(n, k)
+    chunks, start = [], 0
+    for i in range(k):
+        stop = start + size + (1 if i &lt; extra else 0)
+        chunks.append((start, stop))
+        start = stop
+    return chunks</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m37-e4" data-title="Collect futures safely">
+      <div class="exercise-prompt">
+        <p>Write <code>collect(futures)</code> that takes a list of finished <code>concurrent.futures.Future</code>
+          objects and returns <code>(results, errors)</code>: <code>results</code> is a list of the successful results
+          in input order, and <code>errors</code> is a list of <code>(index, exception)</code> pairs for futures that
+          raised. Cancelled futures count as errors with a <code>CancelledError</code> instance. Never let an exception
+          escape.</p>
+      </div>
+<textarea class="starter">
+from concurrent.futures import Future, CancelledError
+
+def collect(futures):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from concurrent.futures import Future, CancelledError
+
+def make(value=None, exc=None, cancel=False):
+    f = Future()
+    if cancel:
+        f.cancel()
+    elif exc is not None:
+        f.set_exception(exc)
+    else:
+        f.set_result(value)
+    return f
+
+def test_all_ok():
+    assert collect([make(1), make(2), make(3)]) == ([1, 2, 3], []), "results in input order"
+
+def test_mixed():
+    boom = ValueError("boom")
+    results, errors = collect([make("a"), make(exc=boom), make("c")])
+    assert results == ["a", "c"], f"got {results}"
+    assert errors == [(1, boom)], f"errors should be [(1, boom)], got {errors}"
+
+def test_cancelled():
+    results, errors = collect([make(cancel=True), make(5)])
+    assert results == [5], "the second future succeeded"
+    assert len(errors) == 1 and errors[0][0] == 0 and isinstance(errors[0][1], CancelledError), f"got {errors}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check <code>f.cancelled()</code> first (calling
+        <code>exception()</code> on a cancelled future raises). Otherwise <code>f.exception()</code> returns the
+        exception or <code>None</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from concurrent.futures import Future, CancelledError
+
+def collect(futures):
+    results, errors = [], []
+    for i, f in enumerate(futures):
+        if f.cancelled():
+            errors.append((i, CancelledError()))
+            continue
+        exc = f.exception()
+        if exc is None:
+            results.append(f.result())
+        else:
+            errors.append((i, exc))
+    return results, errors</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a parallelism benchmark</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">bench-parallel: threads vs processes vs interpreters vs free-threading</span></div>
+      <div class="widget-body">
+        <p>Claims about parallel performance are cheap; measurements are not. Build a benchmark that runs the same
+          CPU-bound workload (a Mandelbrot tile renderer or a prime counter over number ranges) and the same I/O-bound
+          workload (<code>time.sleep</code> as simulated latency) under every model from this module, on both the
+          standard and the free-threaded interpreter, and prints a comparison table.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init bench-parallel
+cd bench-parallel
+pixi add python=3.14 numpy
+pixi add --feature ft python-freethreading
+pixi workspace environment add ft --feature ft
+pixi run python bench.py --workers 1 2 4 8
+pixi run -e ft python bench.py --workers 1 2 4 8</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li>Workloads: <code>count_primes(start, stop)</code> (pure Python), <code>mandel_tile(rows)</code> (pure
+            Python), <code>numpy_tile(rows)</code> (vectorized), and <code>sleepy(seconds)</code> (I/O).</li>
+          <li>Runners: serial, <code>ThreadPoolExecutor</code>, <code>ProcessPoolExecutor</code>,
+            <code>InterpreterPoolExecutor</code>, all fed by the same <code>chunk_ranges</code> function (Exercise 3).</li>
+          <li>Time with <code>time.perf_counter()</code>, repeat each measurement 3 times, report the median, and
+            verify every runner returns the same result as serial.</li>
+          <li>Print a table: workload × runner × workers → seconds and speedup vs serial, plus the build
+            (<code>Py_GIL_DISABLED</code>) and <code>sys._is_gil_enabled()</code>.</li>
+          <li>Write <code>RESULTS.md</code> explaining each number with the ideas from this module (GIL, pickling,
+            start-up costs, Amdahl).</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m37-mini">
+          <li>All runners produce identical results for every workload</li>
+          <li>Threads show near-linear speedup for <code>sleepy</code> on both builds</li>
+          <li>On the standard build, threads show ~1× for <code>count_primes</code> while processes and interpreters scale</li>
+          <li>On the free-threaded build, threads scale for <code>count_primes</code> (and you report the single-thread overhead)</li>
+          <li>You found the point where chunks are too small and parallel overhead beats the gains</li>
+          <li><code>RESULTS.md</code> explains every surprising number</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a shared-memory variant that writes Mandelbrot rows into one <code>SharedMemory</code>-backed NumPy array.</li>
+          <li>Plot speedup vs workers with matplotlib (see <a href="m53-visualization.html">M53</a>).</li>
+          <li>Add a contention benchmark: all threads updating one dict vs per-thread dicts merged at the end.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m37-quiz">
+<script type="application/json">
+{"title": "Concurrency quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which statement best distinguishes concurrency from parallelism?", "options": ["They are synonyms", "Concurrency is tasks in progress at once (interleaving); parallelism is simultaneous execution on multiple cores", "Parallelism is only for I/O", "Concurrency requires multiple cores"], "answer": 1, "explanation": "<p>Concurrency is a way of structuring work; parallelism is a way of executing it. One core can be concurrent but not parallel.</p>"},
+  {"type": "single", "prompt": "Why do threads speed up downloading 100 files on a standard (GIL) build?", "options": ["The GIL is disabled for network code", "Threads release the GIL while blocked on I/O, so waits overlap", "Each thread gets its own GIL", "Python compiles threaded code to C"], "answer": 1, "explanation": "<p>Blocking system calls release the GIL. The work is waiting, and threads let many waits overlap.</p>"},
+  {"type": "output", "prompt": "Amdahl's law: what is the maximum speedup (rounded to 1 decimal) with p = 0.75 on 4 workers?", "code": "p, n = 0.75, 4\nprint(round(1 / ((1 - p) + p / n), 1))", "answer": "2.3", "explanation": "<p>1 / (0.25 + 0.1875) = 2.2857..., so about 2.3×, far from 4×.</p>"},
+  {"type": "single", "prompt": "Why is <code>counter += 1</code> unsafe across threads even with a GIL?", "options": ["Integers are mutable", "It compiles to several bytecodes (load, add, store) and a switch can occur between them", "The GIL is released on every addition", "Global variables can't be shared"], "answer": 1, "explanation": "<p>The GIL makes individual bytecodes atomic, not whole statements. Two threads can both load the old value.</p>"},
+  {"type": "single", "prompt": "A method holding a lock calls another method of the same object that acquires the same lock. Which primitive avoids deadlock?", "options": ["<code>Lock</code>", "<code>RLock</code>", "<code>Semaphore(1)</code>", "<code>Event</code>"], "answer": 1, "explanation": "<p>An <code>RLock</code> may be re-acquired by the thread that owns it. A plain <code>Lock</code> (or <code>Semaphore(1)</code>) would block forever.</p>"},
+  {"type": "multi", "prompt": "Which objects can be pickled to send to a worker process?", "options": ["A module-level function", "A lambda", "A list of tuples of ints", "A generator object", "A dict of strings"], "answer": [0, 2, 4], "explanation": "<p>Module-level functions pickle by reference; plain data pickles by value. Lambdas and generators can't be pickled.</p>"},
+  {"type": "single", "prompt": "What is the default multiprocessing start method on Linux in Python 3.14?", "options": ["fork", "spawn", "forkserver", "thread"], "answer": 2, "explanation": "<p>3.14 switched Linux from <code>fork</code> to <code>forkserver</code> because forking a multi-threaded process can deadlock. macOS and Windows use <code>spawn</code>.</p>"},
+  {"type": "single", "prompt": "Why is <code>if __name__ == \"__main__\":</code> required around process-pool code with spawn or forkserver?", "options": ["For speed", "Children import the main module; without the guard they would re-run the pool-creating code", "It disables the GIL", "It is only needed on Windows with threads"], "answer": 1, "explanation": "<p>Workers must import your module to find the function. The guard keeps top-level side effects (like starting another pool) out of that import.</p>"},
+  {"type": "text", "prompt": "Which function (in <code>sys</code>) reports whether the GIL is currently enabled? (name only)", "answer": ["_is_gil_enabled", "sys._is_gil_enabled", "sys._is_gil_enabled()", "_is_gil_enabled()"], "explanation": "<p><code>sys._is_gil_enabled()</code> returns <code>False</code> on a free-threaded build running without the GIL. The GIL can be re-enabled by incompatible extensions.</p>"},
+  {"type": "multi", "prompt": "On free-threaded 3.14, which are still your responsibility?", "options": ["Making <code>if key not in d: d[key] = compute()</code> atomic", "Preventing <code>list.append</code> from corrupting the list", "Not sharing one iterator between threads", "Avoiding heavy contention on a single shared object"], "answer": [0, 2, 3], "explanation": "<p>Built-in containers lock internally, so single operations don't corrupt them. Compound operations, shared iterators, and contention are your design problem.</p>"},
+  {"type": "single", "prompt": "What gives subinterpreters true parallelism on a standard GIL build?", "options": ["They share the main GIL more efficiently", "Each interpreter has its own GIL (PEP 684)", "They run in separate processes", "They disable reference counting"], "answer": 1, "explanation": "<p>Since 3.12 each subinterpreter can have its own GIL, so interpreters running in different threads execute bytecode in parallel.</p>"},
+  {"type": "single", "prompt": "<code>as_completed(futures)</code> yields futures in which order?", "options": ["Submission order", "Completion order", "Random order", "Sorted by result"], "answer": 1, "explanation": "<p><code>as_completed</code> yields each future as soon as it finishes; <code>executor.map</code> preserves input order.</p>"},
+  {"type": "single", "prompt": "You need to make 5,000 HTTP calls with an async HTTP client. Best first choice?", "options": ["ProcessPoolExecutor with 5,000 workers", "asyncio", "Free-threaded build with 5,000 threads", "InterpreterPoolExecutor"], "answer": 1, "explanation": "<p>Massive I/O concurrency is asyncio's sweet spot: tasks are cheap and the work is waiting.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Concurrency is structure; parallelism is simultaneous execution. Identify I/O-bound vs CPU-bound work first, and bound your expectations with Amdahl's law.</li>
+      <li>The GIL protects interpreter internals, is released during blocking I/O and by many C extensions, and never made your code thread-safe.</li>
+      <li>Threads share memory: protect compound operations with <code>Lock</code>/<code>RLock</code>/<code>Condition</code>, or pass data through <code>queue.Queue</code>.</li>
+      <li><code>concurrent.futures</code> gives one API over thread, process, and interpreter pools.</li>
+      <li>Processes are isolated and parallel but pay for pickling; 3.14 defaults to <code>forkserver</code> on Linux; use shared memory for big arrays.</li>
+      <li>Free-threaded 3.14 (<code>python3.14t</code>) is officially supported: true thread parallelism, ~5–10% single-thread cost, and your own thread-safety discipline.</li>
+      <li><code>concurrent.interpreters</code> and <code>InterpreterPoolExecutor</code> give isolated parallelism inside one process.</li>
+    </ul>
+    <div class="flashcards" data-title="Concurrency">
+<script type="application/json">
+[
+  {"front": "Concurrency vs parallelism", "back": "Concurrency: multiple tasks in progress, interleaved. Parallelism: multiple tasks executing at the same instant."},
+  {"front": "Amdahl's law", "back": "Speedup ≤ 1 / ((1 − p) + p / n). The serial fraction caps the gain."},
+  {"front": "What does the GIL protect?", "back": "Interpreter internals such as reference counts and built-in object state, not your program's invariants."},
+  {"front": "When is the GIL released?", "back": "During blocking I/O and sleeps, inside C extensions that opt in (NumPy, hashlib, zlib), and every switch interval (5 ms)."},
+  {"front": "Lock vs RLock", "back": "RLock can be re-acquired by the owning thread (must release the same number of times); Lock cannot."},
+  {"front": "<code>Condition.wait_for(pred)</code>", "back": "Releases the lock, sleeps until notified, re-acquires, and re-checks the predicate in a loop."},
+  {"front": "queue.Queue shutdown pattern", "back": "<code>task_done()</code> in a finally for every get; <code>join()</code>; then one sentinel per consumer."},
+  {"front": "Start methods", "back": "fork (copy, unsafe with threads), spawn (fresh interpreter), forkserver (default on Linux in 3.14)."},
+  {"front": "<code>python3.14t</code>", "back": "The free-threaded CPython build; check with <code>sysconfig.get_config_var('Py_GIL_DISABLED')</code> and <code>sys._is_gil_enabled()</code>."},
+  {"front": "Subinterpreter", "back": "An isolated interpreter in the same process with its own GIL; use <code>concurrent.interpreters</code> or <code>InterpreterPoolExecutor</code>."},
+  {"front": "Best tool for CPU-bound pure Python on a GIL build?", "back": "ProcessPoolExecutor (or InterpreterPoolExecutor); threads won't help."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/howto/free-threading-python.html">Python support for free threading (HOWTO)</a> and <a href="https://py-free-threading.github.io/">py-free-threading.github.io</a></li>
+      <li><a href="https://docs.python.org/3/library/concurrent.interpreters.html"><code>concurrent.interpreters</code></a> and <a href="https://peps.python.org/pep-0734/">PEP 734</a></li>
+      <li><a href="https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods">multiprocessing: contexts and start methods</a></li>
+      <li><a href="https://docs.python.org/3/library/threading.html"><code>threading</code></a>, <a href="https://docs.python.org/3/library/queue.html"><code>queue</code></a>, <a href="https://docs.python.org/3/library/concurrent.futures.html"><code>concurrent.futures</code></a></li>
+      <li>Next: <a href="m38-asyncio.html">M38 Async Programming with asyncio</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

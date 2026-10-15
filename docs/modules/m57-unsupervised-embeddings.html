@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M57 · Unsupervised Learning &amp; Embeddings · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m57">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 8 · Machine Learning · Module 57</p>
+    <h1>Unsupervised Learning &amp; Embeddings</h1>
+    <p class="lede">Most data has no labels. Unsupervised learning finds the structure anyway: groups of similar
+      customers, a handful of directions that explain most of the variation, records that do not fit. And the idea of
+      representing anything (a word, a product, a user) as a vector, then searching by similarity, powers modern search,
+      recommendations, and retrieval for language models.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m56-scikit-learn.html">M56</a>, <a href="m49-linear-algebra.html">M49</a>, <a href="m50-scipy.html">M50</a></span></div>
+    <ul class="objectives">
+      <li>Implement k-means from scratch, explain its objective, and use scikit-learn's <code>KMeans</code> with k-means++ initialization</li>
+      <li>Choose the number of clusters with the elbow method and silhouette scores</li>
+      <li>Cluster non-convex shapes with DBSCAN and read a hierarchical-clustering dendrogram</li>
+      <li>Reduce dimensions with PCA and know when t-SNE or UMAP is the right visualization tool</li>
+      <li>Represent items, words, and users as embedding vectors and compare them with cosine similarity</li>
+      <li>Search for nearest neighbors by brute force and with KD-trees, explain the curse of dimensionality, and describe LSH, HNSW, and vector databases</li>
+      <li>Flag anomalies with <code>IsolationForest</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="unsupervised">
+    <h2>Learning without labels</h2>
+    <p>In supervised learning (M55, M56) every training example came with the right answer. In <strong>unsupervised
+      learning</strong> there is no answer column; the algorithm looks for structure in <code>X</code> alone. That sounds
+      vague, so it helps to name the three questions we will answer:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Which rows belong together?</h4><p><strong>Clustering</strong>: customer segments, groups of
+        similar documents, regions of a map. k-means, DBSCAN, hierarchical clustering.</p></div>
+      <div class="card"><h4>Which directions matter?</h4><p><strong>Dimensionality reduction</strong>: compress 64 pixel
+        values to 2 or 10 numbers that keep most of the information. PCA, t-SNE, UMAP.</p></div>
+      <div class="card"><h4>Which rows are strange?</h4><p><strong>Anomaly detection</strong>: fraudulent transactions,
+        failing sensors. Isolation forests, distance-based scores.</p></div>
+    </div>
+    <p>Because there are no labels, there is no single "accuracy" to optimize. Evaluating unsupervised results needs
+      internal measures (how tight and separated are the clusters?), downstream usefulness (do the segments help the
+      marketing team?), and human judgment. Keep that humility in mind: an algorithm will always return clusters, even on
+      pure noise.</p>
+    <aside class="callout note"><p>As in M55 and M56, the first cell that imports NumPy or scikit-learn takes several
+      seconds to load in the browser. Locally: <code>pixi add numpy scipy scikit-learn matplotlib</code>.</p></aside>
+    <p><strong>Remember:</strong> unsupervised learning finds groups, directions, and outliers in unlabeled data; judge
+      it by usefulness, not by a single score.</p>
+  </section>
+
+  <section class="lesson-section" id="kmeans">
+    <h2>k-means from scratch</h2>
+    <p><strong>k-means</strong> splits the data into <em>k</em> clusters, each represented by its
+      <strong>centroid</strong> (the mean of its points). It alternates two steps until nothing changes:</p>
+    <ol>
+      <li><strong>Assign</strong>: put every point in the cluster of its nearest centroid.</li>
+      <li><strong>Update</strong>: move every centroid to the mean of the points assigned to it.</li>
+    </ol>
+    <p>Each step can only lower (or keep) the <strong>inertia</strong>, the sum of squared distances from points to their
+      centroid, so the algorithm always converges. But it converges to a <em>local</em> minimum that depends on the
+      starting centroids. Two remedies are standard: <strong>k-means++</strong> initialization (pick each new starting
+      centroid far from the ones already chosen) and running several restarts (<code>n_init</code>) and keeping the run
+      with the lowest inertia. Step through it here, and try a bad random start versus k-means++:</p>
+    <div class="viz" data-viz="kmeans" data-config='{"k": 4, "init": "kmeans++"}'></div>
+    <div class="runnable" data-title="k-means in 20 lines of NumPy">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_blobs
+
+X, _ = make_blobs(n_samples=300, centers=4, cluster_std=0.9, random_state=2)
+
+def kmeans(X, k, n_iter=20, seed=0):
+    rng = np.random.default_rng(seed)
+    centroids = X[rng.choice(len(X), size=k, replace=False)]      # random distinct points
+    history = [centroids.copy()]
+    for _ in range(n_iter):
+        # distances: (n, k) via broadcasting (n, 1, d) - (1, k, d)
+        d2 = ((X[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
+        labels = d2.argmin(axis=1)                                  # assign
+        new = np.array([X[labels == j].mean(axis=0) if np.any(labels == j) else centroids[j] for j in range(k)])
+        history.append(new.copy())
+        if np.allclose(new, centroids):
+            break
+        centroids = new                                             # update
+    inertia = float(((X - centroids[labels]) ** 2).sum())
+    return labels, centroids, inertia, history
+
+labels, centroids, inertia, history = kmeans(X, 4)
+print(f"converged after {len(history) - 1} updates, inertia {inertia:.1f}")
+plt.scatter(X[:, 0], X[:, 1], c=labels, s=12, cmap="tab10")
+path = np.array(history)
+for j in range(4):
+    plt.plot(path[:, j, 0], path[:, j, 1], "k.-", alpha=0.6)
+plt.scatter(centroids[:, 0], centroids[:, 1], marker="X", s=200, c="black")
+plt.title("Centroid paths (dots) from random starts to the final X marks")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>k-means assumes roughly round, similarly sized clusters, because "nearest centroid"
+      splits space into straight-edged regions. It also uses Euclidean distance, so <strong>scale your features</strong>
+      first (income in dollars would otherwise drown out age in years).</p></aside>
+    <p><strong>Remember:</strong> assign to nearest centroid, move centroids to means, repeat. It minimizes inertia, finds
+      a local optimum, and likes round clusters on scaled features.</p>
+  </section>
+
+  <section class="lesson-section" id="choosing-k">
+    <h2>k-means in scikit-learn, and choosing k</h2>
+    <p><code>KMeans(n_clusters=k, n_init=10, random_state=0)</code> uses k-means++ and 10 restarts by default. After
+      <code>fit</code>, look at <code>labels_</code>, <code>cluster_centers_</code>, and <code>inertia_</code>; new points
+      get clusters from <code>predict</code>. But what <em>k</em>? Two common heuristics:</p>
+    <ul>
+      <li><strong>Elbow method</strong>: plot inertia against <em>k</em>. Inertia always falls as <em>k</em> grows (with
+        <em>k = n</em> it is zero), but it falls steeply until the true structure is captured, then flattens. The bend is
+        the "elbow". Often ambiguous.</li>
+      <li><strong>Silhouette score</strong>: for each point, <code>a</code> = mean distance to its own cluster, <code>b</code>
+        = mean distance to the nearest other cluster, and <code>s = (b − a) / max(a, b)</code>. Near 1 means well inside
+        its cluster, near 0 means on a border, negative means probably misassigned. Average over points; higher is
+        better.</li>
+    </ul>
+    <div class="runnable" data-title="Elbow and silhouette side by side">
+<textarea>
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from sklearn.datasets import make_blobs
+from sklearn.metrics import silhouette_score
+
+X, _ = make_blobs(n_samples=500, centers=5, cluster_std=1.0, random_state=7)
+ks = range(2, 10)
+inertias, sils = [], []
+for k in ks:
+    km = KMeans(n_clusters=k, n_init=10, random_state=0).fit(X)
+    inertias.append(km.inertia_)
+    sils.append(silhouette_score(X, km.labels_))
+    print(f"k={k}: inertia {km.inertia_:8.1f}   silhouette {sils[-1]:.3f}")
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.4))
+a1.plot(list(ks), inertias, "o-"); a1.set(title="Elbow: inertia vs k", xlabel="k")
+a2.plot(list(ks), sils, "o-", color="C1"); a2.set(title="Silhouette vs k (higher is better)", xlabel="k")
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: does inertia ever go up with k?" data-predict>
+<textarea>
+from sklearn.cluster import KMeans
+import numpy as np
+X = np.array([[0.0], [1.0], [10.0], [11.0]])
+for k in (1, 2, 4):
+    print(k, KMeans(n_clusters=k, n_init=10, random_state=0).fit(X).inertia_)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> inertia always decreases with <em>k</em>; look for the elbow, prefer the silhouette
+      peak, and sanity-check that the clusters mean something to a human.</p>
+  </section>
+
+  <section class="lesson-section" id="dbscan">
+    <h2>DBSCAN for odd shapes, and hierarchical clustering</h2>
+    <p><strong>DBSCAN</strong> (density-based spatial clustering of applications with noise) defines clusters as dense
+      regions. A point with at least <code>min_samples</code> neighbors within radius <code>eps</code> is a <em>core</em>
+      point; clusters grow by chaining core points that are within <code>eps</code> of each other; points reachable from
+      no core point are <strong>noise</strong> (label <code>-1</code>). Consequences: you do not choose <em>k</em>,
+      clusters can have any shape, and outliers are labeled rather than forced into a cluster. The price is choosing
+      <code>eps</code> (a k-distance plot helps) and trouble when clusters have very different densities.</p>
+    <div class="runnable" data-title="k-means vs DBSCAN on two moons">
+<textarea>
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.cluster import DBSCAN, KMeans
+from sklearn.datasets import make_moons
+
+X, _ = make_moons(n_samples=400, noise=0.07, random_state=0)
+X = np.vstack([X, [[-1.0, 1.4], [2.2, -0.8], [0.5, 0.25]]])       # three stray points
+
+km = KMeans(n_clusters=2, n_init=10, random_state=0).fit(X)
+db = DBSCAN(eps=0.15, min_samples=5).fit(X)
+print("DBSCAN clusters:", sorted(set(db.labels_.tolist()) - {-1}), " noise points:", int(np.sum(db.labels_ == -1)))
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.6))
+a1.scatter(X[:, 0], X[:, 1], c=km.labels_, cmap="coolwarm", s=10); a1.set_title("k-means (k=2): cuts straight across")
+colors = np.where(db.labels_ == -1, -1, db.labels_)
+a2.scatter(X[:, 0], X[:, 1], c=colors, cmap="coolwarm", s=10)
+a2.scatter(*X[db.labels_ == -1].T, marker="x", c="black", s=60, label="noise (-1)")
+a2.set_title("DBSCAN: follows the density"); a2.legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <p><strong>Hierarchical (agglomerative) clustering</strong> starts with every point as its own cluster and repeatedly
+      merges the two closest clusters. The full merge history is a tree called a <strong>dendrogram</strong>; cutting it at
+      a height gives a clustering, so you can choose the number of clusters after seeing the tree. The
+      <em>linkage</em> decides what "closest clusters" means: <code>ward</code> (merge that least increases variance,
+      similar to k-means), <code>single</code> (closest pair of points; can follow chains), <code>complete</code>,
+      <code>average</code>. It costs O(n²) memory, so it suits thousands of points, not millions.</p>
+    <div class="runnable" data-title="A dendrogram with SciPy">
+<textarea>
+import matplotlib.pyplot as plt
+from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
+from sklearn.datasets import make_blobs
+
+X, _ = make_blobs(n_samples=30, centers=3, cluster_std=0.8, random_state=4)
+Z = linkage(X, method="ward")
+labels = fcluster(Z, t=3, criterion="maxclust")        # cut the tree into 3 clusters
+print("cluster sizes:", {int(c): int((labels == c).sum()) for c in set(labels)})
+dendrogram(Z)
+plt.title("Ward linkage: a long vertical gap suggests a natural cut")
+plt.ylabel("merge distance")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> DBSCAN finds arbitrary shapes and marks noise, but needs <code>eps</code>;
+      hierarchical clustering gives a whole tree you can cut at any level.</p>
+  </section>
+
+  <section class="lesson-section" id="dimensionality">
+    <h2>Dimensionality reduction: PCA, t-SNE, UMAP</h2>
+    <p><strong>Principal component analysis (PCA)</strong>, which you met in <a href="m49-linear-algebra.html">M49</a>,
+      finds the orthogonal directions along which the (centered) data varies most. Projecting onto the first few
+      <strong>principal components</strong> compresses the data while keeping as much variance as possible.
+      <code>explained_variance_ratio_</code> tells you what fraction each component keeps. PCA is linear, fast,
+      deterministic, and invertible (approximately), which makes it good for preprocessing, compression, and denoising.</p>
+    <div class="runnable" data-title="PCA on 8×8 handwritten digits">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_digits
+from sklearn.decomposition import PCA
+
+X, y = load_digits(return_X_y=True)          # 1797 images, 64 pixel features
+pca = PCA().fit(X)
+cumulative = np.cumsum(pca.explained_variance_ratio_)
+print("components for 90% of the variance:", int(np.searchsorted(cumulative, 0.90) + 1), "of 64")
+
+Z = PCA(n_components=2).fit_transform(X)
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4))
+a1.plot(cumulative); a1.axhline(0.9, linestyle=":", color="gray"); a1.set(title="Cumulative explained variance", xlabel="components")
+sc = a2.scatter(Z[:, 0], Z[:, 1], c=y, cmap="tab10", s=6); a2.set_title("Digits projected on PC1, PC2")
+fig.colorbar(sc, ax=a2)
+fig.tight_layout()
+</textarea>
+    </div>
+    <p>Two dimensions of PCA mix the digit classes together, because the boundaries between digits are curved.
+      <strong>t-SNE</strong> (t-distributed stochastic neighbor embedding) and <strong>UMAP</strong> (uniform manifold
+      approximation and projection) are nonlinear methods built for <em>visualization</em>: they try to keep each point's
+      nearest neighbors nearby in 2-D. They make beautiful, well-separated maps, with caveats: distances between clusters
+      and cluster sizes in the picture are not meaningful, results change with hyperparameters (t-SNE's
+      <code>perplexity</code>) and random seeds, and t-SNE cannot embed new points afterwards. Use them to look, not as
+      features for a model. t-SNE is in scikit-learn (<code>sklearn.manifold.TSNE</code>); UMAP is the separate
+      <code>umap-learn</code> package, which you would add with <code>pixi add umap-learn</code>.</p>
+    <div class="runnable" data-title="t-SNE on 500 digits (takes a few seconds in the browser)">
+<textarea>
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_digits
+from sklearn.manifold import TSNE
+
+X, y = load_digits(return_X_y=True)
+X, y = X[:500], y[:500]
+Z = TSNE(n_components=2, init="pca", perplexity=30, random_state=0).fit_transform(X)
+plt.scatter(Z[:, 0], Z[:, 1], c=y, cmap="tab10", s=8)
+for d in range(10):
+    cx, cy = Z[y == d].mean(axis=0)
+    plt.text(cx, cy, str(d), fontsize=14, weight="bold")
+plt.title("t-SNE keeps neighbors together: digits separate cleanly")
+</textarea>
+    </div>
+    <div class="runnable" data-title="UMAP" data-local="umap-learn is not in the browser runtime; run locally after `pixi add umap-learn`.">
+<textarea>
+import umap
+from sklearn.datasets import load_digits
+
+X, y = load_digits(return_X_y=True)
+Z = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=0).fit_transform(X)
+print(Z.shape)        # (1797, 2): unlike t-SNE, a fitted UMAP can also .transform() new points
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> PCA for compression and preprocessing (linear, fast, reusable); t-SNE/UMAP for 2-D
+      pictures of neighborhoods (do not read distances between clusters).</p>
+  </section>
+
+  <section class="lesson-section" id="embeddings">
+    <h2>Embeddings and cosine similarity</h2>
+    <p>An <strong>embedding</strong> is a vector that represents an item so that <em>similar items get nearby
+      vectors</em>. You already made some: a PCA projection embeds images; a row of the user × film rating matrix
+      embeds a user by their tastes. Modern systems learn embeddings for words, sentences, images, products, and users
+      with neural networks (M58). Whatever produced them, using them looks the same: compare vectors.</p>
+    <p>The standard comparison is <strong>cosine similarity</strong>, the cosine of the angle between two vectors:</p>
+    <p style="text-align:center"><code>cos(a, b) = (a · b) / (‖a‖ ‖b‖)</code></p>
+    <p>It is 1 for vectors pointing the same way, 0 for perpendicular (unrelated), −1 for opposite. Crucially it ignores
+      <em>length</em>. A long review and a short review about the same topic have very different word counts, but point in
+      the same direction. If vectors are normalized to length 1, cosine similarity is just the dot product, and ranking by
+      cosine is the same as ranking by Euclidean distance.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 220" role="img" aria-label="Three vectors from the origin: a and b at a small angle are similar, c is nearly perpendicular to a">
+        <defs>
+          <marker id="m57-a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-1)"/></marker>
+          <marker id="m57-a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-2)"/></marker>
+          <marker id="m57-a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-3)"/></marker>
+        </defs>
+        <line x1="40" y1="190" x2="430" y2="190" stroke="var(--border-strong)"/>
+        <line x1="40" y1="190" x2="40" y2="15" stroke="var(--border-strong)"/>
+        <line x1="40" y1="190" x2="330" y2="110" stroke="var(--viz-1)" stroke-width="3" marker-end="url(#m57-a1)"/>
+        <line x1="40" y1="190" x2="200" y2="120" stroke="var(--viz-2)" stroke-width="3" marker-end="url(#m57-a2)"/>
+        <line x1="40" y1="190" x2="95" y2="30" stroke="var(--viz-3)" stroke-width="3" marker-end="url(#m57-a3)"/>
+        <path d="M 120 168 A 85 85 0 0 0 112 156" fill="none" stroke="var(--fg-muted)"/>
+        <g font-size="12" fill="var(--fg)">
+          <text x="336" y="106">a: "sci-fi space epic"</text>
+          <text x="150" y="112">b: "space adventure"</text>
+          <text x="102" y="30">c: "romantic comedy"</text>
+          <text x="128" y="176" fill="var(--fg-muted)">small angle: cos ≈ 0.99</text>
+          <text x="60" y="80" fill="var(--fg-muted)">large angle to a: cos ≈ 0.57</text>
+        </g>
+      </svg>
+      <figcaption>Cosine similarity measures direction, not length: b is shorter than a but nearly parallel to it.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Toy word embeddings">
+<textarea>
+import numpy as np
+
+# Hand-made 4-D "embeddings": dimensions roughly mean [royalty, female, animal, food]
+E = {
+    "king":   np.array([0.9, 0.1, 0.0, 0.0]),
+    "queen":  np.array([0.9, 0.9, 0.0, 0.0]),
+    "man":    np.array([0.1, 0.1, 0.0, 0.0]),
+    "woman":  np.array([0.1, 0.9, 0.0, 0.0]),
+    "cat":    np.array([0.0, 0.4, 0.9, 0.1]),
+    "pizza":  np.array([0.0, 0.0, 0.1, 0.9]),
+}
+def cos(a, b):
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+for w in ("queen", "cat", "pizza"):
+    print(f"cos(king, {w}) = {cos(E['king'], E[w]):.2f}")
+
+target = E["king"] - E["man"] + E["woman"]          # the famous analogy arithmetic
+best = max((w for w in E if w not in {"king", "man", "woman"}), key=lambda w: cos(E[w], target))
+print("king - man + woman ≈", best)
+</textarea>
+    </div>
+    <p>Real embeddings have hundreds of dimensions learned from data, not four chosen by hand, and nobody can name what
+      each dimension means. A simpler, very practical text representation is <strong>TF-IDF</strong> (term frequency ×
+      inverse document frequency): a document becomes a sparse vector with one entry per word, weighted up when the word is
+      frequent in this document and down when it appears in many documents ("the" gets almost zero weight).
+      <code>sklearn.feature_extraction.text.TfidfVectorizer</code> computes it and L2-normalizes the rows, so the dot
+      product of two rows <em>is</em> their cosine similarity.</p>
+    <div class="runnable" data-title="TF-IDF similarity between product descriptions">
+<textarea>
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+products = [
+    "wireless noise cancelling headphones with long battery life",
+    "bluetooth over-ear headphones, deep bass, foldable",
+    "stainless steel chef knife for kitchen cooking",
+    "non-stick frying pan for everyday cooking",
+    "wireless earbuds with charging case and noise cancelling",
+]
+vec = TfidfVectorizer(stop_words="english")
+M = vec.fit_transform(products)                   # sparse (5, vocabulary size), rows have length 1
+print("vocabulary size:", len(vec.vocabulary_))
+S = (M @ M.T).toarray()                            # cosine similarity matrix
+for i, text in enumerate(products):
+    j = max((j for j in range(len(products)) if j != i), key=lambda j: S[i, j])
+    print(f"{text[:40]:40s} -> most similar: {products[j][:35]}  ({S[i, j]:.2f})")
+</textarea>
+    </div>
+    <aside class="callout pro"><p>User embeddings fall out of a ratings matrix: factor it (truncated SVD or the matrix
+      factorization you will build in <a href="../projects/p08-recommender.html">Project 8</a>) and each user's row of
+      factors is a short vector describing their taste. Similar users have high cosine similarity, and a user-item dot
+      product predicts a rating.</p></aside>
+    <p><strong>Remember:</strong> an embedding is a vector where similar things are close; compare with cosine
+      similarity; TF-IDF is a strong, simple text embedding.</p>
+  </section>
+
+  <section class="lesson-section" id="nearest-neighbors">
+    <h2>Nearest-neighbor search</h2>
+    <p>Given a query vector, find the <em>k</em> stored vectors closest to it. That single operation powers "similar
+      products", k-NN classification, de-duplication, and retrieval for chatbots. There are three tiers of answers.</p>
+    <h3>1. Brute force</h3>
+    <p>Compute the distance from the query to every stored vector and take the <em>k</em> smallest. With NumPy this is a
+      matrix product and an <code>argpartition</code>: O(n · d) per query, exact, and fine up to a few hundred thousand
+      vectors. Always start here.</p>
+    <h3>2. Space-partitioning trees (exact)</h3>
+    <p>A <strong>KD-tree</strong> recursively splits space on one coordinate at a time, like a binary search tree for
+      points. A query descends to its region and only checks nearby boxes, skipping most points: roughly O(log n) per query
+      in low dimensions. <code>scipy.spatial.KDTree</code> (see <a href="m50-scipy.html">M50</a>) and
+      <code>sklearn.neighbors.NearestNeighbors(algorithm="kd_tree")</code> (or <code>"ball_tree"</code>) provide them.</p>
+    <div class="runnable" data-title="Brute force vs KD-tree: same answers">
+<textarea>
+import time
+import numpy as np
+from scipy.spatial import KDTree
+from sklearn.neighbors import NearestNeighbors
+
+rng = np.random.default_rng(0)
+data = rng.normal(size=(20_000, 3))
+queries = rng.normal(size=(200, 3))
+
+t = time.perf_counter()
+d2 = (queries ** 2).sum(1)[:, None] - 2 * queries @ data.T + (data ** 2).sum(1)[None, :]
+brute = np.argsort(d2, axis=1)[:, :5]
+t_brute = time.perf_counter() - t
+
+t = time.perf_counter()
+tree = KDTree(data)
+_, kd = tree.query(queries, k=5)
+t_kd = time.perf_counter() - t
+
+nn = NearestNeighbors(n_neighbors=5, algorithm="kd_tree").fit(data)
+_, sk = nn.kneighbors(queries)
+print("brute == scipy KDTree:", np.array_equal(brute, kd), "  == sklearn:", np.array_equal(kd, sk))
+print(f"brute {t_brute * 1000:.0f} ms, KD-tree build+query {t_kd * 1000:.0f} ms")
+</textarea>
+    </div>
+    <h3>The curse of dimensionality</h3>
+    <p>Trees stop helping in high dimensions (roughly beyond 20). Worse, in high dimensions <em>all distances become
+      similar</em>: with random points in 1,000 dimensions the nearest neighbor is barely closer than the farthest one, so
+      "nearest" carries less meaning and pruning cannot skip anything. Run the experiment:</p>
+    <div class="runnable" data-title="Distances concentrate as dimension grows">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(1)
+dims = [2, 5, 10, 50, 100, 500, 1000]
+ratios = []
+for d in dims:
+    X = rng.uniform(size=(1000, d))
+    q = rng.uniform(size=d)
+    dist = np.linalg.norm(X - q, axis=1)
+    ratios.append(dist.min() / dist.max())
+    print(f"d={d:5d}: nearest/farthest distance ratio = {ratios[-1]:.3f}")
+plt.semilogx(dims, ratios, "o-"); plt.xlabel("dimensions"); plt.ylabel("min / max distance")
+plt.title("In high dimensions, the nearest point is almost as far as the farthest")
+</textarea>
+    </div>
+    <p>Real embeddings escape the worst of this because they are not uniform noise: the data lies near a much
+      lower-dimensional structure. But exact search over millions of 768-dimensional vectors is still too slow, which is
+      why the third tier exists.</p>
+    <h3>3. Approximate nearest neighbors (ANN)</h3>
+    <p>ANN methods return <em>almost</em> the true neighbors (measured by <strong>recall@k</strong>: the fraction of the
+      true top-k found) in a tiny fraction of the time.</p>
+    <ul>
+      <li><strong>Locality-sensitive hashing (LSH)</strong>: hash vectors so similar ones collide. For cosine similarity,
+        draw random hyperplanes; each vector's hash is the pattern of which side of each plane it falls on. Vectors at a
+        small angle usually get the same bits. Build several independent hash tables so true neighbors only need to collide in one of them, then check just the union of the query's buckets.</li>
+      <li><strong>Graph indexes such as HNSW</strong> (hierarchical navigable small world): connect each vector to some
+        near neighbors in a layered graph; a search greedily walks the graph toward the query, starting in a sparse top
+        layer for long jumps and refining in denser lower layers. Very fast with high recall; the most common choice
+        today.</li>
+      <li><strong>Quantization and inverted files</strong> (IVF, product quantization): cluster the vectors (k-means
+        again), search only the nearest clusters, and compress vectors to save memory.</li>
+    </ul>
+    <p>Libraries such as FAISS and hnswlib implement these indexes. <strong>Vector databases</strong> wrap an ANN index
+      with storage, metadata filtering ("only products in stock"), updates, and replication; options range from dedicated
+      services to extensions for existing databases (for example pgvector for PostgreSQL). For a few hundred thousand
+      vectors, brute-force NumPy is often fast enough; reach for ANN when measurements tell you to.</p>
+    <div class="runnable" data-title="LSH with random hyperplanes">
+<textarea>
+import numpy as np
+
+rng = np.random.default_rng(0)
+d, n_planes, n_tables = 50, 8, 10
+data = rng.normal(size=(5000, d))
+query = data[42] + rng.normal(0, 0.3, d)           # a noisy copy of item 42
+
+# Several independent hash tables: similar vectors only need to collide in ONE of them
+tables = []
+for _ in range(n_tables):
+    planes = rng.normal(size=(n_planes, d))        # random hyperplanes through the origin
+    buckets = {}
+    for i, bits in enumerate(data @ planes.T > 0):  # which side of each plane
+        buckets.setdefault(bits.tobytes(), []).append(i)
+    tables.append((planes, buckets))
+
+candidates = set()
+for planes, buckets in tables:
+    candidates.update(buckets.get((planes @ query > 0).tobytes(), []))
+
+unit = data / np.linalg.norm(data, axis=1, keepdims=True)
+qn = query / np.linalg.norm(query)
+best_exact = int(np.argmax(unit @ qn))
+best_lsh = max(candidates, key=lambda i: unit[i] @ qn) if candidates else None
+print(f"checked {len(candidates)} of {len(data)} items ({len(candidates) / len(data):.1%})")
+print("exact nearest:", best_exact, "  LSH nearest:", best_lsh)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> brute force first; KD-trees for low dimensions; ANN (LSH, HNSW, IVF) for millions of
+      high-dimensional vectors, trading a little recall for a lot of speed.</p>
+  </section>
+
+  <section class="lesson-section" id="anomaly">
+    <h2>Anomaly detection with Isolation Forest</h2>
+    <p>An <strong>anomaly</strong> (outlier) is a record that does not look like the rest. The <strong>isolation
+      forest</strong> uses a clever observation: if you split the data with random cuts (random feature, random threshold),
+      an unusual point gets isolated in its own region after very few cuts, while a typical point deep inside a cluster
+      needs many. Average the number of cuts over many random trees and you get an anomaly score. It needs no labels, scales
+      well, and copes with many features. <code>contamination</code> sets the expected fraction of anomalies, which decides
+      the threshold for <code>predict</code> (which returns <code>-1</code> for anomalies, <code>1</code> for normal).</p>
+    <div class="runnable" data-title="Isolating outliers">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.datasets import make_blobs
+from sklearn.ensemble import IsolationForest
+
+X, _ = make_blobs(n_samples=300, centers=[[0, 0], [5, 5]], cluster_std=0.8, random_state=0)
+rng = np.random.default_rng(3)
+outliers = rng.uniform(-4, 9, size=(15, 2))
+X_all = np.vstack([X, outliers])
+
+iso = IsolationForest(n_estimators=200, contamination=0.05, random_state=0).fit(X_all)
+pred = iso.predict(X_all)                   # -1 = anomaly
+scores = iso.score_samples(X_all)           # lower = more anomalous
+print("flagged:", int(np.sum(pred == -1)), " of which true injected outliers:", int(np.sum(pred[-15:] == -1)))
+
+xx, yy = np.meshgrid(np.linspace(-5, 10, 150), np.linspace(-5, 10, 150))
+zz = iso.score_samples(np.column_stack([xx.ravel(), yy.ravel()])).reshape(xx.shape)
+plt.contourf(xx, yy, zz, levels=20, cmap="Blues_r", alpha=0.6)
+plt.scatter(*X_all[pred == 1].T, s=8, c="white", edgecolor="k", linewidth=0.3)
+plt.scatter(*X_all[pred == -1].T, s=40, c="red", marker="x", label="flagged")
+plt.legend(); plt.title("Darker = easier to isolate = more anomalous")
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Anomaly detectors produce candidates, not verdicts. In production, route the
+      highest-scoring records to a human or a rule, and use their feedback as labels to train a supervised model later.</p></aside>
+    <p><strong>Remember:</strong> isolation forest scores how quickly random cuts isolate a point; tune
+      <code>contamination</code> to your expected anomaly rate.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>NumPy and scikit-learn are available.</p>
+
+    <div class="exercise" data-id="m57-e1" data-title="The k-means assignment step">
+      <div class="exercise-prompt">
+        <p>Write <code>assign(X, centroids)</code> that returns a 1-D integer array with, for each row of <code>X</code>,
+          the index of the nearest centroid (Euclidean distance). On ties, choose the lower index (which
+          <code>argmin</code> does for you). Avoid Python loops over points: use broadcasting.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def assign(X, centroids):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_simple():
+    X = np.array([[0.0, 0.0], [10.0, 10.0], [9.0, 8.0], [1.0, -1.0]])
+    C = np.array([[0.0, 0.0], [10.0, 10.0]])
+    assert assign(X, C).tolist() == [0, 1, 1, 0], "each point goes to its nearest centroid"
+
+def test_tie_goes_to_lower_index():
+    assert assign(np.array([[5.0]]), np.array([[0.0], [10.0]])).tolist() == [0], "equidistant -> lower index"
+
+def test_shape_many():
+    rng = np.random.default_rng(0)
+    X, C = rng.normal(size=(500, 3)), rng.normal(size=(4, 3))
+    labels = assign(X, C)
+    assert labels.shape == (500,), "one label per point"
+    brute = [int(np.argmin([np.sum((x - c) ** 2) for c in C])) for x in X]
+    assert labels.tolist() == brute, "must match a brute-force check"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>X[:, None, :] - centroids[None, :, :]</code> has shape
+        <code>(n, k, d)</code>; square, sum over the last axis, then <code>argmin(axis=1)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def assign(X, centroids):
+    d2 = ((X[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
+    return d2.argmin(axis=1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m57-e2" data-title="The k-means update step and inertia">
+      <div class="exercise-prompt">
+        <p>Write <code>update(X, labels, old_centroids)</code> returning new centroids: the mean of the points with each
+          label. If a cluster has no points, keep its old centroid. Then write <code>inertia(X, labels, centroids)</code>
+          returning the sum of squared distances from each point to its assigned centroid, as a float.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def update(X, labels, old_centroids):
+    ...
+
+def inertia(X, labels, centroids):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+X = np.array([[0.0, 0.0], [2.0, 0.0], [10.0, 10.0], [12.0, 10.0]])
+labels = np.array([0, 0, 1, 1])
+
+def test_means():
+    C = update(X, labels, np.zeros((2, 2)))
+    assert np.allclose(C, [[1.0, 0.0], [11.0, 10.0]]), f"centroids should be cluster means, got {C}"
+
+def test_empty_cluster_kept():
+    old = np.array([[0.0, 0.0], [5.0, 5.0], [-7.0, 3.0]])
+    C = update(X, labels, old)
+    assert np.allclose(C[2], [-7.0, 3.0]), "a cluster with no points keeps its old centroid"
+
+def test_inertia():
+    C = np.array([[1.0, 0.0], [11.0, 10.0]])
+    value = inertia(X, labels, C)
+    assert isinstance(value, float) and abs(value - 4.0) < 1e-12, f"each point is 1 away: 4 * 1^2 = 4, got {value}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop over cluster indices <code>j</code> (there are only a few):
+        <code>X[labels == j].mean(axis=0)</code>. Inertia: <code>((X - centroids[labels]) ** 2).sum()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def update(X, labels, old_centroids):
+    new = np.array(old_centroids, dtype=float, copy=True)
+    for j in range(len(new)):
+        members = X[labels == j]
+        if len(members):
+            new[j] = members.mean(axis=0)
+    return new
+
+def inertia(X, labels, centroids):
+    return float(((X - centroids[labels]) ** 2).sum())</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m57-e3" data-title="Cosine similarity matrix">
+      <div class="exercise-prompt">
+        <p>Write <code>cosine_matrix(A)</code> returning the <code>(n, n)</code> matrix of cosine similarities between the
+          rows of the 2-D array <code>A</code>. A row of all zeros must have similarity <code>0.0</code> with every row
+          (including itself) instead of producing <code>nan</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def cosine_matrix(A):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_values():
+    S = cosine_matrix(np.array([[1.0, 0.0], [1.0, 1.0], [0.0, 2.0]]))
+    assert np.isclose(S[0, 1], 1 / np.sqrt(2)), "45 degrees -> 0.7071"
+    assert np.isclose(S[0, 2], 0.0), "perpendicular -> 0"
+    assert np.allclose(np.diag(S), 1.0), "every nonzero row is identical to itself"
+
+def test_length_invariant():
+    S = cosine_matrix(np.array([[1.0, 2.0], [10.0, 20.0]]))
+    assert np.isclose(S[0, 1], 1.0), "scaling a vector does not change its direction"
+
+def test_zero_row():
+    S = cosine_matrix(np.array([[0.0, 0.0], [3.0, 4.0]]))
+    assert not np.isnan(S).any(), "no NaN allowed"
+    assert S[0, 0] == 0.0 and S[0, 1] == 0.0, "the zero row has similarity 0 with everything"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Divide each row by its norm, using
+        <code>np.divide(A, norms, out=np.zeros_like(A), where=norms &gt; 0)</code>, then return <code>U @ U.T</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def cosine_matrix(A):
+    A = np.asarray(A, dtype=float)
+    norms = np.linalg.norm(A, axis=1, keepdims=True)
+    U = np.divide(A, norms, out=np.zeros_like(A), where=norms &gt; 0)
+    return U @ U.T</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m57-e4" data-title="Brute-force k nearest neighbors">
+      <div class="exercise-prompt">
+        <p>Write <code>knn(query, data, k)</code> returning a list of the indices of the <code>k</code> rows of
+          <code>data</code> closest to the 1-D <code>query</code> by Euclidean distance, nearest first. Break ties by the
+          lower index (a stable sort does this).</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def knn(query, data, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_order():
+    data = np.array([[0.0, 0.0], [5.0, 5.0], [1.0, 1.0], [0.5, 0.0]])
+    assert knn(np.array([0.0, 0.0]), data, 3) == [0, 3, 2], "nearest first"
+
+def test_ties():
+    data = np.array([[1.0], [-1.0], [2.0]])
+    assert knn(np.array([0.0]), data, 2) == [0, 1], "equal distances -> lower index first"
+
+def test_matches_sklearn():
+    from sklearn.neighbors import NearestNeighbors
+    rng = np.random.default_rng(1)
+    data = rng.normal(size=(300, 4)); q = rng.normal(size=4)
+    expected = NearestNeighbors(n_neighbors=5).fit(data).kneighbors([q])[1][0].tolist()
+    assert knn(q, data, 5) == expected, "should match sklearn's NearestNeighbors"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>np.argsort(dist, kind="stable")[:k].tolist()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def knn(query, data, k):
+    dist = np.linalg.norm(np.asarray(data) - np.asarray(query), axis=1)
+    return np.argsort(dist, kind="stable")[:k].tolist()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m57-e5" data-title="Pick k by silhouette">
+      <div class="exercise-prompt">
+        <p>Write <code>best_k(X, ks)</code> that fits <code>KMeans(n_clusters=k, n_init=10, random_state=0)</code> for each
+          <code>k</code> in <code>ks</code>, computes <code>silhouette_score</code>, and returns the <code>k</code> with the
+          highest score as an int.</p>
+      </div>
+<textarea class="starter">
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+def best_k(X, ks):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from sklearn.datasets import make_blobs
+
+def test_four_blobs():
+    X, _ = make_blobs(n_samples=400, centers=4, cluster_std=0.6, random_state=3)
+    assert best_k(X, range(2, 8)) == 4, "four well-separated blobs -> k = 4"
+
+def test_two_blobs():
+    X, _ = make_blobs(n_samples=200, centers=2, cluster_std=0.5, random_state=0)
+    k = best_k(X, [2, 3, 4])
+    assert k == 2 and isinstance(k, int), f"two blobs -> 2 (as an int), got {k!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>max(ks, key=lambda k: silhouette_score(X, KMeans(...).fit_predict(X)))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+def best_k(X, ks):
+    def score(k):
+        labels = KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(X)
+        return silhouette_score(X, labels)
+    return int(max(ks, key=score))</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">A "similar items" finder over product descriptions</span></div>
+      <div class="widget-body">
+        <p>Build a small semantic search tool: given a product (or a free-text query), return the most similar products
+          from a catalogue using TF-IDF vectors and cosine similarity. Set up with
+          <code>pixi init similar-items</code>, then <code>pixi add scikit-learn numpy pytest</code>.</p>
+        <ol>
+          <li>Write <code>catalogue.csv</code> with at least 40 short product descriptions across 5 or more categories
+            (headphones, kitchen, outdoor, books…) plus an <code>id</code> and a <code>category</code> column.</li>
+          <li><code>similar.py</code>: a <code>SimilarItems</code> class with <code>fit(descriptions)</code> (a
+            <code>TfidfVectorizer(stop_words="english", ngram_range=(1, 2), sublinear_tf=True)</code>),
+            <code>similar_to(item_index, k=5)</code> (never returns the item itself), and <code>search(text, k=5)</code>
+            for free-text queries. Return <code>(index, score)</code> pairs, best first.</li>
+          <li>Use brute force (sparse matrix times vector) and compare the results with
+            <code>NearestNeighbors(metric="cosine", algorithm="brute")</code> to confirm they match.</li>
+          <li>Evaluate with the category column you kept aside: for each item, measure how many of its top-5 neighbors share its
+            category (precision@5). Report the average.</li>
+          <li>Cluster the TF-IDF vectors with <code>KMeans</code> (try k = number of categories) and print the top terms of
+            each centroid. Do the clusters match your categories?</li>
+          <li>A tiny CLI: <code>pixi run python similar.py "noise cancelling"</code> prints the best matches.</li>
+        </ol>
+        <ul class="checklist" data-id="m57-mini">
+          <li><code>similar_to</code> excludes the query item and returns exactly <em>k</em> results sorted by score</li>
+          <li>Your brute-force results match <code>NearestNeighbors(metric="cosine")</code></li>
+          <li>Category precision@5 is reported and above 0.6 on your catalogue</li>
+          <li>Each k-means cluster is summarized by its top 5 terms</li>
+          <li>At least five pytest tests (empty query, unknown words, k larger than the catalogue, determinism, self-exclusion)</li>
+        </ul>
+        <p><strong>Stretch:</strong> add LSH with random hyperplanes over the dense <code>TruncatedSVD</code> embedding of
+          the TF-IDF matrix and measure recall@5 against brute force; plot the catalogue in 2-D with t-SNE colored by
+          category.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m57-quiz">
+<script type="application/json">
+{"title": "Unsupervised learning quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What are the two alternating steps of k-means?", "options": ["Split and merge", "Assign points to the nearest centroid; move centroids to the mean of their points", "Compute gradients; update weights", "Sort points; cut into k groups"], "answer": 1, "explanation": "<p>Assignment then update. Each step can only lower inertia, so the loop converges, though only to a local minimum.</p>"},
+  {"type": "single", "prompt": "Why does scikit-learn run k-means several times (<code>n_init</code>)?", "options": ["To use more CPU cores", "Results depend on the initial centroids; keeping the lowest-inertia run avoids bad local minima", "To compute the silhouette", "Because k must be tried several times"], "answer": 1, "explanation": "<p>Different starts can converge to different solutions. Restarts plus k-means++ initialization make a good solution very likely.</p>"},
+  {"type": "single", "prompt": "Inertia keeps decreasing as you increase k. Which k should you choose?", "options": ["The largest k you can afford", "The k where the curve bends (the elbow), confirmed by silhouette and by meaning", "Always k = 2", "The k with the highest inertia"], "answer": 1, "explanation": "<p>Inertia always falls with more clusters (it is zero at k = n), so the minimum is meaningless. Look for diminishing returns and check the silhouette.</p>"},
+  {"type": "output", "prompt": "A point has mean distance a = 1 to its own cluster and b = 4 to the nearest other cluster. What is its silhouette, s = (b − a) / max(a, b)?", "code": "a, b = 1, 4\nprint((b - a) / max(a, b))", "answer": "0.75", "explanation": "<p>(4 − 1) / 4 = 0.75: comfortably inside its own cluster.</p>"},
+  {"type": "multi", "prompt": "Which are true of DBSCAN?", "options": ["You must choose the number of clusters", "It can find non-convex shapes such as two moons", "It labels low-density points as noise (-1)", "It needs a distance radius eps"], "answer": [1, 2, 3], "explanation": "<p>DBSCAN discovers the number of clusters from density. Its main knobs are <code>eps</code> and <code>min_samples</code>.</p>"},
+  {"type": "single", "prompt": "You want features for a downstream classifier, reusable on new data. Which reduction method fits best?", "options": ["t-SNE", "PCA", "A dendrogram", "DBSCAN"], "answer": 1, "explanation": "<p>PCA is a deterministic linear map you can apply to new points with <code>transform</code>. t-SNE is for visualization and cannot embed new points.</p>"},
+  {"type": "single", "prompt": "In a t-SNE plot, cluster A is far from cluster B. What can you conclude?", "options": ["A and B are very different in the original space", "Little: t-SNE preserves local neighborhoods, not global distances", "B is larger than A", "The data has exactly two classes"], "answer": 1, "explanation": "<p>t-SNE (and UMAP) are faithful about who is near whom locally; distances between clusters and cluster sizes in the picture are not reliable.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\na = np.array([1.0, 0.0])\nb = np.array([3.0, 0.0])\nprint(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))", "answer": "1.0", "explanation": "<p>Same direction, different lengths: cosine similarity ignores length, so it is 1.</p>"},
+  {"type": "single", "prompt": "Why is TF-IDF weighting better than raw word counts for similarity?", "options": ["It is faster to compute", "It down-weights words that appear in many documents (like 'the'), so distinctive words drive similarity", "It removes all common words entirely", "It translates words into embeddings"], "answer": 1, "explanation": "<p>Inverse document frequency shrinks ubiquitous terms toward zero weight, so two documents are similar because of their specific vocabulary.</p>"},
+  {"type": "single", "prompt": "What does the curse of dimensionality do to nearest-neighbor search?", "options": ["Makes distances grow without bound", "Makes all distances similar, so 'nearest' is less meaningful and tree pruning stops working", "Makes brute force impossible", "Only affects images"], "answer": 1, "explanation": "<p>In high dimensions the ratio of nearest to farthest distance approaches 1 for random data, which defeats KD-trees.</p>"},
+  {"type": "multi", "prompt": "Which are approximate nearest-neighbor techniques?", "options": ["Locality-sensitive hashing with random hyperplanes", "HNSW graph indexes", "Brute-force argsort of all distances", "Inverted-file indexes over k-means clusters"], "answer": [0, 1, 3], "explanation": "<p>Brute force is exact. LSH, HNSW, and IVF trade a little recall for large speedups.</p>"},
+  {"type": "single", "prompt": "Why does an isolation forest flag a point as anomalous?", "options": ["It is far from the global mean", "Random cuts isolate it in very few steps on average", "Its label is -1 in the training data", "It has missing values"], "answer": 1, "explanation": "<p>Outliers sit in sparse regions, so random partitions separate them quickly; short average path length means a high anomaly score.</p>"},
+  {"type": "text", "prompt": "What label does DBSCAN assign to noise points?", "answer": ["-1"], "explanation": "<p>Noise points get label <code>-1</code>; real clusters are numbered 0, 1, 2, …</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Unsupervised learning finds clusters, low-dimensional structure, and anomalies without labels.</li>
+      <li>k-means alternates assign and update, minimizes inertia, needs scaled features and a chosen k; use k-means++ and restarts.</li>
+      <li>Choose k with the elbow and silhouette, then check that clusters make sense.</li>
+      <li>DBSCAN finds arbitrary shapes and labels noise; hierarchical clustering yields a dendrogram you can cut.</li>
+      <li>PCA compresses linearly and is reusable; t-SNE and UMAP make 2-D neighborhood maps for looking only.</li>
+      <li>Embeddings are vectors where similar things are close; compare them with cosine similarity; TF-IDF is a strong text baseline.</li>
+      <li>Nearest neighbors: brute force first, KD-trees in low dimensions, ANN (LSH, HNSW, IVF) and vector databases at scale.</li>
+      <li>Isolation forests score anomalies by how easily random cuts isolate a point.</li>
+    </ul>
+    <div class="flashcards" data-title="Unsupervised learning">
+<script type="application/json">
+[
+  {"front": "Inertia", "back": "Sum of squared distances from points to their assigned centroid; what k-means minimizes."},
+  {"front": "k-means++", "back": "Initialization that picks each new starting centroid far from existing ones, giving better local optima."},
+  {"front": "Silhouette score", "back": "(b − a) / max(a, b): near 1 well clustered, near 0 on a border, negative misassigned."},
+  {"front": "DBSCAN parameters", "back": "eps (neighborhood radius) and min_samples (points needed to be a core point)."},
+  {"front": "Dendrogram", "back": "Tree of agglomerative merges; cut it at a height to get clusters."},
+  {"front": "PCA vs t-SNE", "back": "PCA: linear, fast, reusable on new data. t-SNE: nonlinear 2-D visualization of local neighborhoods."},
+  {"front": "Embedding", "back": "A vector representation in which similar items are close together."},
+  {"front": "Cosine similarity", "back": "(a·b)/(‖a‖‖b‖): the cosine of the angle; ignores vector length."},
+  {"front": "TF-IDF", "back": "Term frequency × inverse document frequency: highlights words distinctive to a document."},
+  {"front": "KD-tree", "back": "Binary space partitioning on coordinates; fast exact neighbor search in low dimensions."},
+  {"front": "HNSW", "back": "Hierarchical navigable small-world graph: a layered neighbor graph searched greedily; fast approximate NN."},
+  {"front": "Isolation forest", "back": "Anomaly detector: points isolated by few random cuts get high anomaly scores."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://scikit-learn.org/stable/modules/clustering.html">scikit-learn: clustering</a> (with a comparison of algorithms on toy datasets)</li>
+      <li><a href="https://scikit-learn.org/stable/modules/decomposition.html">scikit-learn: decomposition (PCA and friends)</a></li>
+      <li><a href="https://scikit-learn.org/stable/modules/manifold.html">scikit-learn: manifold learning (t-SNE)</a></li>
+      <li><a href="https://scikit-learn.org/stable/modules/neighbors.html">scikit-learn: nearest neighbors</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.KDTree.html">scipy.spatial.KDTree</a></li>
+      <li><a href="https://distill.pub/2016/misread-tsne/">How to use t-SNE effectively</a> (Distill)</li>
+      <li>Next: <a href="m58-neural-networks.html">M58 · Neural Networks from Scratch</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

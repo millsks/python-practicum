@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M60 · Data Engineering Foundations · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m60">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 9 · Data Engineering · Module 60</p>
+    <h1>Data Engineering Foundations</h1>
+    <p class="lede">Every dashboard, report, and machine-learning model stands on data that someone moved, cleaned, modeled, and
+      stored reliably. Data engineering is that someone's craft. This module gives you the vocabulary and the mental models
+      the rest of Part 9 builds on: lifecycles, workloads, ETL and ELT, batch and streaming, star schemas, file formats,
+      partitioning, schemas, and contracts.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m59-ml-production.html">M59 · ML in Production</a>, <a href="m51-pandas.html">M51 · pandas</a></span></div>
+    <ul class="objectives">
+      <li>Describe what data engineers build and trace data through its lifecycle</li>
+      <li>Tell OLTP from OLAP workloads, ETL from ELT, and batch from streaming, and choose between them</li>
+      <li>Design a star schema at a declared grain, with facts, dimensions, and slowly changing dimensions</li>
+      <li>Compare CSV, JSON Lines, Avro, Parquet, Arrow, and ORC, and pick a compression codec</li>
+      <li>Lay out data with Hive-style partitions and reason about schema evolution</li>
+      <li>Explain lakes, warehouses, lakehouses, and data contracts</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="what-data-engineers-do">
+    <h2>What data engineers do</h2>
+    <p>A <strong>data engineer</strong> builds and runs the systems that move data from where it is produced to where it is
+      useful, in a shape people can trust. Application developers produce data as a side effect (an order row, a click
+      event, a log line). Analysts, data scientists, and ML models consume it. The data engineer owns the path in between:</p>
+    <ul>
+      <li><strong>Ingestion</strong>: pulling from databases, APIs, files, and event streams.</li>
+      <li><strong>Storage</strong>: choosing formats, layouts, and systems (object storage, warehouses).</li>
+      <li><strong>Transformation</strong>: cleaning, deduplicating, joining, and aggregating.</li>
+      <li><strong>Modeling</strong>: designing tables that answer business questions quickly and correctly.</li>
+      <li><strong>Orchestration</strong>: scheduling jobs, handling dependencies, retries, and backfills.</li>
+      <li><strong>Quality and observability</strong>: tests, validation, monitoring, lineage, and alerting.</li>
+      <li><strong>Serving</strong>: exposing data to BI tools, notebooks, APIs, and feature stores.</li>
+    </ul>
+    <p>The job is less about clever algorithms and more about <em>reliability</em>. A pipeline that is correct 99% of the
+      time silently corrupts 1% of decisions. So data engineers obsess over properties you will meet throughout Part 9:
+      <strong>idempotency</strong> (running twice gives the same result), <strong>determinism</strong>, <strong>incremental
+      processing</strong>, and <strong>observability</strong>.</p>
+
+    <h3>The data lifecycle</h3>
+    <p>Data moves through a recognizable lifecycle. Naming the stages helps you ask the right question at each one.</p>
+    <pre class="mermaid">
+flowchart LR
+  G[Generate<br/>apps, devices, logs] --> I[Ingest<br/>batch or stream]
+  I --> S[Store<br/>raw / bronze]
+  S --> T[Transform<br/>clean / silver]
+  T --> M[Model<br/>marts / gold]
+  M --> U[Serve<br/>BI, ML, APIs]
+  U -. feedback .-> G
+    </pre>
+    <p>Many teams call the storage layers <strong>bronze</strong> (raw, exactly as received), <strong>silver</strong>
+      (cleaned and conformed), and <strong>gold</strong> (business-level aggregates and models). Keeping the raw layer
+      unchanged is a key professional habit: when you find a bug in a transformation, you can fix the code and
+      <em>replay</em> from raw instead of asking the source to resend months of data.</p>
+
+    <div class="runnable" data-title="A tiny lifecycle, end to end">
+<textarea>
+import csv, io, statistics
+
+# Generate: an app writes raw events (note the messy values)
+raw = """order_id,amount,country
+1,19.99,us
+2,5.00,US
+2,5.00,US
+3,,de
+4,42.50,DE
+"""
+
+# Ingest + store raw: keep the bytes exactly as received
+bronze = raw
+
+# Transform: parse, normalize, dedupe, drop invalid
+seen, silver = set(), []
+for row in csv.DictReader(io.StringIO(bronze)):
+    if row["order_id"] in seen or not row["amount"]:
+        continue
+    seen.add(row["order_id"])
+    silver.append({"order_id": int(row["order_id"]), "amount": float(row["amount"]),
+                   "country": row["country"].upper()})
+
+# Model + serve: a business-level aggregate
+gold = {}
+for r in silver:
+    gold.setdefault(r["country"], []).append(r["amount"])
+for country, amounts in sorted(gold.items()):
+    print(country, "orders:", len(amounts), "revenue:", round(sum(amounts), 2),
+          "avg:", round(statistics.mean(amounts), 2))
+</textarea>
+    </div>
+    <aside class="callout think"><p>Order 3 was dropped because its amount was blank. Is silently dropping it right? In
+      production you would record it in a <em>rejected rows</em> report with a reason, so someone can fix the source. You
+      build exactly that in <a href="m62-pipelines.html">M62</a> and <a href="../projects/p09-etl-pipeline.html">Project 9</a>.</p></aside>
+    <p><strong>Remember:</strong> data engineering is the reliable movement and shaping of data; keep raw data immutable so
+      you can always replay.</p>
+  </section>
+
+  <section class="lesson-section" id="oltp-olap">
+    <h2>OLTP vs OLAP</h2>
+    <p>Databases serve two very different kinds of work.</p>
+    <div class="two-col">
+      <div class="card"><h4>OLTP: online transaction processing</h4>
+        <p>The application's database (PostgreSQL, MySQL, SQLite in an app). Many small reads and writes touching a few
+          rows each: "insert this order", "update this user's email". Optimized for low latency, concurrency, and
+          integrity (transactions, constraints). Data is <em>normalized</em> so each fact lives in one place.</p></div>
+      <div class="card"><h4>OLAP: online analytical processing</h4>
+        <p>The analytics system (Snowflake, BigQuery, Redshift, DuckDB, ClickHouse). Few, large queries that scan millions
+          of rows but only a handful of columns: "revenue by country by month". Optimized for scan throughput, usually with
+          <em>columnar</em> storage, compression, and parallelism. Data is often <em>denormalized</em> into star schemas.</p></div>
+    </div>
+    <p>The deep reason they differ is <strong>storage layout</strong>. A row store keeps each row's values together, so
+      fetching one whole order is one contiguous read. A column store keeps each column's values together, so summing
+      <code>amount</code> over a billion rows reads only that column, and similar values sitting next to each other compress
+      extremely well.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 170" role="img" aria-label="Row layout versus column layout">
+        <text x="10" y="18" fill="var(--fg)" font-size="13">Row store (OLTP)</text>
+        <g font-size="11" fill="var(--fg)">
+          <rect x="10" y="28" width="290" height="26" fill="var(--viz-1)" opacity="0.35" stroke="var(--fg-muted)"/>
+          <text x="18" y="46">1 | 19.99 | US</text><text x="110" y="46">2 | 5.00 | US</text><text x="200" y="46">4 | 42.50 | DE</text>
+        </g>
+        <text x="10" y="78" fill="var(--fg-muted)" font-size="11">one row = one contiguous chunk: great for "get order 2"</text>
+        <text x="340" y="18" fill="var(--fg)" font-size="13">Column store (OLAP)</text>
+        <g font-size="11" fill="var(--fg)">
+          <rect x="340" y="28" width="290" height="22" fill="var(--viz-2)" opacity="0.35" stroke="var(--fg-muted)"/>
+          <text x="348" y="44">order_id: 1, 2, 4</text>
+          <rect x="340" y="54" width="290" height="22" fill="var(--viz-3)" opacity="0.35" stroke="var(--fg-muted)"/>
+          <text x="348" y="70">amount: 19.99, 5.00, 42.50</text>
+          <rect x="340" y="80" width="290" height="22" fill="var(--viz-4)" opacity="0.35" stroke="var(--fg-muted)"/>
+          <text x="348" y="96">country: US, US, DE</text>
+        </g>
+        <text x="340" y="124" fill="var(--fg-muted)" font-size="11">SUM(amount) reads one column only;</text>
+        <text x="340" y="140" fill="var(--fg-muted)" font-size="11">repeated values (US, US) compress well</text>
+      </svg>
+      <figcaption>The same three orders stored row-wise and column-wise.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Feel the layout difference">
+<textarea>
+import random, time
+
+n = 300_000
+rng = random.Random(0)
+rows = [(i, rng.random() * 100, rng.choice(["US", "DE", "FR"]), "x" * 20) for i in range(n)]   # row layout
+columns = {"order_id": [r[0] for r in rows], "amount": [r[1] for r in rows]}                 # column layout
+
+t = time.perf_counter(); total_rows = sum(r[1] for r in rows); t_rows = time.perf_counter() - t
+t = time.perf_counter(); total_cols = sum(columns["amount"]); t_cols = time.perf_counter() - t
+print(f"row layout:    {t_rows*1000:6.1f} ms")
+print(f"column layout: {t_cols*1000:6.1f} ms  (same total: {abs(total_rows - total_cols) < 1e-6})")
+</textarea>
+    </div>
+    <p>Pure Python exaggerates nothing here: real column stores add vectorized execution and compression on top, which is why
+      DuckDB can scan hundreds of millions of rows per second on a laptop (you'll try it in <a href="m61-sql-duckdb.html">M61</a>).</p>
+    <aside class="callout warn"><p>Never point heavy analytics at your production OLTP database. A single "scan everything"
+      query can slow checkouts for real customers. Copy data to an analytical store (or a read replica) first; that copy is
+      the first job of most pipelines.</p></aside>
+    <p><strong>Remember:</strong> OLTP = many tiny row operations; OLAP = few huge column scans. The layout follows the workload.</p>
+  </section>
+
+  <section class="lesson-section" id="etl-elt">
+    <h2>ETL vs ELT, batch vs streaming</h2>
+    <p><strong>ETL</strong> (extract, transform, load) cleans and reshapes data <em>before</em> loading it into the
+      warehouse, usually in a separate processing engine (a Python job, Spark). <strong>ELT</strong> (extract, load,
+      transform) loads raw data first and transforms it <em>inside</em> the warehouse with SQL (often managed with dbt).
+      ELT became popular because cloud warehouses are powerful and cheap to scale, and keeping raw data in the warehouse
+      makes replays easy.</p>
+    <table>
+      <thead><tr><th></th><th>ETL</th><th>ELT</th></tr></thead>
+      <tbody>
+        <tr><td>Where transforms run</td><td>Outside the warehouse (Python, Spark)</td><td>Inside the warehouse (SQL, dbt)</td></tr>
+        <tr><td>Raw data kept?</td><td>Often not in the warehouse</td><td>Yes, loaded as-is</td></tr>
+        <tr><td>Good for</td><td>Heavy parsing, PII scrubbing before storage, non-SQL logic</td><td>SQL-friendly modeling, fast iteration, analysts owning logic</td></tr>
+        <tr><td>Risk</td><td>Replays need the source again</td><td>Warehouse costs; sensitive raw data lands in the warehouse</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="ELT in miniature: load raw, transform with SQL">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+# Load: raw strings straight in, no cleaning yet
+conn.execute("CREATE TABLE raw_orders (order_id TEXT, amount TEXT, country TEXT)")
+conn.executemany("INSERT INTO raw_orders VALUES (?, ?, ?)",
+                 [("1", "19.99", "us"), ("2", "5.00", "US"), ("2", "5.00", "US"), ("3", "", "de"), ("4", "42.50", "DE")])
+
+# Transform: inside the database, with SQL
+conn.execute("""
+CREATE TABLE orders AS
+SELECT DISTINCT CAST(order_id AS INTEGER) AS order_id,
+       CAST(amount AS REAL)               AS amount,
+       UPPER(country)                     AS country
+FROM raw_orders
+WHERE amount <> ''
+""")
+for row in conn.execute("SELECT country, COUNT(*), ROUND(SUM(amount), 2) FROM orders GROUP BY country ORDER BY country"):
+    print(row)
+</textarea>
+    </div>
+
+    <h3>Batch vs streaming</h3>
+    <p><strong>Batch</strong> processing handles a bounded chunk of data at a time: "every night, process yesterday's
+      files". It is simple, cheap, easy to re-run, and its latency is the batch interval. <strong>Streaming</strong>
+      processes an unbounded sequence of events continuously, one by one or in tiny micro-batches, so results are seconds
+      old instead of hours. It costs more complexity: ordering, late events, state, and exactly-once guarantees
+      (<a href="m63-big-data-streaming.html">M63</a> covers these).</p>
+    <p>Step through the two visualizers below with the same twelve records. In <strong>batch</strong> mode each stage
+      finishes the whole batch before the next starts, so the first row reaches the target late. In
+      <strong>streaming</strong> mode every record moves on as soon as a stage is done with it, so all stages work at once.
+      Compare the tick at which the first row lands. Invalid records are parked in a <em>dead-letter queue</em> instead of
+      crashing the run.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Extract", "Validate", "Transform", "Load"], "mode": "batch"}'></div>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Extract", "Validate", "Transform", "Load"], "mode": "streaming"}'></div>
+    <aside class="callout pro"><p>A useful rule: <em>start with batch</em> unless a real decision needs fresher data. A fraud
+      check at payment time needs streaming. A weekly revenue dashboard does not. Many "real-time" requirements turn out
+      to be "every 15 minutes", which a frequent batch handles easily.</p></aside>
+    <p><strong>Remember:</strong> ETL transforms before loading, ELT after; batch trades latency for simplicity.</p>
+  </section>
+
+  <section class="lesson-section" id="modeling">
+    <h2>Data modeling for analytics: star schemas</h2>
+    <p>An OLTP schema is normalized into many small tables to avoid update anomalies. Analysts would need ten joins to
+      answer "revenue by product category by month". <strong>Dimensional modeling</strong> (popularized by Ralph Kimball)
+      reorganizes data around business processes into two kinds of tables:</p>
+    <ul>
+      <li><strong>Fact tables</strong> record measurable events: a sale, a ride, a click. They hold <em>measures</em>
+        (numbers you aggregate: amount, duration, quantity) and <em>foreign keys</em> to dimensions. They are long and
+        narrow and grow forever.</li>
+      <li><strong>Dimension tables</strong> describe the context of an event: who, what, where, when. They hold
+        descriptive <em>attributes</em> you filter and group by (customer segment, city, day of week). They are short and wide.</li>
+    </ul>
+    <p>Arrange one fact table in the middle with dimensions around it and you get a <strong>star schema</strong>. If
+      dimensions are themselves normalized into sub-dimensions (city → region → country), it becomes a
+      <strong>snowflake schema</strong>; the star is usually preferred for its simpler joins.</p>
+    <pre class="mermaid">
+erDiagram
+  DIM_DATE ||--o{ FACT_RIDE : "date_key"
+  DIM_RIDER ||--o{ FACT_RIDE : "rider_key"
+  DIM_DRIVER ||--o{ FACT_RIDE : "driver_key"
+  DIM_ZONE ||--o{ FACT_RIDE : "pickup_zone_key"
+  FACT_RIDE {
+    text ride_id PK
+    int date_key FK
+    int rider_key FK
+    int driver_key FK
+    int pickup_zone_key FK
+    real distance_km
+    real fare
+    int duration_s
+  }
+  DIM_DATE {
+    int date_key PK
+    text date
+    int month
+    text weekday
+    int is_weekend
+  }
+  DIM_RIDER {
+    int rider_key PK
+    text rider_id
+    text segment
+  }
+  DIM_DRIVER {
+    int driver_key PK
+    text driver_id
+    text vehicle_type
+  }
+  DIM_ZONE {
+    int zone_key PK
+    text zone_name
+    text city
+  }
+    </pre>
+    <h3>Grain: the most important decision</h3>
+    <p>The <strong>grain</strong> of a fact table is exactly what one row represents: "one row per ride", "one row per
+      order line", "one row per store per day". Declare it first, in words, before choosing columns. Mixing grains in one
+      table (some rows per order, some per order line) is the classic cause of double-counted revenue.</p>
+    <aside class="callout danger"><p>If <code>fact_sales</code> is one row per <em>order line</em> and you also store the
+      order's shipping fee on every line, <code>SUM(shipping_fee)</code> counts each order's fee once per line. Measures
+      must match the grain, or live in a separate fact table at their own grain.</p></aside>
+    <p><strong>Surrogate keys</strong> (<code>rider_key</code>) are integers the warehouse assigns; <strong>natural
+      keys</strong> (<code>rider_id</code>) come from the source system. Facts reference surrogate keys so dimensions can
+      keep history, which brings us to slowly changing dimensions.</p>
+    <div class="runnable" data-title="Build and query a star schema in sqlite3">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.executescript("""
+CREATE TABLE dim_product (product_key INTEGER PRIMARY KEY, sku TEXT, name TEXT, category TEXT);
+CREATE TABLE dim_date (date_key INTEGER PRIMARY KEY, date TEXT, month INTEGER, weekday TEXT);
+CREATE TABLE fact_sales (               -- grain: one row per order line
+    order_id TEXT, line INTEGER, date_key INTEGER, product_key INTEGER,
+    quantity INTEGER, revenue REAL, PRIMARY KEY (order_id, line));
+INSERT INTO dim_product VALUES (1,'A1','Espresso','coffee'), (2,'A2','Latte','coffee'), (3,'T1','Green tea','tea');
+INSERT INTO dim_date VALUES (20260301,'2026-03-01',3,'Sunday'), (20260302,'2026-03-02',3,'Monday');
+INSERT INTO fact_sales VALUES
+  ('o1',1,20260301,1,2,5.0), ('o1',2,20260301,3,1,3.5), ('o2',1,20260302,2,1,4.5), ('o3',1,20260302,1,3,7.5);
+""")
+query = """
+SELECT d.weekday, p.category, SUM(f.quantity) AS units, SUM(f.revenue) AS revenue
+FROM fact_sales f
+JOIN dim_date d    ON d.date_key = f.date_key
+JOIN dim_product p ON p.product_key = f.product_key
+GROUP BY d.weekday, p.category
+ORDER BY d.weekday, p.category
+"""
+for row in conn.execute(query):
+    print(row)
+</textarea>
+    </div>
+
+    <h3>Slowly changing dimensions</h3>
+    <p>Dimension attributes change: a customer moves city, a product is recategorized, a station is renamed. How you
+      handle the change determines what historical reports say. The two types you must know:</p>
+    <div class="two-col">
+      <div class="card"><h4>Type 1: overwrite</h4><p>Update the row in place. History is lost: last year's sales now
+        appear under the new city. Use it for corrections (a typo in a name) and attributes nobody analyzes historically.</p></div>
+      <div class="card"><h4>Type 2: add a new version</h4><p>Close the current row (<code>valid_to</code> = change date,
+        <code>is_current</code> = 0) and insert a new row with a new surrogate key. Facts keep pointing at the version
+        that was true when they happened. Use it whenever "as it was at the time" matters.</p></div>
+    </div>
+    <div class="runnable" data-title="SCD type 1 vs type 2, side by side">
+<textarea>
+from datetime import date
+
+type1 = {"C1": {"name": "Ada", "city": "London"}}
+type2 = [{"key": 1, "id": "C1", "city": "London", "valid_from": date(2024, 1, 1), "valid_to": None, "current": True}]
+
+def move_type1(cid, city):
+    type1[cid]["city"] = city                     # overwrite: history gone
+
+def move_type2(cid, city, when):
+    cur = next(r for r in type2 if r["id"] == cid and r["current"])
+    if cur["city"] == city:
+        return                                    # no change -> no new version (idempotent)
+    cur["valid_to"], cur["current"] = when, False
+    type2.append({"key": max(r["key"] for r in type2) + 1, "id": cid, "city": city,
+                  "valid_from": when, "valid_to": None, "current": True})
+
+move_type1("C1", "Paris")
+move_type2("C1", "Paris", date(2026, 3, 1))
+move_type2("C1", "Paris", date(2026, 3, 1))       # re-run: nothing happens
+print("type 1:", type1)
+for r in type2:
+    print("type 2:", r)
+</textarea>
+    </div>
+    <p>There are other types (type 3 keeps a "previous value" column; type 6 combines 1, 2, and 3), but types 1 and 2 cover
+      almost all real work. <strong>Remember:</strong> declare the grain first; facts hold measures at that grain; type 2
+      dimensions preserve history with versioned rows.</p>
+  </section>
+
+  <section class="lesson-section" id="file-formats">
+    <h2>File formats compared</h2>
+    <p>Data at rest lives in files far more often than you might expect: in object storage, in data lakes, in exports
+      between teams. The format decides how fast you can read it, how small it is, whether types survive the round trip,
+      and whether the schema can evolve.</p>
+    <table>
+      <thead><tr><th>Format</th><th>Layout</th><th>Schema</th><th>Splittable / compressible</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td>CSV</td><td>Text, row-based</td><td>None (all strings; header optional)</td><td>Splittable if uncompressed; gzip makes it unsplittable</td><td>Interchange with humans and spreadsheets</td></tr>
+        <tr><td>JSON Lines</td><td>Text, one JSON object per line</td><td>Self-describing per record, no enforcement</td><td>Line-splittable; compresses well</td><td>Logs, events, API dumps, nested data</td></tr>
+        <tr><td>Avro</td><td>Binary, row-based</td><td>Required, stored in the file header; strong evolution rules</td><td>Block-splittable, block compression</td><td>Kafka messages, write-heavy ingestion</td></tr>
+        <tr><td>Parquet</td><td>Binary, columnar (row groups → column chunks → pages)</td><td>Required, embedded, with types and statistics</td><td>Splittable by row group; per-column compression and encoding</td><td>The default for analytics and lakes</td></tr>
+        <tr><td>ORC</td><td>Binary, columnar (stripes)</td><td>Required, embedded</td><td>Splittable; per-column compression</td><td>Hive/Hadoop ecosystems</td></tr>
+        <tr><td>Arrow</td><td>In-memory columnar (Feather/IPC on disk)</td><td>Required</td><td>Designed for zero-copy sharing, not archival</td><td>Moving data between processes and libraries (pandas, Polars, DuckDB)</td></tr>
+      </tbody>
+    </table>
+    <p>Parquet wins for analytics because it combines a columnar layout (read only needed columns), per-column encodings
+      (dictionary encoding turns repeated strings into small integers; run-length encoding collapses repeats), compression,
+      and <strong>min/max statistics</strong> per row group that let readers skip whole chunks ("predicate pushdown").
+      Arrow is the in-memory twin: Parquet is how columnar data sleeps on disk; Arrow is how it is awake in RAM.</p>
+    <div class="runnable" data-title="CSV vs JSON Lines: what survives a round trip?" data-predict>
+<textarea>
+import csv, io, json
+
+record = {"id": 7, "price": 9.5, "tags": ["a", "b"], "active": True}
+
+buf = io.StringIO()
+csv.DictWriter(buf, fieldnames=record).writerows([record])
+back_csv = next(csv.DictReader(io.StringIO(buf.getvalue()), fieldnames=list(record)))
+back_json = json.loads(json.dumps(record))
+
+print(type(back_csv["id"]).__name__, type(back_json["id"]).__name__)
+print(back_csv["tags"] == record["tags"], back_json["tags"] == record["tags"])
+</textarea>
+    </div>
+    <details class="reveal"><summary>Why?</summary><p>CSV has no types: every value comes back as a string, and the list
+      becomes the string <code>"['a', 'b']"</code>. JSON keeps numbers, booleans, and nested lists. Binary formats such as
+      Parquet and Avro go further and keep exact types (int32 vs int64, timestamps with units, decimals).</p></details>
+    <div class="runnable" data-local="pyarrow is not available in the browser. Locally: pixi add pyarrow (or pixi add polars duckdb)." data-title="Writing Parquet locally">
+<textarea>
+import pandas as pd
+
+df = pd.DataFrame({
+    "ride_id": range(100_000),
+    "city": ["Boston", "Austin", "Denver", "Boston"] * 25_000,
+    "fare": [12.5, 8.0, 22.75, 15.0] * 25_000,
+})
+df.to_csv("rides.csv", index=False)
+df.to_parquet("rides.parquet", compression="zstd")        # needs pyarrow
+
+import os
+print("csv bytes:    ", os.path.getsize("rides.csv"))
+print("parquet bytes:", os.path.getsize("rides.parquet"))  # far smaller: dictionary + RLE + zstd
+
+import pyarrow.parquet as pq
+meta = pq.ParquetFile("rides.parquet").metadata
+print(meta.num_row_groups, "row group(s);", meta.row_group(0).column(2).statistics)   # min/max per column chunk
+print(pd.read_parquet("rides.parquet", columns=["fare"]).fare.sum())                  # reads one column only
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> CSV and JSON Lines for interchange and raw landing; Avro for row-oriented streaming
+      records; Parquet (or ORC) for analytics at rest; Arrow in memory.</p>
+  </section>
+
+  <section class="lesson-section" id="compression">
+    <h2>Compression</h2>
+    <p>Compression trades CPU time for fewer bytes on disk and over the network. In data systems, I/O is usually the
+      bottleneck, so a good codec often makes jobs <em>faster</em>, not just smaller. The codecs you will meet:</p>
+    <table>
+      <thead><tr><th>Codec</th><th>Ratio</th><th>Speed</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>gzip (DEFLATE)</td><td>Good</td><td>Slow to compress, OK to decompress</td><td>Everywhere; a gzipped CSV cannot be split for parallel reads</td></tr>
+        <tr><td>Snappy</td><td>Modest</td><td>Very fast</td><td>Historic Parquet default; favours speed over size</td></tr>
+        <tr><td>LZ4</td><td>Modest</td><td>Extremely fast</td><td>Kafka, in-memory caches</td></tr>
+        <tr><td>Zstandard (zstd)</td><td>Very good, tunable (levels 1–22)</td><td>Fast</td><td>The modern default for Parquet, Kafka, and archives</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="gzip on repetitive vs random data">
+<textarea>
+import gzip, os, json, random
+
+rng = random.Random(1)
+events = "\n".join(json.dumps({"user": f"u{rng.randrange(50)}", "action": rng.choice(["view", "click", "buy"])})
+                   for _ in range(5000)).encode()
+noise = os.urandom(len(events))
+
+for name, data in [("JSON Lines events", events), ("random bytes", noise)]:
+    for level in (1, 9):
+        packed = gzip.compress(data, compresslevel=level)
+        print(f"{name:18} level {level}: {len(data):>7} -> {len(packed):>7} bytes ({len(data)/len(packed):.1f}x)")
+</textarea>
+    </div>
+    <p>Repetitive structured data (field names, a few distinct values) compresses many times over; random bytes do not
+      compress at all. That is why columnar formats, which put similar values next to each other, compress so well.</p>
+    <aside class="callout py314"><p>Python 3.14 adds Zstandard to the standard library (PEP 784) as
+      <code>compression.zstd</code>, and a new <code>compression</code> package that also re-exports <code>gzip</code>,
+      <code>bz2</code>, <code>lzma</code>, and <code>zlib</code>. <code>tarfile</code>, <code>zipfile</code>, and
+      <code>shutil</code> understand zstd archives too.</p></aside>
+    <div class="runnable" data-title="Zstandard in the 3.14 standard library">
+<textarea>
+from compression import zstd, gzip
+import json
+
+data = "\n".join(json.dumps({"ride": i, "city": "Boston", "fare": 12.5}) for i in range(20_000)).encode()
+
+for level in (1, 3, 10, 19):
+    packed = zstd.compress(data, level=level)
+    print(f"zstd level {level:>2}: {len(packed):>7} bytes")
+print(f"gzip level  9: {len(gzip.compress(data, compresslevel=9)):>7} bytes")
+assert zstd.decompress(zstd.compress(data)) == data
+
+with zstd.open("rides.jsonl.zst", "wb") as fh:       # streaming file API, like gzip.open
+    fh.write(data)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> zstd is the default choice today; snappy/LZ4 when CPU is the bottleneck; avoid gzipped
+      CSV for large files you need to read in parallel.</p>
+  </section>
+
+  <section class="lesson-section" id="partitioning">
+    <h2>Partitioning</h2>
+    <p>A table of a billion rows stored as one file forces every query to read everything. <strong>Partitioning</strong>
+      splits data into directories by the value of one or more columns, so a query filtering on those columns reads only
+      the matching directories ("partition pruning"). The near-universal convention is <strong>Hive-style</strong> paths,
+      where each directory level is <code>column=value</code>:</p>
+    <pre><code class="language-bash">s3://spokes-lake/trips/year=2026/month=03/day=05/part-0000.parquet
+s3://spokes-lake/trips/year=2026/month=03/day=06/part-0000.parquet
+s3://spokes-lake/trips/year=2026/month=03/day=06/part-0001.parquet</code></pre>
+    <p>Spark, DuckDB, Polars, pyarrow, Athena, and Trino all read these paths and turn the directory names back into
+      columns. A query with <code>WHERE year = 2026 AND month = 3 AND day = 6</code> touches one directory.</p>
+    <div class="runnable" data-title="Write and prune Hive-style partitions">
+<textarea>
+import csv, tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp()) / "trips"
+trips = [{"trip_id": f"T{i}", "date": f"2026-03-0{1 + i % 3}", "city": ["bos", "aus"][i % 2], "km": i * 1.5}
+         for i in range(12)]
+
+for t in trips:
+    y, m, d = t["date"].split("-")
+    folder = root / f"year={y}" / f"month={m}" / f"day={d}"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "part-0000.csv"
+    new = not path.exists()
+    with path.open("a", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["trip_id", "city", "km"])
+        if new:
+            w.writeheader()
+        w.writerow({k: t[k] for k in ("trip_id", "city", "km")})
+
+for p in sorted(root.rglob("*.csv")):
+    print(p.relative_to(root))
+
+# Partition pruning: only open folders matching the filter day=02
+wanted = [p for p in root.rglob("*.csv") if "day=02" in p.parts]
+print("files read for day=02:", len(wanted), "of", len(list(root.rglob("*.csv"))))
+</textarea>
+    </div>
+    <aside class="callout warn"><p><strong>Over-partitioning</strong> is a common mistake. Partitioning by
+      <code>user_id</code> creates millions of tiny files; every query then pays per-file overhead, and object stores
+      list directories slowly. Aim for files of roughly 100 MB to 1 GB and partition on low-cardinality columns that queries
+      actually filter by (usually a date).</p></aside>
+    <p><strong>Remember:</strong> partition by what you filter on, keep partitions coarse enough for big files, and use
+      <code>column=value</code> directory names.</p>
+  </section>
+
+  <section class="lesson-section" id="schemas">
+    <h2>Schemas and schema evolution</h2>
+    <p>A <strong>schema</strong> is the declared structure of data: field names, types, nullability, and sometimes
+      constraints. <strong>Schema-on-write</strong> (warehouses, Parquet, Avro) checks data when it is written;
+      <strong>schema-on-read</strong> (raw JSON in a lake) stores anything and interprets it when read, which is flexible
+      but pushes errors downstream.</p>
+    <p>Sources change over time. <strong>Schema evolution</strong> is the discipline of changing a schema without breaking
+      the people on either side:</p>
+    <ul>
+      <li><strong>Backward compatible</strong>: consumers using the <em>new</em> schema can read data written with the
+        <em>old</em> one. Adding a field <em>with a default</em> is backward compatible; adding a required field without a
+        default is not (old records lack it).</li>
+      <li><strong>Forward compatible</strong>: consumers using the <em>old</em> schema can read data written with the
+        <em>new</em> one. Adding an optional field is forward compatible (old readers ignore it); removing a required
+        field is not.</li>
+      <li><strong>Breaking</strong>: renaming a field, or changing its type incompatibly (string → int), breaks both
+        directions unless the reader maps it explicitly.</li>
+    </ul>
+    <div class="runnable" data-title="Reading old records with a new schema">
+<textarea>
+old_records = [{"trip_id": "T1", "km": 3.2}, {"trip_id": "T2", "km": 1.1}]
+new_records = [{"trip_id": "T3", "km": 4.0, "bike_type": "ebike"}]
+
+# v2 schema: name -> (type, default). bike_type has a default, so v2 can read v1 data.
+schema_v2 = {"trip_id": (str, None), "km": (float, None), "bike_type": (str, "classic")}
+
+def read(record, schema):
+    out = {}
+    for field, (typ, default) in schema.items():
+        if field in record:
+            out[field] = typ(record[field])
+        elif default is not None:
+            out[field] = default
+        else:
+            raise ValueError(f"missing required field {field!r}")
+    return out
+
+for r in old_records + new_records:
+    print(read(r, schema_v2))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Kafka shops register schemas in a <em>schema registry</em> that rejects incompatible
+      changes at publish time. Table formats like Iceberg and Delta track schema versions per table, so adding a column is a
+      metadata-only operation instead of rewriting every file.</p></aside>
+    <p><strong>Remember:</strong> add fields with defaults, never repurpose a name, and treat a type change as a new field.</p>
+  </section>
+
+  <section class="lesson-section" id="lakes-warehouses">
+    <h2>Lakes, warehouses, and lakehouses</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Data warehouse</h4><p>A managed analytical database (Snowflake, BigQuery, Redshift). Schema on
+        write, SQL, ACID transactions, strong governance. Storage and compute are bundled by the vendor. Great for
+        structured business data; can be costly and closed.</p></div>
+      <div class="card"><h4>Data lake</h4><p>Files (Parquet, JSON, images) in cheap object storage (S3, GCS, Azure Blob).
+        Any data, any engine, very cheap. But plain files have no transactions: two writers can corrupt a table, deletes
+        mean rewriting files, and "what's in this folder?" becomes a swamp without discipline.</p></div>
+      <div class="card"><h4>Lakehouse</h4><p>A lake plus an <em>open table format</em> that adds warehouse features on top
+        of files: <strong>Delta Lake</strong>, <strong>Apache Iceberg</strong>, or <strong>Apache Hudi</strong>. A
+        transaction log or metadata tree records which Parquet files make up each table version.</p></div>
+    </div>
+    <p>Open table formats give you: ACID commits (readers never see half-written data), <strong>time travel</strong>
+      (query the table as of version 42 or last Tuesday), schema evolution, efficient <code>MERGE</code>/upsert and
+      deletes (important for GDPR), and hidden partitioning (Iceberg derives partitions from columns so queries don't need
+      to know the layout). Many engines (Spark, Trino, DuckDB, Snowflake, Polars) read them, so storage is decoupled from
+      compute.</p>
+    <pre class="mermaid">
+flowchart TB
+  subgraph Lakehouse
+    direction TB
+    E1[Spark] --> TF
+    E2[DuckDB / Polars] --> TF
+    E3[Trino / Snowflake] --> TF
+    TF[Table format metadata<br/>Delta log / Iceberg snapshots] --> F[(Parquet files in object storage)]
+  end
+    </pre>
+    <p><strong>Remember:</strong> warehouse = managed and governed; lake = cheap files; lakehouse = files plus a table format
+      that adds transactions, time travel, and evolution.</p>
+  </section>
+
+  <section class="lesson-section" id="contracts">
+    <h2>Data contracts</h2>
+    <p>Most pipeline breakages are not bugs in the pipeline: an upstream team renamed a column, started sending amounts in
+      cents, or emptied a field. A <strong>data contract</strong> is an explicit, versioned agreement between a data
+      producer and its consumers, stating:</p>
+    <ul>
+      <li>the schema (names, types, nullability) and semantics ("<code>amount</code> is in USD dollars, tax included");</li>
+      <li>quality expectations (uniqueness of <code>order_id</code>, allowed values, freshness: "lands by 02:00 UTC");</li>
+      <li>ownership and support (who to page) and the change process (deprecation windows, versioning).</li>
+    </ul>
+    <p>Contracts work when they are <em>enforced in code</em>, usually in the producer's CI and at the pipeline's front door.</p>
+    <div class="runnable" data-title="A contract as code">
+<textarea>
+CONTRACT = {
+    "version": "1.2.0",
+    "owner": "payments-team",
+    "fields": {
+        "order_id": {"type": str, "required": True, "unique": True},
+        "amount_usd": {"type": float, "required": True, "min": 0},
+        "status": {"type": str, "required": True, "allowed": {"paid", "refunded"}},
+    },
+}
+
+def check(records, contract):
+    problems, seen = [], {}
+    for i, rec in enumerate(records):
+        for name, rule in contract["fields"].items():
+            value = rec.get(name)
+            if value is None:
+                if rule.get("required"):
+                    problems.append(f"row {i}: {name} missing")
+                continue
+            if not isinstance(value, rule["type"]):
+                problems.append(f"row {i}: {name} should be {rule['type'].__name__}")
+                continue
+            if "min" in rule and value < rule["min"]:
+                problems.append(f"row {i}: {name} below {rule['min']}")
+            if "allowed" in rule and value not in rule["allowed"]:
+                problems.append(f"row {i}: {name}={value!r} not allowed")
+            if rule.get("unique"):
+                if value in seen.setdefault(name, set()):
+                    problems.append(f"row {i}: duplicate {name} {value!r}")
+                seen[name].add(value)
+    return problems
+
+batch = [{"order_id": "o1", "amount_usd": 12.0, "status": "paid"},
+         {"order_id": "o1", "amount_usd": -3.0, "status": "lost"},
+         {"order_id": "o2", "amount_usd": "9", "status": "paid"}]
+for p in check(batch, CONTRACT):
+    print(p)
+</textarea>
+    </div>
+    <p>In <a href="m62-pipelines.html">M62</a> you will meet the libraries that do this at scale (pandera, Great
+      Expectations, pydantic). <strong>Remember:</strong> a contract turns "someone changed something" from a 3 a.m.
+      surprise into a failed check in the producer's pull request.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m60-e1" data-title="Check a fact table's grain">
+      <div class="exercise-prompt">
+        <p>Write <code>grain_violations(rows, grain)</code>. <code>rows</code> is a list of dicts and <code>grain</code> a
+          tuple of column names that should uniquely identify a row. Return a sorted list of the key tuples that appear
+          more than once. For example, with grain <code>("order_id", "line")</code>, two rows for
+          <code>("o1", 1)</code> are a violation.</p>
+      </div>
+<textarea class="starter">
+def grain_violations(rows, grain):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+rows = [
+    {"order_id": "o1", "line": 1, "qty": 2},
+    {"order_id": "o1", "line": 2, "qty": 1},
+    {"order_id": "o1", "line": 1, "qty": 5},
+    {"order_id": "o2", "line": 1, "qty": 1},
+    {"order_id": "o2", "line": 1, "qty": 1},
+]
+
+def test_finds_duplicates():
+    assert grain_violations(rows, ("order_id", "line")) == [("o1", 1), ("o2", 1)], "o1/1 and o2/1 repeat"
+
+def test_coarser_grain():
+    assert grain_violations(rows, ("order_id",)) == [("o1",), ("o2",)], "keys are tuples even for one column"
+
+def test_clean_table():
+    assert grain_violations(rows[:2], ("order_id", "line")) == [], "no repeats -> empty list"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build <code>tuple(row[c] for c in grain)</code> for each row and count
+        them with <code>collections.Counter</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import Counter
+
+def grain_violations(rows, grain):
+    counts = Counter(tuple(row[c] for c in grain) for row in rows)
+    return sorted(key for key, n in counts.items() if n &gt; 1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m60-e2" data-title="Hive-style partition paths">
+      <div class="exercise-prompt">
+        <p>Write two functions. <code>partition_path(record, keys)</code> returns a Hive-style relative path string such as
+          <code>"year=2026/month=03"</code> using the record's values for <code>keys</code> in order.
+          <code>parse_partitions(path)</code> does the reverse: given any path string, return a dict of every
+          <code>name=value</code> segment, for example <code>"lake/trips/year=2026/month=03/part-0.parquet"</code> →
+          <code>{"year": "2026", "month": "03"}</code>.</p>
+      </div>
+<textarea class="starter">
+def partition_path(record, keys):
+    ...
+
+def parse_partitions(path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_build():
+    rec = {"year": "2026", "month": "03", "city": "bos", "km": 2.5}
+    assert partition_path(rec, ["year", "month"]) == "year=2026/month=03"
+    assert partition_path(rec, ["city"]) == "city=bos"
+
+def test_parse():
+    got = parse_partitions("lake/trips/year=2026/month=03/part-0.parquet")
+    assert got == {"year": "2026", "month": "03"}, f"got {got}"
+
+def test_parse_no_partitions():
+    assert parse_partitions("data/file.csv") == {}, "no name=value segments -> empty dict"
+
+def test_round_trip():
+    rec = {"a": "1", "b": "x"}
+    assert parse_partitions(partition_path(rec, ["a", "b"]) + "/f.csv") == rec
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Join <code>f"{k}={record[k]}"</code> with <code>"/"</code>. For
+        parsing, split on <code>"/"</code> and keep segments containing <code>"="</code>; <code>str.partition("=")</code>
+        splits once.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def partition_path(record, keys):
+    return "/".join(f"{k}={record[k]}" for k in keys)
+
+def parse_partitions(path):
+    out = {}
+    for segment in path.split("/"):
+        if "=" in segment:
+            name, _, value = segment.partition("=")
+            out[name] = value
+    return out</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m60-e3" data-title="Apply an SCD type 2 change">
+      <div class="exercise-prompt">
+        <p>A dimension is a list of dicts with keys <code>key</code>, <code>id</code>, <code>name</code>,
+          <code>valid_from</code>, <code>valid_to</code>, <code>current</code>. Write
+          <code>apply_scd2(dim, snapshot, as_of)</code> where <code>snapshot</code> maps <code>id → name</code>. For each id:
+          if there is no current row, append a new current row; if the current row's name differs, close it
+          (<code>valid_to = as_of</code>, <code>current = False</code>) and append a new current row; otherwise do nothing.
+          New rows get <code>key = max existing key + 1</code> (1 for an empty dimension), <code>valid_to = None</code>.
+          Process ids in sorted order, mutate <code>dim</code> in place, and return the number of rows added.</p>
+      </div>
+<textarea class="starter">
+def apply_scd2(dim, snapshot, as_of):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def fresh():
+    return [{"key": 1, "id": "S1", "name": "Harbor", "valid_from": "2026-01-01", "valid_to": None, "current": True}]
+
+def test_rename_creates_version():
+    dim = fresh()
+    assert apply_scd2(dim, {"S1": "Harbor Plaza"}, "2026-03-08") == 1
+    assert dim[0]["valid_to"] == "2026-03-08" and dim[0]["current"] is False, "old row closed"
+    assert dim[1] == {"key": 2, "id": "S1", "name": "Harbor Plaza", "valid_from": "2026-03-08", "valid_to": None, "current": True}
+
+def test_unchanged_is_noop():
+    dim = fresh()
+    assert apply_scd2(dim, {"S1": "Harbor"}, "2026-03-08") == 0 and len(dim) == 1
+
+def test_new_member_and_idempotent():
+    dim = fresh()
+    apply_scd2(dim, {"S1": "Harbor", "S2": "Ferry"}, "2026-03-08")
+    assert [r["id"] for r in dim] == ["S1", "S2"] and dim[1]["key"] == 2
+    assert apply_scd2(dim, {"S1": "Harbor", "S2": "Ferry"}, "2026-03-08") == 0, "re-running changes nothing"
+
+def test_empty_dimension():
+    dim = []
+    assert apply_scd2(dim, {"B": "b", "A": "a"}, "2026-01-01") == 2
+    assert [(r["key"], r["id"]) for r in dim] == [(1, "A"), (2, "B")], "sorted ids, keys from 1"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Find the current row with
+        <code>next((r for r in dim if r["id"] == i and r["current"]), None)</code>. Compute the next key each time you
+        append.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def apply_scd2(dim, snapshot, as_of):
+    added = 0
+    for sid in sorted(snapshot):
+        name = snapshot[sid]
+        current = next((r for r in dim if r["id"] == sid and r["current"]), None)
+        if current is not None and current["name"] == name:
+            continue
+        if current is not None:
+            current["valid_to"] = as_of
+            current["current"] = False
+        key = max((r["key"] for r in dim), default=0) + 1
+        dim.append({"key": key, "id": sid, "name": name, "valid_from": as_of, "valid_to": None, "current": True})
+        added += 1
+    return added</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m60-e4" data-title="Is this schema change backward compatible?">
+      <div class="exercise-prompt">
+        <p>Schemas are dicts mapping field name → <code>{"type": str, "default": value}</code> (the <code>"default"</code>
+          key is optional). Write <code>backward_problems(old, new)</code> returning a sorted list of problems that stop a
+          reader using <code>new</code> from reading data written with <code>old</code>:</p>
+        <ul>
+          <li><code>"added_without_default:&lt;field&gt;"</code> for a field in <code>new</code> but not <code>old</code>
+            with no default;</li>
+          <li><code>"type_changed:&lt;field&gt;"</code> for a field in both whose <code>"type"</code> differs.</li>
+        </ul>
+        <p>Removing a field is fine for backward compatibility (the new reader ignores it). Return <code>[]</code> when compatible.</p>
+      </div>
+<textarea class="starter">
+def backward_problems(old, new):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+old = {"trip_id": {"type": "string"}, "km": {"type": "double"}, "note": {"type": "string"}}
+
+def test_compatible_add_with_default():
+    new = {"trip_id": {"type": "string"}, "km": {"type": "double"}, "bike": {"type": "string", "default": "classic"}}
+    assert backward_problems(old, new) == [], "default added, note removed: both fine"
+
+def test_add_without_default():
+    new = dict(old, rider={"type": "string"})
+    assert backward_problems(old, new) == ["added_without_default:rider"]
+
+def test_type_change_and_sorting():
+    new = {"trip_id": {"type": "long"}, "km": {"type": "double"}, "zone": {"type": "string"}}
+    assert backward_problems(old, new) == ["added_without_default:zone", "type_changed:trip_id"]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop over <code>new.items()</code>. A field missing from
+        <code>old</code> needs <code>"default" in spec</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def backward_problems(old, new):
+    problems = []
+    for name, spec in new.items():
+        if name not in old:
+            if "default" not in spec:
+                problems.append(f"added_without_default:{name}")
+        elif old[name]["type"] != spec["type"]:
+            problems.append(f"type_changed:{name}")
+    return sorted(problems)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m60-e5" data-title="Load a tiny star schema">
+      <div class="exercise-prompt">
+        <p>Write <code>load_star(conn, sales)</code>. <code>sales</code> is a list of dicts with keys
+          <code>sale_id</code>, <code>product</code>, <code>category</code>, and <code>amount</code>. Create
+          <code>dim_product(product_key INTEGER PRIMARY KEY, name TEXT UNIQUE, category TEXT)</code> and
+          <code>fact_sale(sale_id TEXT PRIMARY KEY, product_key INTEGER, amount REAL)</code>, insert one dimension row per
+          distinct product (keys assigned by SQLite), and one fact row per sale referencing the right
+          <code>product_key</code>. Then write <code>revenue_by_category(conn)</code> returning a list of
+          <code>(category, total)</code> tuples ordered by total descending.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def load_star(conn, sales):
+    ...
+
+def revenue_by_category(conn):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+SALES = [
+    {"sale_id": "s1", "product": "Latte", "category": "coffee", "amount": 4.5},
+    {"sale_id": "s2", "product": "Tea", "category": "tea", "amount": 3.0},
+    {"sale_id": "s3", "product": "Latte", "category": "coffee", "amount": 4.5},
+    {"sale_id": "s4", "product": "Mocha", "category": "coffee", "amount": 5.0},
+]
+
+def fresh():
+    conn = sqlite3.connect(":memory:")
+    load_star(conn, SALES)
+    return conn
+
+def test_dimension_is_distinct():
+    conn = fresh()
+    assert conn.execute("SELECT COUNT(*) FROM dim_product").fetchone()[0] == 3, "one row per distinct product"
+
+def test_facts_reference_dimension():
+    conn = fresh()
+    rows = conn.execute("SELECT f.sale_id, p.name FROM fact_sale f JOIN dim_product p USING (product_key) ORDER BY f.sale_id").fetchall()
+    assert rows == [("s1", "Latte"), ("s2", "Tea"), ("s3", "Latte"), ("s4", "Mocha")]
+
+def test_revenue():
+    assert revenue_by_category(fresh()) == [("coffee", 14.0), ("tea", 3.0)]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Insert products with <code>INSERT OR IGNORE</code>, then insert facts
+        with <code>INSERT INTO fact_sale SELECT ?, product_key, ? FROM dim_product WHERE name = ?</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def load_star(conn, sales):
+    conn.executescript("""
+    CREATE TABLE dim_product (product_key INTEGER PRIMARY KEY, name TEXT UNIQUE, category TEXT);
+    CREATE TABLE fact_sale (sale_id TEXT PRIMARY KEY, product_key INTEGER, amount REAL);
+    """)
+    conn.executemany("INSERT OR IGNORE INTO dim_product (name, category) VALUES (?, ?)",
+                     [(s["product"], s["category"]) for s in sales])
+    conn.executemany("INSERT INTO fact_sale SELECT ?, product_key, ? FROM dim_product WHERE name = ?",
+                     [(s["sale_id"], s["amount"], s["product"]) for s in sales])
+    conn.commit()
+
+def revenue_by_category(conn):
+    return conn.execute("""
+        SELECT p.category, SUM(f.amount) AS total
+        FROM fact_sale f JOIN dim_product p ON p.product_key = f.product_key
+        GROUP BY p.category ORDER BY total DESC
+    """).fetchall()</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a ride-sharing star schema</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">RideCo warehouse from CSVs</span></div>
+      <div class="widget-body">
+        <p>RideCo exports three CSVs from its app database: <code>rides.csv</code> (ride_id, rider_id, driver_id,
+          pickup_zone, dropoff_zone, requested_at, distance_km, fare), <code>riders.csv</code> (rider_id, name, segment),
+          and <code>drivers.csv</code> (driver_id, name, vehicle_type, city). Design a star schema and load it into
+          sqlite3.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init rideco &amp;&amp; cd rideco
+pixi add python pandas pytest
+pixi run python make_data.py     # write the three CSVs with a fixed random seed
+pixi run python load.py          # build rideco.db
+pixi run pytest</code></pre>
+        <ol>
+          <li>Write the grain of <code>fact_ride</code> in one sentence at the top of <code>load.py</code>.</li>
+          <li>Generate data with <code>random.Random(42)</code>: 50 riders, 20 drivers, 2 000 rides over 30 days, 8 zones.</li>
+          <li>Create <code>dim_date</code>, <code>dim_rider</code>, <code>dim_driver</code>, <code>dim_zone</code> (with
+            integer surrogate keys) and <code>fact_ride</code> (pickup and dropoff zone keys are both role-played by
+            <code>dim_zone</code>).</li>
+          <li>Load with <code>csv</code> or pandas plus <code>executemany</code>, inside one transaction.</li>
+          <li>Answer three questions in SQL: revenue by weekday; average fare per km by vehicle type; the top 5
+            pickup → dropoff zone pairs.</li>
+        </ol>
+        <ul class="checklist" data-id="m60-mini">
+          <li>The grain is documented and <code>fact_ride</code> has a primary key that enforces it</li>
+          <li>Every dimension has a surrogate key; facts store only keys and measures</li>
+          <li>Running <code>load.py</code> twice produces the same row counts (drop and recreate, or upsert)</li>
+          <li>A pytest test checks <code>SUM(fare)</code> in the warehouse equals the sum in <code>rides.csv</code></li>
+          <li>The three analytics queries return sensible results</li>
+        </ul>
+        <p><strong>Stretch:</strong> make <code>dim_driver</code> SCD type 2 by loading a second <code>drivers.csv</code>
+          where three drivers changed city, and show revenue by driver city <em>as it was at ride time</em>. Then export
+          <code>fact_ride</code> to Parquet partitioned by <code>year=/month=</code> with <code>pixi add pyarrow</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m60-quiz">
+<script type="application/json">
+{"title": "Data engineering foundations", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which workload is OLAP?", "options": ["Inserting a new order when a customer checks out", "Updating one user's email address", "Computing revenue by country by month over three years of orders", "Locking a seat during ticket booking"], "answer": 2, "explanation": "<p>OLAP queries scan many rows and few columns to aggregate. The others touch a handful of rows with low latency: classic OLTP.</p>"},
+  {"type": "single", "prompt": "What is the main difference between ETL and ELT?", "options": ["ELT does not transform data", "Where and when the transform runs: before loading (ETL) or inside the warehouse after loading (ELT)", "ETL is only for streaming", "ELT cannot use SQL"], "answer": 1, "explanation": "<p>Both transform. ETL transforms in a separate engine before loading; ELT loads raw data and transforms it inside the warehouse, usually with SQL.</p>"},
+  {"type": "single", "prompt": "A fact table's <em>grain</em> is…", "options": ["Its compression codec", "Exactly what one row represents", "The number of dimensions", "Its partition column"], "answer": 1, "explanation": "<p>Declaring the grain (\"one row per ride\") comes first; measures and keys must be consistent with it.</p>"},
+  {"type": "multi", "prompt": "Which belong in a <strong>dimension</strong> table rather than a fact table?", "options": ["Customer segment", "Order revenue", "Product category", "Ride duration in seconds"], "answer": [0, 2], "explanation": "<p>Descriptive attributes you group and filter by (segment, category) are dimension attributes. Revenue and duration are measures in facts.</p>"},
+  {"type": "single", "prompt": "A customer moves from Boston to Denver. You need last year's sales to stay under Boston. Which SCD type?", "options": ["Type 1", "Type 2", "Neither: delete the customer", "Type 0 for facts"], "answer": 1, "explanation": "<p>Type 2 closes the Boston version and adds a Denver version with a new surrogate key; old facts keep pointing at the Boston row.</p>"},
+  {"type": "single", "prompt": "Why is Parquet usually faster than CSV for <code>SELECT AVG(fare) FROM rides</code>?", "options": ["It is a text format", "It stores data column by column with encodings, compression, and statistics, so only the fare column is read", "It sorts every file", "It is always held in memory"], "answer": 1, "explanation": "<p>Columnar layout means reading one column's chunks; dictionary/RLE encodings and compression shrink them, and min/max stats allow skipping.</p>"},
+  {"type": "single", "prompt": "Which format is designed as an <em>in-memory</em> columnar standard for sharing data between libraries without copying?", "options": ["Avro", "ORC", "Apache Arrow", "JSON Lines"], "answer": 2, "explanation": "<p>Arrow is the in-memory columnar format used by pandas, Polars, DuckDB, and others to exchange data cheaply. Parquet is its on-disk counterpart.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import csv, io\nrow = next(csv.reader(io.StringIO('7,9.5,True')))\nprint(type(row[0]).__name__, row[2] == True)", "answer": "str False", "explanation": "<p>CSV carries no types: <code>'7'</code> is a string, and the string <code>'True'</code> is not equal to the boolean <code>True</code>.</p>"},
+  {"type": "single", "prompt": "Which Python 3.14 module provides Zstandard compression?", "options": ["<code>zlib.zstd</code>", "<code>compression.zstd</code>", "<code>zstd</code> (third party only)", "<code>gzip.zstd</code>"], "answer": 1, "explanation": "<p>PEP 784 added <code>compression.zstd</code> to the 3.14 standard library.</p>"},
+  {"type": "text", "prompt": "Write the Hive-style partition directory for the column <code>country</code> with value <code>DE</code>.", "answer": ["country=DE"], "explanation": "<p>Hive-style partitions are <code>column=value</code> directory names; engines turn them back into columns and prune by them.</p>"},
+  {"type": "single", "prompt": "Partitioning a 2 TB events table by <code>user_id</code> (10 million users) is usually a bad idea because…", "options": ["Hive does not allow numeric partitions", "It creates millions of tiny files with high per-file overhead", "Parquet cannot store user ids", "It prevents compression"], "answer": 1, "explanation": "<p>High-cardinality partition keys create tiny files and huge directory listings. Partition by low-cardinality columns you filter on, such as date.</p>"},
+  {"type": "multi", "prompt": "Which schema changes are <strong>backward compatible</strong> (new readers can read old data)?", "options": ["Adding a field with a default", "Adding a required field with no default", "Removing a field", "Changing a field from string to int"], "answer": [0, 2], "explanation": "<p>New readers fill a missing defaulted field and ignore a removed one. A new required field is absent from old data, and type changes break parsing.</p>"},
+  {"type": "single", "prompt": "What does an open table format such as Iceberg or Delta add to Parquet files in object storage?", "options": ["A faster compression codec", "ACID commits, time travel, and schema evolution via a metadata layer", "A row-based layout", "Automatic dashboards"], "answer": 1, "explanation": "<p>The table format's log or snapshot metadata tracks which files form each table version, enabling transactions, time travel, MERGE, and evolution.</p>"},
+  {"type": "single", "prompt": "A data contract is most effective when…", "options": ["It is a wiki page", "It is enforced automatically in the producer's CI and at pipeline ingestion", "Only consumers know about it", "It forbids all schema changes"], "answer": 1, "explanation": "<p>Contracts prevent breakages when they are checked in code, so an incompatible change fails before it ships, and changes follow a versioned process.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Data engineers build reliable paths from producers to consumers: ingest, store, transform, model, serve, observe.</li>
+      <li>OLTP handles many small row operations; OLAP scans columns. Column stores compress well and read only what they need.</li>
+      <li>ETL transforms before loading; ELT loads raw data and transforms in the warehouse. Start with batch unless decisions need fresh data.</li>
+      <li>Star schemas put measures in facts at a declared grain and context in dimensions; SCD type 2 preserves history.</li>
+      <li>Parquet is the analytics default; Avro for row-based streams; Arrow in memory; zstd is the modern codec (in the 3.14 stdlib).</li>
+      <li>Partition by date-like columns you filter on, using <code>column=value</code> paths, without creating tiny files.</li>
+      <li>Evolve schemas compatibly, use table formats for lakehouse guarantees, and enforce data contracts in code.</li>
+    </ul>
+    <div class="flashcards" data-title="Data engineering foundations">
+<script type="application/json">
+[{"front": "OLTP vs OLAP", "back": "OLTP: many small transactional reads/writes on rows. OLAP: few large analytical scans over columns."},
+ {"front": "ETL vs ELT", "back": "ETL transforms before loading into the warehouse; ELT loads raw data first and transforms inside the warehouse with SQL."},
+ {"front": "Fact table", "back": "Rows of measurable events (measures + foreign keys to dimensions) at a declared grain."},
+ {"front": "Dimension table", "back": "Descriptive context (who/what/where/when) with a surrogate key; filtered and grouped by."},
+ {"front": "Grain", "back": "Exactly what one fact row represents, e.g. one row per ride. Declare it first."},
+ {"front": "SCD type 1 vs type 2", "back": "Type 1 overwrites (no history). Type 2 closes the old row and inserts a new version with a new surrogate key."},
+ {"front": "Why Parquet for analytics?", "back": "Columnar, typed, encoded (dictionary/RLE), compressed, with per-row-group min/max statistics for skipping."},
+ {"front": "Hive-style partitioning", "back": "Directory levels named column=value (year=2026/month=03) so engines can prune partitions."},
+ {"front": "Backward compatible schema change", "back": "New readers can read old data, e.g. adding a field with a default."},
+ {"front": "Lakehouse", "back": "Object-storage files plus a table format (Delta, Iceberg, Hudi) adding ACID, time travel, and evolution."},
+ {"front": "Data contract", "back": "A versioned, enforced agreement on schema, semantics, quality, and ownership between producer and consumers."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/library/compression.zstd.html">compression.zstd</a> and <a href="https://docs.python.org/3/library/csv.html">csv</a> in the Python docs</li>
+      <li><a href="https://parquet.apache.org/docs/">Apache Parquet documentation</a> and <a href="https://arrow.apache.org/docs/python/">Apache Arrow for Python</a></li>
+      <li><a href="https://iceberg.apache.org/docs/latest/">Apache Iceberg</a> and <a href="https://docs.delta.io/latest/index.html">Delta Lake</a> documentation</li>
+      <li>Kimball and Ross, <em>The Data Warehouse Toolkit</em> (dimensional modeling)</li>
+      <li>Reis and Housley, <em>Fundamentals of Data Engineering</em></li>
+      <li>Next: <a href="m61-sql-duckdb.html">M61 · Analytical SQL &amp; DuckDB</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

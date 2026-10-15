@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M03 · Strings &amp; Text · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m03">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 03</p>
+    <h1>Strings &amp; Text</h1>
+    <p class="lede">Names, messages, files, web pages, data: most of what programs handle is text. This module teaches you
+      to slice, search, clean, and format text with confidence, introduces Python 3.14's new template strings for safe
+      HTML and SQL, and explains how text really becomes bytes through Unicode.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m02-values-types.html">M02</a></span></div>
+    <ul class="objectives">
+      <li>Write string literals with quotes, escapes, raw strings, and triple quotes</li>
+      <li>Index and slice strings, including negative indexes and steps</li>
+      <li>Explain string immutability and use the core methods to search and clean text</li>
+      <li>Format output with f-strings and the format specification mini-language</li>
+      <li>Use Python 3.14 template strings (<code>t"..."</code>) and explain why they make HTML and SQL safer</li>
+      <li>Explain Unicode code points, and convert between <code>str</code> and <code>bytes</code> with encode/decode</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="literals">
+    <h2>String literals</h2>
+    <p>A <strong>string</strong> (type <code>str</code>) is an immutable sequence of characters. A
+      <strong>sequence</strong> is an ordered collection you can index into; you will meet lists and tuples later. You
+      write a string literal between single or double quotes; they are identical, so choose whichever avoids escaping:</p>
+    <pre><code class="language-python">a = 'single'
+b = "double"
+c = "It's easy"            # double quotes let you use an apostrophe
+d = 'She said "hi"'
+e = """Triple quotes
+span several lines."""</code></pre>
+    <h3>Escape sequences</h3>
+    <p>A backslash <code>\</code> starts an <strong>escape sequence</strong>, a way to write characters that are hard to
+      type: <code>\n</code> is a newline, <code>\t</code> a tab, <code>\\</code> a literal backslash, <code>\"</code> a
+      quote, and <code>\N{SNAKE}</code> or <code>\U0001F40D</code> a character by its Unicode name or number.</p>
+    <h3>Raw strings</h3>
+    <p>Prefix a string with <code>r</code> to make it <strong>raw</strong>: backslashes are kept as-is. That is handy for
+      Windows paths and regular expressions.</p>
+    <div class="runnable" data-title="Escapes vs raw strings">
+<textarea>
+print("Line one\nLine two")
+print("Name:\tAda")
+print("C:\new\table")      # oops: \n and \t became a newline and a tab
+print(r"C:\new\table")     # raw string keeps the backslashes
+print("Snake: \N{SNAKE}")
+print(len("\n"), len(r"\n"))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+s = "ab\tc"
+print(len(s))
+print(len(r"ab\tc"))
+</textarea>
+    </div>
+    <p>Adjacent literals are joined automatically, and <code>+</code> joins (concatenates) strings at runtime;
+      <code>*</code> repeats them: <code>"ab" * 3</code> is <code>"ababab"</code>.</p>
+    <p><strong>Remember:</strong> quotes are interchangeable; <code>\</code> escapes; <code>r"..."</code> turns escapes off.</p>
+  </section>
+
+  <section class="lesson-section" id="indexing-slicing">
+    <h2>Indexing and slicing</h2>
+    <p>Each character in a string has a position called its <strong>index</strong>. Indexes start at
+      <strong>0</strong>, so the first character is <code>s[0]</code>. Negative indexes count from the end:
+      <code>s[-1]</code> is the last character.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 170" role="img" aria-label="Indexes of the string PYTHON: 0 to 5 above, -6 to -1 below">
+        <text x="20" y="34" fill="var(--fg-muted)" font-size="13">index</text>
+        <text x="20" y="150" fill="var(--fg-muted)" font-size="13">negative</text>
+        <g font-size="22" font-family="monospace" text-anchor="middle">
+          <rect x="100" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <rect x="160" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <rect x="220" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <rect x="280" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <rect x="340" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <rect x="400" y="50" width="60" height="60" fill="var(--viz-1)" opacity="0.25" stroke="var(--fg-muted)"/>
+          <text x="130" y="88" fill="var(--fg)">P</text><text x="190" y="88" fill="var(--fg)">Y</text>
+          <text x="250" y="88" fill="var(--fg)">T</text><text x="310" y="88" fill="var(--fg)">H</text>
+          <text x="370" y="88" fill="var(--fg)">O</text><text x="430" y="88" fill="var(--fg)">N</text>
+        </g>
+        <g font-size="15" font-family="monospace" text-anchor="middle" fill="var(--viz-2)">
+          <text x="100" y="40">0</text><text x="160" y="40">1</text><text x="220" y="40">2</text>
+          <text x="280" y="40">3</text><text x="340" y="40">4</text><text x="400" y="40">5</text><text x="460" y="40">6</text>
+        </g>
+        <g font-size="15" font-family="monospace" text-anchor="middle" fill="var(--viz-3)">
+          <text x="130" y="135">-6</text><text x="190" y="135">-5</text><text x="250" y="135">-4</text>
+          <text x="310" y="135">-3</text><text x="370" y="135">-2</text><text x="430" y="135">-1</text>
+        </g>
+      </svg>
+      <figcaption>Slice boundaries (top) sit <em>between</em> characters: <code>s[1:4]</code> takes everything between
+        boundary 1 and boundary 4, which is <code>"YTH"</code>. Negative indexes (bottom) count back from the end.</figcaption>
+    </figure>
+    <p>A <strong>slice</strong> <code>s[start:stop:step]</code> extracts a substring. It includes <code>start</code> and
+      excludes <code>stop</code>, which is why <code>s[0:3]</code> has exactly 3 characters. Leave out
+      <code>start</code> to begin at the start and <code>stop</code> to go to the end. A <code>step</code> of 2 takes
+      every second character, and a negative step goes backwards, so <code>s[::-1]</code> reverses a string.</p>
+    <div class="runnable" data-title="Slice and dice">
+<textarea>
+s = "PYTHON"
+print(s[0], s[-1], s[2])
+print(s[1:4])
+print(s[:2], s[2:])
+print(s[-3:])
+print(s[::2])
+print(s[::-1])
+print(s[2:100])     # slices never raise errors for out-of-range bounds
+print(len(s))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+word = "programming"
+print(word[3:7])
+print(word[-4:-1])
+print(word[::3])
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Indexing past the end raises <code>IndexError: string index out of range</code>:
+      <code>"abc"[3]</code> fails because the last index is 2. Slicing, by contrast, quietly clips:
+      <code>"abc"[1:99]</code> is <code>"bc"</code>.</p></aside>
+    <p><strong>Remember:</strong> indexes start at 0; slices include the start, exclude the stop; <code>[::-1]</code>
+      reverses.</p>
+  </section>
+
+  <section class="lesson-section" id="immutability-methods">
+    <h2>Immutability and string methods</h2>
+    <p>Strings are <strong>immutable</strong>: once created, a string never changes. <code>s[0] = "J"</code> raises
+      <code>TypeError: 'str' object does not support item assignment</code>. Every operation that seems to modify a string
+      actually returns a <em>new</em> string. If you want to keep the result, assign it.</p>
+    <div class="tracer" data-title="Methods return new strings">
+<textarea>
+name = "  ada lovelace  "
+cleaned = name.strip()
+titled = cleaned.title()
+shout = titled.upper()
+name = name.strip()
+</textarea>
+    </div>
+    <p>Notice that after line 2, <code>name</code> still has its spaces. Only when we <em>rebind</em> <code>name</code>
+      on the last line does it change, and even then the old string object was not modified; the name just points
+      somewhere new.</p>
+    <h3>The methods you will use daily</h3>
+    <p>A <strong>method</strong> is a function attached to an object, called with a dot: <code>text.upper()</code>.</p>
+    <table>
+      <thead><tr><th>Method</th><th>What it does</th><th>Example → result</th></tr></thead>
+      <tbody>
+        <tr><td><code>strip()</code>, <code>lstrip()</code>, <code>rstrip()</code></td><td>Remove whitespace (or given characters) from the ends</td><td><code>"  hi ".strip()</code> → <code>"hi"</code></td></tr>
+        <tr><td><code>lower()</code>, <code>upper()</code>, <code>title()</code></td><td>Change case</td><td><code>"ada".title()</code> → <code>"Ada"</code></td></tr>
+        <tr><td><code>casefold()</code></td><td>Aggressive lowercase for case-insensitive comparison</td><td><code>"Straße".casefold()</code> → <code>"strasse"</code></td></tr>
+        <tr><td><code>split(sep)</code></td><td>Break into a list of pieces</td><td><code>"a,b,c".split(",")</code> → <code>['a', 'b', 'c']</code></td></tr>
+        <tr><td><code>sep.join(items)</code></td><td>Glue pieces with a separator</td><td><code>"-".join(["a", "b"])</code> → <code>"a-b"</code></td></tr>
+        <tr><td><code>replace(old, new)</code></td><td>Replace every occurrence</td><td><code>"a-b".replace("-", "+")</code> → <code>"a+b"</code></td></tr>
+        <tr><td><code>find(sub)</code></td><td>Index of first match, or <code>-1</code></td><td><code>"hello".find("l")</code> → <code>2</code></td></tr>
+        <tr><td><code>startswith()</code>, <code>endswith()</code></td><td>Test the beginning or end</td><td><code>"data.csv".endswith(".csv")</code> → <code>True</code></td></tr>
+        <tr><td><code>count(sub)</code></td><td>Count non-overlapping occurrences</td><td><code>"banana".count("a")</code> → <code>3</code></td></tr>
+        <tr><td><code>sub in s</code></td><td>Membership test (an operator, not a method)</td><td><code>"nan" in "banana"</code> → <code>True</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Cleaning messy text">
+<textarea>
+raw = "   Apples, pears ,BANANAS,  kiwis  "
+parts = raw.split(",")
+print(parts)
+cleaned = [p.strip().lower() for p in parts]
+print(cleaned)
+print(" | ".join(cleaned))
+print("words:", len("the quick brown fox".split()))
+print("hello world".replace("world", "Python"))
+print("report.pdf".endswith((".pdf", ".docx")))
+print("Straße".casefold() == "STRASSE".casefold())
+</textarea>
+    </div>
+    <aside class="callout tip"><p><code>split()</code> with no argument splits on any run of whitespace and ignores
+      leading and trailing spaces, which is usually what you want for words. <code>split(",")</code> splits on exactly
+      that character, so <code>"a,,b".split(",")</code> gives an empty string in the middle.</p></aside>
+    <aside class="callout pro"><p>For case-insensitive comparisons, use <code>casefold()</code> rather than
+      <code>lower()</code>. It handles languages where lowercasing alone is not enough, such as German "ß".</p></aside>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+s = "banana"
+s.upper()
+print(s)
+print(s.find("n"), s.find("z"))
+print("-".join("abc"))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="f-strings">
+    <h2>f-strings in depth</h2>
+    <p>An <strong>f-string</strong> (formatted string literal) starts with <code>f</code> and can contain expressions
+      inside braces <code>{ }</code>. Python evaluates each expression and inserts its text:</p>
+    <pre><code class="language-python">name, age = "Ada", 36
+print(f"{name} is {age} and will be {age + 1} next year.")</code></pre>
+    <h3>The format specification mini-language</h3>
+    <p>After the expression you may add a colon and a <strong>format spec</strong>, a tiny language that controls how the
+      value is displayed. The general shape is <code>{value:[fill][align][width][,][.precision][type]}</code>:</p>
+    <table>
+      <thead><tr><th>Spec</th><th>Meaning</th><th>Example → result</th></tr></thead>
+      <tbody>
+        <tr><td><code>.2f</code></td><td>Fixed-point, 2 decimals</td><td><code>f"{3.14159:.2f}"</code> → <code>3.14</code></td></tr>
+        <tr><td><code>,</code> or <code>_</code></td><td>Thousands separators</td><td><code>f"{1234567.891:,.2f}"</code> → <code>1,234,567.89</code></td></tr>
+        <tr><td><code>&gt;8</code>, <code>&lt;8</code>, <code>^8</code></td><td>Right, left, center in width 8</td><td><code>f"{'hi':^8}|"</code> → <code>"   hi   |"</code></td></tr>
+        <tr><td><code>*^10</code></td><td>Fill character then alignment</td><td><code>f"{'hi':*^10}"</code> → <code>****hi****</code></td></tr>
+        <tr><td><code>08b</code>, <code>x</code></td><td>Zero-padded binary, hex</td><td><code>f"{42:08b}"</code> → <code>00101010</code></td></tr>
+        <tr><td><code>.1%</code></td><td>Percentage</td><td><code>f"{0.256:.1%}"</code> → <code>25.6%</code></td></tr>
+        <tr><td><code>e</code></td><td>Scientific notation</td><td><code>f"{12345.678:.2e}"</code> → <code>1.23e+04</code></td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="A formatted receipt">
+<textarea>
+items = [("coffee", 3, 4.5), ("croissant", 2, 3.25), ("orange juice", 1, 5.0)]
+print(f"{'Item':<14}{'Qty':>4}{'Total':>9}")
+print("-" * 27)
+grand = 0
+for name, qty, price in items:
+    line_total = qty * price
+    grand += line_total
+    print(f"{name:<14}{qty:>4}{line_total:>9.2f}")
+print("-" * 27)
+print(f"{'TOTAL':<18}{grand:>9.2f}")
+</textarea>
+    </div>
+    <h3>Self-documenting expressions with <code>=</code></h3>
+    <p>Putting <code>=</code> after the expression prints the expression text too. It is the quickest debugging tool
+      there is:</p>
+    <div class="runnable" data-title="Debugging with =">
+<textarea>
+width, height = 3, 4.5
+print(f"{width=}, {height=}")
+print(f"{width * height = }")
+print(f"{height=:.3f}")
+print(f"{'Ada'!r} vs {'Ada'!s}")
+</textarea>
+    </div>
+    <p>Conversion flags <code>!r</code> and <code>!s</code> apply <code>repr()</code> or <code>str()</code> before
+      formatting. <code>!r</code> shows quotes around strings, which helps spot stray spaces.</p>
+    <h3>Nested format specs</h3>
+    <p>Parts of the spec can themselves be expressions in braces, so the width or precision can be decided at runtime:</p>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+width = 6
+places = 1
+value = 2.71828
+print(f"[{value:>{width}.{places}f}]")
+print(f"[{'ab':>{width}}]")
+</textarea>
+    </div>
+    <aside class="callout note"><p>Since Python 3.12, f-strings may reuse the same quote type inside braces and span
+      several lines within the braces. Even so, keeping expressions inside f-strings short makes code easier to read.</p></aside>
+    <h3>Older styles: <code>str.format</code> and <code>%</code></h3>
+    <p>You will see two older ways in existing code. <code>"{} is {}".format(name, age)</code> uses the same format spec
+      language, with positional (<code>{0}</code>) or named (<code>{name}</code>) fields, and is still useful when the
+      template is stored separately from the values, for example <code>TEMPLATE.format(**data)</code>. The
+      <code>"%s is %d" % (name, age)</code> style is the oldest; recognize it, but prefer f-strings in new code.</p>
+    <div class="runnable" data-title="str.format with a stored template">
+<textarea>
+TEMPLATE = "Dear {name}, your order #{order:05d} ships on {day}."
+print(TEMPLATE.format(name="Ada", order=42, day="Monday"))
+print("{0} + {0} = {1}".format(2, 4))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="t-strings">
+    <h2>Template strings: <code>t"..."</code> (new in 3.14)</h2>
+    <aside class="callout py314"><p>Python 3.14 adds <strong>template string literals</strong> (PEP 750). They look like
+      f-strings with a <code>t</code> prefix, but they do <em>not</em> produce a string. They produce a
+      <code>string.templatelib.Template</code> object that keeps the literal text and the interpolated values
+      <em>separate</em>, so code can process the values before combining them.</p></aside>
+    <h3>Why: f-strings can be dangerous</h3>
+    <p>Imagine building a web page from a user's comment with an f-string:</p>
+    <pre><code class="language-python">comment = "&lt;img src=x onerror=steal(document.cookie)&gt;"
+page = f"&lt;p&gt;{comment}&lt;/p&gt;"   # the attacker's code now runs in every visitor's browser!</code></pre>
+    <p>This is called an <strong>injection attack</strong>: untrusted text (text from a user or another system) is
+      mixed into code (HTML, SQL) and gets interpreted as code. Cross-site scripting (XSS) in HTML and SQL injection in
+      databases are among the most common security bugs in the world. The f-string has already merged everything into
+      one string, so it is too late to tell which parts were trusted.</p>
+    <h3>How template strings work</h3>
+    <p>A <code>Template</code> remembers the pieces. Iterating over it yields, in order, the literal text segments
+      (plain <code>str</code>) and <code>Interpolation</code> objects. Each <code>Interpolation</code> has:</p>
+    <ul>
+      <li><code>.value</code>: the evaluated value</li>
+      <li><code>.expression</code>: the source text of the expression, such as <code>"name"</code></li>
+      <li><code>.conversion</code>: <code>"r"</code>, <code>"s"</code>, <code>"a"</code>, or <code>None</code></li>
+      <li><code>.format_spec</code>: the spec after the colon, such as <code>".2f"</code>, or <code>""</code></li>
+    </ul>
+    <p>The template also offers <code>.strings</code> (all text segments), <code>.values</code>, and
+      <code>.interpolations</code> as tuples.</p>
+    <div class="runnable" data-title="Look inside a Template">
+<textarea>
+from string.templatelib import Template, Interpolation
+
+name = "Ada"
+price = 4.5
+template = t"Hello {name}, you owe {price:.2f}"
+print(type(template).__name__)
+print(template.strings)
+print(template.values)
+for part in template:
+    if isinstance(part, Interpolation):
+        print("  interpolation:", part.expression, "=", repr(part.value), "spec:", repr(part.format_spec))
+    else:
+        print("  text:", repr(part))
+</textarea>
+    </div>
+    <h3>A safe HTML renderer</h3>
+    <p>Now we can write a function that escapes only the interpolated values, using <code>html.escape</code> to turn
+      <code>&lt;</code> into <code>&amp;lt;</code> and so on. The literal parts, which the programmer wrote, are trusted
+      and kept as-is. (A <strong>function</strong>, defined with <code>def</code>, is a named block of reusable code; you
+      will study functions in depth in <a href="m05-functions.html">M05</a>. Here, just read the body.)</p>
+    <div class="runnable" data-title="Escaping only what is untrusted">
+<textarea>
+import html
+from string.templatelib import Template, Interpolation
+
+def render_html(template: Template) -> str:
+    pieces = []
+    for part in template:
+        if isinstance(part, Interpolation):
+            text = format(part.value, part.format_spec)   # honour specs like :.2f
+            pieces.append(html.escape(text))              # untrusted: escape it
+        else:
+            pieces.append(part)                           # trusted literal text
+    return "".join(pieces)
+
+comment = "<img src=x onerror=steal(document.cookie)>"
+user = "Ada & Co"
+print(render_html(t"<p><b>{user}</b> wrote: {comment}</p>"))
+print(render_html(t"<td>{3.14159:.2f}</td>"))
+</textarea>
+    </div>
+    <p>The same idea makes SQL safe: a database library can turn each interpolation into a <em>query parameter</em>
+      instead of pasting the text into the query, so <code>t"SELECT * FROM users WHERE name = {name}"</code> can never be
+      hijacked by a name like <code>x' OR '1'='1</code>.</p>
+    <aside class="callout warn"><p>A <code>Template</code> is not a <code>str</code>. <code>str(template)</code> gives its
+      debugging representation, not rendered text. Something, such as your renderer or a library, must process it. That
+      is the whole point: you cannot accidentally use it without deciding how to treat the values.</p></aside>
+    <aside class="callout think"><p>Why is it important that the renderer escapes the values but not the literal parts?
+      What would happen to the <code>&lt;p&gt;</code> tags if it escaped everything?</p></aside>
+  </section>
+
+  <section class="lesson-section" id="unicode-bytes">
+    <h2>Unicode, encodings, and bytes</h2>
+    <p>Computers store numbers, not letters. <strong>Unicode</strong> is the worldwide standard that gives every
+      character, in every writing system plus emoji, a number called a <strong>code point</strong>. "A" is 65,
+      "é" is 233, "🐍" is 128013. A Python <code>str</code> is a sequence of code points. <code>ord(ch)</code> gives a
+      character's code point and <code>chr(n)</code> goes the other way.</p>
+    <div class="runnable" data-title="Code points">
+<textarea>
+for ch in "Aé€🐍":
+    print(ch, ord(ch), hex(ord(ch)))
+print(chr(65), chr(0x1F40D))
+print(len("naïve 🐍"))   # length counts code points, not bytes
+</textarea>
+    </div>
+    <h3>Encoding: from code points to bytes</h3>
+    <p>Files and networks carry <strong>bytes</strong> (numbers from 0 to 255), not code points. An
+      <strong>encoding</strong> is a rule for turning code points into bytes. <strong>UTF-8</strong> is the dominant
+      encoding on the web and in modern systems: it uses 1 byte for ASCII characters (plain English letters and digits)
+      and 2 to 4 bytes for others.</p>
+    <ul>
+      <li><code>text.encode("utf-8")</code> turns a <code>str</code> into <code>bytes</code>.</li>
+      <li><code>data.decode("utf-8")</code> turns <code>bytes</code> back into a <code>str</code>.</li>
+    </ul>
+    <p>A <code>bytes</code> literal looks like <code>b"abc"</code>. Bytes are immutable sequences of small integers:
+      indexing <code>b"abc"[0]</code> gives <code>97</code>.</p>
+    <div class="runnable" data-title="Encode and decode">
+<textarea>
+text = "café 🐍"
+data = text.encode("utf-8")
+print(data)
+print(len(text), "code points ->", len(data), "bytes")
+print(data.decode("utf-8"))
+print(b"Hi"[0], bytes([72, 105]))
+print("é".encode("utf-8"), "é".encode("latin-1"))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Decoding with the wrong encoding">
+<textarea>
+data = "café".encode("utf-8")
+print(data.decode("latin-1"))   # mojibake: garbled text from the wrong encoding
+print(data.decode("ascii"))     # UnicodeDecodeError
+</textarea>
+    </div>
+    <p>Garbled text like <code>cafÃ©</code> is called <strong>mojibake</strong>. It always means bytes were decoded
+      with a different encoding than they were encoded with. The fix is to know, and state, your encoding.</p>
+    <aside class="callout pro"><p>The golden rule of text: decode bytes to <code>str</code> as early as possible (when
+      reading), work with <code>str</code> everywhere inside your program, and encode as late as possible (when writing).
+      Always pass <code>encoding="utf-8"</code> when opening text files; you will practise this in
+      <a href="m09-files-io.html">M09</a>.</p></aside>
+    <aside class="callout py315"><p>In Python 3.15 (PEP 686), UTF-8 becomes the default encoding for <code>open()</code>
+      and other text I/O on every platform, including Windows, where the default used to depend on the system locale.
+      Writing <code>encoding="utf-8"</code> explicitly remains good practice, and it works the same in 3.14 and 3.15.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m03-e1" data-title="Slices of a word">
+      <div class="exercise-prompt"><p>Given <code>word = "programming"</code>, use slicing (not typing the letters) to set
+        <code>first3</code> to the first three characters, <code>last3</code> to the last three, and
+        <code>backwards</code> to the whole word reversed.</p></div>
+<textarea class="starter">
+word = "programming"
+first3 = ...
+last3 = ...
+backwards = ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_first3():
+    assert first3 == "pro", f"first3 should be 'pro', got {first3!r}"
+
+def test_last3():
+    assert last3 == "ing", f"last3 should be 'ing', got {last3!r}"
+
+def test_backwards():
+    assert backwards == "gnimmargorp", f"backwards should be 'gnimmargorp', got {backwards!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>word[:3]</code>, <code>word[-3:]</code>, and a step of -1.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">word = "programming"
+first3 = word[:3]
+last3 = word[-3:]
+backwards = word[::-1]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m03-e2" data-title="Clean up a name and an email">
+      <div class="exercise-prompt"><p>Set <code>clean_name</code> to <code>raw_name</code> with outer spaces removed and
+        each word capitalized (<code>"Ada Lovelace"</code>). Set <code>clean_email</code> to <code>raw_email</code>
+        stripped and lowercased. Set <code>domain</code> to the part of the clean email after the <code>@</code>.</p></div>
+<textarea class="starter">
+raw_name = "   ada LOVELACE  "
+raw_email = "  Ada@Example.COM "
+clean_name = ...
+clean_email = ...
+domain = ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_name():
+    assert clean_name == "Ada Lovelace", f"got {clean_name!r}"
+
+def test_email():
+    assert clean_email == "ada@example.com", f"got {clean_email!r}"
+
+def test_domain():
+    assert domain == "example.com", f"got {domain!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Chain methods: <code>raw_name.strip().title()</code>. For the domain,
+        <code>split("@")</code> gives a list; take the item at index 1 (or use <code>find</code> with slicing).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">raw_name = "   ada LOVELACE  "
+raw_email = "  Ada@Example.COM "
+clean_name = raw_name.strip().title()
+clean_email = raw_email.strip().lower()
+domain = clean_email.split("@")[1]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m03-e3" data-title="Format a receipt line">
+      <div class="exercise-prompt"><p>Using one f-string, set <code>line</code> so that the item name is left-aligned in
+        10 characters, then <code>|</code>, the quantity right-aligned in 3, then <code>|</code>, and the line total
+        (quantity × price) right-aligned in 8 with exactly 2 decimals. For the given values the result is
+        <code>"coffee    |  3|   13.50"</code>.</p></div>
+<textarea class="starter">
+item = "coffee"
+qty = 3
+price = 4.5
+line = f"{item}|{qty}|{qty * price}"
+print(line)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_line():
+    assert line == "coffee    |  3|   13.50", f"got {line!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Specs: <code>:&lt;10</code>, <code>:&gt;3</code>, <code>:&gt;8.2f</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">item = "coffee"
+qty = 3
+price = 4.5
+line = f"{item:&lt;10}|{qty:&gt;3}|{qty * price:&gt;8.2f}"
+print(line)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m03-e4" data-title="A safe t-string renderer">
+      <div class="exercise-prompt"><p>Complete <code>render_html</code> so that literal text is kept unchanged and every
+        interpolated value is formatted with its format spec and then escaped with <code>html.escape</code>. Fill in the
+        two lines marked <code>...</code>.</p></div>
+<textarea class="starter">
+import html
+from string.templatelib import Template, Interpolation
+
+def render_html(template: Template) -> str:
+    pieces = []
+    for part in template:
+        if isinstance(part, Interpolation):
+            pieces.append(...)   # format part.value with part.format_spec, then escape
+        else:
+            pieces.append(...)   # literal text: keep as-is
+    return "".join(pieces)
+
+name = "<i>Bob</i>"
+print(render_html(t"<p>Hi {name}</p>"))
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_escapes_values():
+    evil = "<img src=x onerror=alert(1)>"
+    assert render_html(t"<p>{evil}</p>") == "<p>&lt;img src=x onerror=alert(1)&gt;</p>", "values must be escaped, literal tags kept"
+
+def test_ampersand():
+    who = "Ada & Co"
+    assert render_html(t"<b>{who}</b>") == "<b>Ada &amp; Co</b>", "& in a value becomes &amp;"
+
+def test_format_spec():
+    pi = 3.14159
+    assert render_html(t"<td>{pi:.2f}</td>") == "<td>3.14</td>", "apply the format spec before escaping"
+
+def test_returns_str():
+    assert isinstance(render_html(t"plain"), str), "render_html must return a str"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>html.escape(format(part.value, part.format_spec))</code> for
+        interpolations; just <code>part</code> for text.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import html
+from string.templatelib import Template, Interpolation
+
+def render_html(template: Template) -&gt; str:
+    pieces = []
+    for part in template:
+        if isinstance(part, Interpolation):
+            pieces.append(html.escape(format(part.value, part.format_spec)))
+        else:
+            pieces.append(part)
+    return "".join(pieces)
+
+name = "&lt;i&gt;Bob&lt;/i&gt;"
+print(render_html(t"&lt;p&gt;Hi {name}&lt;/p&gt;"))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m03-e5" data-title="Characters vs bytes">
+      <div class="exercise-prompt"><p>For <code>text = "naïve café 🐍"</code>, set <code>n_chars</code> to its number of
+        code points and <code>n_bytes</code> to the number of bytes in its UTF-8 encoding. Then set
+        <code>decoded</code> to the string obtained by decoding <code>data</code> as UTF-8, and <code>snake</code> to the
+        code point number of <code>"🐍"</code>.</p></div>
+<textarea class="starter">
+text = "naïve café 🐍"
+data = b"\xc3\xa9t\xc3\xa9"
+n_chars = ...
+n_bytes = ...
+decoded = ...
+snake = ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_chars():
+    assert n_chars == 12, f"'naïve café 🐍' has 12 code points, got {n_chars}"
+
+def test_bytes():
+    assert n_bytes == 17, f"its UTF-8 encoding has 17 bytes, got {n_bytes}"
+
+def test_decoded():
+    assert decoded == "été", f"data decodes to 'été', got {decoded!r}"
+
+def test_snake():
+    assert snake == 128013, f"ord('🐍') is 128013, got {snake}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>len(text)</code>, <code>len(text.encode("utf-8"))</code>,
+        <code>data.decode("utf-8")</code>, and <code>ord</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">text = "naïve café 🐍"
+data = b"\xc3\xa9t\xc3\xa9"
+n_chars = len(text)
+n_bytes = len(text.encode("utf-8"))
+decoded = data.decode("utf-8")
+snake = ord("🐍")</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a text statistics tool</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Text statistics</span></div>
+      <div class="widget-body">
+        <p>Write <code>textstats.py</code> in your <code>practice</code> workspace. It holds a paragraph of text in a
+          triple-quoted string (or reads one line with <code>input()</code>) and prints a neatly formatted report.</p>
+<pre data-label="Example output"><code>Characters (with spaces):    243
+Characters (no spaces):      201
+Words:                        43
+Unique words:                 35
+Longest word:       "statistics" (10)
+Average word length:        4.67
+Bytes in UTF-8:              245</code></pre>
+        <h4>Useful tools</h4>
+        <ul>
+          <li><code>text.split()</code> for words; <code>len()</code> for counts; <code>text.replace(" ", "")</code> for
+            characters without spaces.</li>
+          <li>Clean punctuation with <code>word.strip(".,;:!?\"'()")</code> and compare with <code>casefold()</code>.</li>
+          <li><code>max(words, key=len)</code> finds the longest word; <code>len(set(words))</code> counts unique ones
+            (sets come in M06; for now, just use it).</li>
+          <li>Align the report with f-string specs such as <code>{label:&lt;20}{value:&gt;8}</code> and
+            <code>{avg:.2f}</code>.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m03-mini">
+          <li>Counts characters with and without spaces, words, and unique words (case-insensitive)</li>
+          <li>Finds the longest word, ignoring surrounding punctuation</li>
+          <li>Reports the average word length to 2 decimals</li>
+          <li>Reports the UTF-8 byte count and it differs from the character count when the text has accents or emoji</li>
+          <li>All numbers line up in a right-aligned column using format specs</li>
+          <li>Runs with <code>pixi run python textstats.py</code> (add a <code>stats</code> task)</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Print the five most common words with <code>collections.Counter(words).most_common(5)</code>.</li>
+          <li>Render the report as an HTML table using a t-string and your <code>render_html</code> function.</li>
+          <li>Count sentences by counting <code>.</code>, <code>!</code>, and <code>?</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m03-quiz">
+<script type="application/json">
+{"title": "Strings quiz", "passScore": 0.7, "questions": [
+  {"type": "output", "prompt": "What does this print?", "code": "s = \"PYTHON\"\nprint(s[1:4])", "answer": "YTH", "explanation": "<p>Slices include the start index (1, \"Y\") and exclude the stop (4, \"O\").</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"hello\"[-2:])", "answer": "lo", "explanation": "<p><code>-2</code> is the second-to-last character; leaving out the stop goes to the end.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "s = \"abc\"\ns.upper()\nprint(s)", "answer": "abc", "explanation": "<p>Strings are immutable. <code>upper()</code> returns a new string, which was thrown away. Write <code>s = s.upper()</code> to keep it.</p>"},
+  {"type": "single", "prompt": "What does <code>\"a,,b\".split(\",\")</code> return?", "options": ["<code>['a', 'b']</code>", "<code>['a', '', 'b']</code>", "<code>['a,,b']</code>", "<code>['a', ',', 'b']</code>"], "answer": 1, "explanation": "<p>With an explicit separator, every comma splits, so two adjacent commas produce an empty string between them. <code>split()</code> without arguments behaves differently: it collapses runs of whitespace.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(\"-\".join([\"2026\", \"10\", \"14\"]))", "answer": "2026-10-14", "explanation": "<p><code>join</code> is called on the separator and glues the items together.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "price = 1234.5\nprint(f\"{price:,.2f}\")", "answer": "1,234.50", "explanation": "<p><code>,</code> adds thousands separators and <code>.2f</code> shows exactly two decimals.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "x = 7\nprint(f\"{x=}\")", "answer": "x=7", "explanation": "<p>The <code>=</code> specifier prints the expression text, an equals sign, and the value: handy for debugging.</p>"},
+  {"type": "single", "prompt": "What type does <code>t\"Hi {name}\"</code> produce in Python 3.14?", "options": ["<code>str</code>", "<code>bytes</code>", "<code>string.templatelib.Template</code>", "<code>string.Template</code>"], "answer": 2, "explanation": "<p>Template string literals (PEP 750) produce a <code>Template</code> from <code>string.templatelib</code>, which keeps literal text and interpolations separate. (<code>string.Template</code> is an unrelated older class using <code>$name</code> placeholders.)</p>"},
+  {"type": "multi", "prompt": "Why are template strings useful for HTML and SQL?", "options": ["They run faster than f-strings", "Code can process each interpolated value (for example escape it) before combining", "The literal parts and the values stay separate until something renders them", "They automatically translate text into other languages"], "answer": [1, 2], "explanation": "<p>Because a Template keeps values separate from trusted literal text, a renderer can escape or parameterize only the untrusted values, preventing injection attacks.</p>"},
+  {"type": "single", "prompt": "What is a Unicode code point?", "options": ["A byte", "The number Unicode assigns to a character", "A font", "An encoding like UTF-8"], "answer": 1, "explanation": "<p>Each character has a code point, such as 233 for \"é\". An encoding such as UTF-8 then turns code points into bytes.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(len(\"é\"), len(\"é\".encode(\"utf-8\")))", "answer": "1 2", "explanation": "<p>One code point, but UTF-8 needs two bytes for it.</p>"},
+  {"type": "text", "prompt": "Which <code>bytes</code> method turns bytes back into a <code>str</code>?", "answer": ["decode", "decode()", ".decode()"], "explanation": "<p><code>data.decode(\"utf-8\")</code>. The reverse is <code>text.encode(\"utf-8\")</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(r\"a\\nb\")", "answer": "a\\nb", "explanation": "<p>In a raw string the backslash is kept literally, so <code>\\n</code> is two characters, not a newline.</p>"},
+  {"type": "single", "prompt": "Which comparison is the most robust case-insensitive check?", "options": ["<code>a == b</code>", "<code>a.lower() == b.lower()</code>", "<code>a.casefold() == b.casefold()</code>", "<code>a is b</code>"], "answer": 2, "explanation": "<p><code>casefold()</code> is designed for caseless matching and handles characters like \"ß\" that <code>lower()</code> does not.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Strings are immutable sequences of Unicode code points; quotes are interchangeable, <code>r"..."</code> is raw.</li>
+      <li>Indexes start at 0; negatives count from the end; slices include start and exclude stop.</li>
+      <li>Methods return new strings: <code>strip</code>, <code>split</code>/<code>join</code>, <code>replace</code>,
+        <code>find</code>, <code>startswith</code>, <code>casefold</code>.</li>
+      <li>f-strings with format specs (<code>:&gt;8.2f</code>, <code>:,</code>, <code>:.1%</code>), <code>=</code> for
+        debugging, and nested specs for runtime widths.</li>
+      <li>Python 3.14 <code>t"..."</code> produces a <code>Template</code> of strings and <code>Interpolation</code>s, so
+        values can be escaped or parameterized safely.</li>
+      <li>Encode <code>str</code> to <code>bytes</code> and decode back with an explicit encoding, usually UTF-8.</li>
+    </ul>
+    <div class="flashcards" data-title="Strings and text">
+<script type="application/json">
+[{"front": "<code>s[start:stop:step]</code>", "back": "A slice: includes start, excludes stop. <code>s[::-1]</code> reverses."},
+ {"front": "Negative index", "back": "Counts from the end: <code>s[-1]</code> is the last character."},
+ {"front": "String immutability", "back": "Strings never change; methods return new strings, so assign the result."},
+ {"front": "<code>sep.join(items)</code>", "back": "Glue a list of strings with a separator: <code>\", \".join([\"a\", \"b\"])</code> → <code>\"a, b\"</code>."},
+ {"front": "<code>split()</code> vs <code>split(\",\")</code>", "back": "No argument: split on runs of whitespace. With a separator: split on every occurrence."},
+ {"front": "Raw string", "back": "<code>r\"C:\\new\"</code> keeps backslashes literally. Great for paths and regular expressions."},
+ {"front": "Format spec <code>:&gt;8.2f</code>", "back": "Right-align in width 8 with 2 decimal places."},
+ {"front": "<code>f\"{x=}\"</code>", "back": "Prints <code>x=</code> followed by the value: self-documenting debugging."},
+ {"front": "Template string <code>t\"...\"</code>", "back": "Python 3.14 (PEP 750): produces a <code>Template</code> keeping text and <code>Interpolation</code> objects separate."},
+ {"front": "<code>Interpolation</code> attributes", "back": "<code>value</code>, <code>expression</code>, <code>conversion</code>, <code>format_spec</code>."},
+ {"front": "Code point", "back": "Unicode's number for a character. <code>ord(\"A\") == 65</code>, <code>chr(65) == \"A\"</code>."},
+ {"front": "encode / decode", "back": "<code>str.encode(\"utf-8\")</code> → bytes; <code>bytes.decode(\"utf-8\")</code> → str. Wrong encoding gives mojibake or errors."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/library/stdtypes.html#string-methods">String methods</a> in the standard library reference</li>
+      <li><a href="https://docs.python.org/3.14/library/string.html#format-specification-mini-language">Format specification mini-language</a></li>
+      <li><a href="https://peps.python.org/pep-0750/">PEP 750: Template strings</a> and <a href="https://docs.python.org/3.14/library/string.templatelib.html"><code>string.templatelib</code></a></li>
+      <li><a href="https://docs.python.org/3.14/howto/unicode.html">Unicode HOWTO</a></li>
+      <li><a href="../reference/python-314.html">Python 3.14 reference</a> for the course</li>
+      <li>Next: <a href="m04-control-flow.html">M04 · Control Flow</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

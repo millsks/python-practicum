@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview: Python 3.15 · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-page="ref-py315">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Reference · Python versions · Preview</p>
+    <h1>Preview: Python 3.15</h1>
+    <p class="lede">Python 3.15 was released in October 2026. This course is built on Python 3.14, so everything here
+      is a <strong>preview</strong>: what changes when you move up, how to try it today with Pixi, and what to watch for
+      when you migrate.</p>
+    <div class="lesson-meta"><span>⏱ ~50 min</span><span><span class="tag v315">3.15</span> preview relative to the <span class="tag v314">3.14</span> baseline</span><span>Official notes: <a href="https://docs.python.org/3.15/whatsnew/3.15.html">What's New In Python 3.15</a></span></div>
+    <ul class="objectives">
+      <li>Explain each headline Python 3.15 feature and when you would use it</li>
+      <li>Run 3.15 code locally with <code>pixi exec</code> or a dedicated <code>py315</code> Pixi environment</li>
+      <li>Identify the behavior changes that can break a 3.14 codebase (UTF-8 default, GC, deprecations)</li>
+      <li>Decide when a project is ready to move its baseline from 3.14 to 3.15</li>
+    </ul>
+  </header>
+
+  <aside class="callout py315"><p>The browser on this site runs CPython 3.14, so the cells on this page are marked
+    <span class="tag v315">3.15</span> and are not runnable in place. Each one shows how to run it locally. Everything
+    else in the course stays on 3.14; you never need 3.15 to complete a module or project.</p></aside>
+
+  <section class="lesson-section" id="try-it">
+    <h2>How to try it with Pixi</h2>
+    <p>You don't need to change your project to experiment. <code>pixi exec</code> creates a temporary, cached
+      environment from a spec and runs a command in it:</p>
+<pre data-label="Terminal"><code class="language-bash"># a throwaway 3.15 REPL
+pixi exec --spec "python=3.15" python
+
+# run one file with 3.15
+pixi exec --spec "python=3.15" python lazy_demo.py
+
+# check the version
+pixi exec --spec "python=3.15" python -VV</code></pre>
+    <p>To test a project against 3.15 alongside its 3.14 default, add a <dfn>feature</dfn> and an
+      <dfn>environment</dfn> to <code>pixi.toml</code>. The default environment keeps Python 3.14; the
+      <code>py315</code> environment uses 3.15.</p>
+<pre data-label="pixi.toml"><code class="language-toml">[dependencies]            # shared by every environment; no python pin here
+pytest = "*"
+
+[feature.py314.dependencies]
+python = "3.14.*"
+
+[feature.py315.dependencies]
+python = "3.15.*"
+
+[environments]
+default = ["py314"]       # the course baseline
+py315 = ["py315"]         # the preview</code></pre>
+<pre data-label="Terminal"><code class="language-bash">pixi install -e py315               # solve and install the 3.15 environment
+pixi run -e py315 python -VV         # Python 3.15.x
+pixi run -e py315 pytest             # your test suite on 3.15
+pixi shell -e py315                  # a shell with 3.15 active</code></pre>
+    <aside class="callout pixi"><p>Specs from all features in an environment are <em>combined</em>, and the
+      top-level <code>[dependencies]</code> table is the default feature that every environment includes. If
+      <code>[dependencies]</code> said <code>python = "3.14.*"</code> and the <code>py315</code> feature said
+      <code>"3.15.*"</code>, the environment could not be solved. That's why the Python pin moves into one feature per
+      version. (Alternatively, use <code>py315 = { features = ["py315"], no-default-feature = true }</code>.) If a
+      package has no 3.15 build yet on conda-forge, the solve fails with a clear message, which is itself useful
+      information. See the <a href="pixi-cheatsheet.html#environments">Pixi
+      cheat sheet</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="lazy-imports">
+    <h2>Explicit lazy imports (PEP 810)</h2>
+    <p>A normal <code>import</code> runs the whole module right away. Large CLIs often import dozens of heavy modules
+      they never use in a given run, so <code>--help</code> takes a second. The new <code>lazy</code> soft keyword binds
+      the name immediately but defers the actual import until the name is first used.</p>
+    <div class="two-col">
+      <div><p><strong>Before (3.14):</strong> import inside functions</p>
+<pre><code class="language-python">def export(rows):
+    import json        # hidden dependency
+    return json.dumps(rows)</code></pre></div>
+      <div><p><strong>After (3.15):</strong> lazy at module level</p>
+<pre><code class="language-python">lazy import json
+
+def export(rows):
+    return json.dumps(rows)</code></pre></div>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="Watch the import happen on first use">
+<textarea>
+lazy import json
+lazy from pathlib import Path
+import sys
+
+print("json loaded?", "json" in sys.modules)     # False: nothing imported yet
+print(json.dumps({"ok": True}))                  # first use triggers the import
+print("json loaded?", "json" in sys.modules)     # True
+print(Path("data") / "out.json")
+</textarea>
+    </div>
+    <ul>
+      <li><code>lazy</code> is allowed only at <strong>module scope</strong>: not inside functions, classes, or
+        <code>try</code>/<code>except</code> blocks (those raise <code>SyntaxError</code>).</li>
+      <li><code>lazy from x import *</code> is not allowed.</li>
+      <li>Import errors surface at first use, not at the <code>lazy import</code> line. Keep that in mind when reading
+        tracebacks.</li>
+      <li>Measure the payoff with <code>python -X importtime</code>. <a href="../modules/m39-performance.html">M39</a>
+        covers startup profiling.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="frozendict">
+    <h2><code>frozendict</code> built-in (PEP 814)</h2>
+    <p>Python had <code>frozenset</code> but no immutable mapping in the builtins. <code>frozendict</code> is a
+      read-only, hashable dict: it can be a dict key, a set member, a safe default value, or a constant configuration
+      table that nobody can mutate by accident.</p>
+    <div class="two-col">
+      <div><p><strong>Before (3.14):</strong></p>
+<pre><code class="language-python">from types import MappingProxyType
+DEFAULTS = MappingProxyType({"retries": 3})
+# read-only view, but not hashable</code></pre></div>
+      <div><p><strong>After (3.15):</strong></p>
+<pre><code class="language-python">DEFAULTS = frozendict(retries=3)
+cache[DEFAULTS] = "ok"   # hashable</code></pre></div>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="An immutable, hashable mapping">
+<textarea>
+config = frozendict(host="localhost", port=5432)
+print(config["port"], len(config), "host" in config)
+
+try:
+    config["port"] = 6543
+except TypeError as exc:
+    print("TypeError:", exc)
+
+updated = config | {"port": 6543}        # operators return a new frozendict
+print(updated, type(updated).__name__)
+print(hash(config) == hash(frozendict(port=5432, host="localhost")))   # order does not matter
+seen = {config: "primary"}
+print(seen[frozendict(host="localhost", port=5432)])
+</textarea>
+    </div>
+    <p>Taught alongside immutability in <a href="../modules/m18-functional.html">M18 Functional Python</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="sentinel">
+    <h2><code>sentinel</code> built-in (PEP 661)</h2>
+    <p>A <dfn>sentinel</dfn> is a unique marker value meaning "nothing was passed", used when <code>None</code> is
+      itself a valid argument. The old idiom <code>_MISSING = object()</code> has an ugly repr
+      (<code>&lt;object object at 0x...&gt;</code>) and does not survive copying or pickling well.</p>
+    <div class="two-col">
+      <div><p><strong>Before (3.14):</strong></p>
+<pre><code class="language-python">_MISSING = object()
+
+def get(key, default=_MISSING): ...</code></pre></div>
+      <div><p><strong>After (3.15):</strong></p>
+<pre><code class="language-python">MISSING = sentinel("MISSING")
+
+def get(key, default=MISSING): ...</code></pre></div>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="Distinguish 'not passed' from None">
+<textarea>
+MISSING = sentinel("MISSING")
+
+def lookup(table, key, default=MISSING):
+    if key in table:
+        return table[key]
+    if default is MISSING:
+        raise KeyError(key)
+    return default
+
+table = {"a": 1}
+print(lookup(table, "a"))
+print(lookup(table, "b", None))      # None is a real default here
+print(repr(MISSING))                 # a readable repr
+try:
+    lookup(table, "b")
+except KeyError as exc:
+    print("KeyError:", exc)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="utf8">
+    <h2>UTF-8 is the default encoding (PEP 686)</h2>
+    <p>Until now, <code>open(path)</code> without <code>encoding=</code> used the <em>locale</em> encoding, which is
+      UTF-8 on macOS and Linux but often cp1252 on Windows. The same script could read a file correctly on one machine
+      and produce mojibake (or <code>UnicodeDecodeError</code>) on another. In 3.15 <dfn>UTF-8 mode</dfn> is on by
+      default, so text I/O defaults to UTF-8 everywhere.</p>
+    <div class="runnable" data-python="3.15" data-title="Check the defaults">
+<textarea>
+import locale
+import sys
+
+print("UTF-8 mode:", sys.flags.utf8_mode)                 # 1 by default in 3.15
+print("open() default:", locale.getpreferredencoding(False))
+with open("hello.txt", "w") as f:                         # UTF-8 even on Windows
+    f.write("naïve café ✓\n")
+print(open("hello.txt", "rb").read())
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Best practice has not changed: always pass <code>encoding="utf-8"</code> explicitly
+      (ruff rule <code>PLW1514</code> flags missing encodings). Code that really needs the old behavior should say
+      <code>encoding="locale"</code>; the whole process can opt out with <code>PYTHONUTF8=0</code> or
+      <code>-X utf8=0</code>. <a href="../modules/m09-files-io.html">M09</a> covers encodings.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="unpacking">
+    <h2>Unpacking in comprehensions (PEP 798)</h2>
+    <p>You can now use <code>*</code> and <code>**</code> directly in a comprehension's output expression to flatten one
+      level. It reads exactly like the unpacking you already use in list and dict displays.</p>
+    <div class="two-col">
+      <div><p><strong>Before (3.14):</strong></p>
+<pre><code class="language-python">flat = [x for xs in lists for x in xs]
+merged = {k: v for d in dicts for k, v in d.items()}</code></pre></div>
+      <div><p><strong>After (3.15):</strong></p>
+<pre><code class="language-python">flat = [*xs for xs in lists]
+merged = {**d for d in dicts}</code></pre></div>
+    </div>
+    <div class="runnable" data-python="3.15" data-title="Flatten lists, sets, dicts, and generators">
+<textarea>
+lists = [[1, 2], [3], [], [4, 5]]
+print([*xs for xs in lists])            # [1, 2, 3, 4, 5]
+print({*xs for xs in [[1, 2], [2, 3]]})  # {1, 2, 3}
+
+layers = [{"debug": False}, {"port": 80}, {"debug": True}]
+print({**d for d in layers})            # later keys win: {'debug': True, 'port': 80}
+
+print(sum(*row for row in [[1, 2], [3, 4]]))   # generator form: 10
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="profiling">
+    <h2>The <code>profiling</code> package (PEP 799)</h2>
+    <p>Profilers get a single home. <code>profiling.tracing</code> is the deterministic profiler you know as
+      <code>cProfile</code> (which remains as an alias). <code>profiling.sampling</code> is new: the "Tachyon" sampling
+      profiler, which periodically records the stack of a running process from the outside. Sampling has almost no
+      overhead, so you can point it at a production process, and it can produce flame graphs or a live,
+      top-like view.</p>
+<pre data-label="Terminal (Python 3.15)"><code class="language-bash"># deterministic, function-level counts (formerly cProfile)
+pixi run -e py315 python -m profiling.tracing -s cumtime app.py
+
+# sample a script and write an interactive flame graph
+pixi run -e py315 python -m profiling.sampling run --flamegraph -o profile.html app.py
+
+# attach to a running process and watch it live
+pixi run -e py315 python -m profiling.sampling attach --live 12345</code></pre>
+    <div class="runnable" data-python="3.15" data-title="Tracing profiler from code">
+<textarea>
+import profiling.tracing as tracing
+import pstats
+
+def slow_sum(n):
+    return sum(i * i for i in range(n))
+
+profiler = tracing.Profile()
+profiler.enable()
+slow_sum(300_000)
+profiler.disable()
+pstats.Stats(profiler).sort_stats("cumulative").print_stats(3)
+</textarea>
+    </div>
+    <p>The old pure-Python <code>profile</code> module is deprecated (see <a href="#migration">migration</a>).
+      <a href="../modules/m39-performance.html">M39</a> teaches profiling workflow on 3.14 with <code>cProfile</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="math-integer">
+    <h2><code>math.integer</code> (PEP 791)</h2>
+    <p>The integer-only functions of <code>math</code> get their own module: <code>math.integer</code> holds
+      <code>gcd</code>, <code>lcm</code>, <code>isqrt</code>, <code>comb</code>, <code>perm</code>, and
+      <code>factorial</code>. Keeping them separate from the floating-point functions makes it clear which results
+      are exact. The old names in <code>math</code> continue to work.</p>
+    <div class="runnable" data-python="3.15" data-title="Exact integer math">
+<textarea>
+from math import integer
+
+print(integer.isqrt(10**20 + 1))     # exact floor square root
+print(integer.comb(52, 5))           # poker hands
+print(integer.gcd(84, 36), integer.lcm(4, 6))
+print(integer.factorial(20))
+</textarea>
+    </div>
+    <p>See <a href="../modules/m34-strings-bits-math.html">M34 Strings, Bits &amp; Number Theory</a>.</p>
+  </section>
+
+  <section class="lesson-section" id="stdlib-small">
+    <h2>Smaller library improvements</h2>
+    <h3 id="toml11">TOML 1.1 in <code>tomllib</code></h3>
+    <p><code>tomllib</code> now parses TOML 1.1: inline tables may span several lines and end with a trailing comma, the
+      <code>\e</code> and <code>\xHH</code> escapes are allowed, and the seconds in times are optional.</p>
+    <div class="runnable" data-python="3.15" data-title="TOML 1.1 syntax">
+<textarea>
+import tomllib
+
+doc = tomllib.loads('''
+server = {
+    host = "localhost",
+    port = 8080,
+}
+alarm = 07:30
+bell = "\\e[1mbold\\e[0m"
+''')
+print(doc["server"], doc["alarm"], repr(doc["bell"]))
+</textarea>
+    </div>
+    <h3 id="counter-xor"><code>Counter</code> symmetric difference</h3>
+    <p><code>Counter</code> gains <code>^</code>: for each key, the absolute difference of the counts.</p>
+    <div class="runnable" data-python="3.15" data-title="Counter ^ Counter">
+<textarea>
+from collections import Counter
+
+expected = Counter(apples=3, pears=1)
+scanned = Counter(apples=1, plums=2)
+print(expected ^ scanned)     # Counter({'apples': 2, 'plums': 2, 'pears': 1})
+</textarea>
+    </div>
+    <h3 id="taskgroup-cancel"><code>asyncio.TaskGroup.cancel()</code></h3>
+    <p>A task group can now be cancelled as a whole, which stops every task in it and exits the
+      <code>async with</code> block cleanly. Before, you had to raise a custom exception and catch it outside.</p>
+    <div class="runnable" data-python="3.15" data-title="Stop a group early">
+<textarea>
+import asyncio
+
+async def poll(name):
+    while True:
+        await asyncio.sleep(0.1)
+        print(name, "tick")
+
+async def main():
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(poll("a"))
+        tg.create_task(poll("b"))
+        await asyncio.sleep(0.25)
+        tg.cancel()               # cancels both pollers
+    print("group finished")
+
+asyncio.run(main())
+</textarea>
+    </div>
+    <h3 id="suggestions">Better "did you mean" suggestions</h3>
+    <p><code>AttributeError</code> suggestions now know common names from other languages, so
+      <code>[].push(1)</code> suggests <code>.append</code>.</p>
+<pre data-label="Python 3.15"><code class="language-python">&gt;&gt;&gt; [].push(1)
+AttributeError: 'list' object has no attribute 'push'. Did you mean '.append'?</code></pre>
+  </section>
+
+  <section class="lesson-section" id="typing">
+    <h2>Typing</h2>
+    <table>
+      <thead><tr><th>PEP</th><th>Feature</th><th>What it lets you say</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://peps.python.org/pep-0728/">728</a></td><td><code>TypedDict(closed=True)</code>, <code>extra_items=T</code></td><td>"This dict has exactly these keys" or "extra keys are allowed, with values of type T".</td></tr>
+        <tr><td><a href="https://peps.python.org/pep-0747/">747</a></td><td><code>typing.TypeForm</code></td><td>A parameter that accepts a type expression such as <code>int | None</code>, not just a class.</td></tr>
+        <tr><td><a href="https://peps.python.org/pep-0800/">800</a></td><td>Disjoint bases (<code>@typing.disjoint_base</code>)</td><td>Two classes can never have a common subclass, which lets checkers narrow more precisely.</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-python="3.15" data-title="Closed TypedDicts and TypeForm">
+<textarea>
+from typing import TypedDict, TypeForm
+
+class Point(TypedDict, closed=True):     # no other keys allowed
+    x: int
+    y: int
+
+class Labels(TypedDict, extra_items=str):  # any extra key must map to str
+    name: str
+
+def parse_as[T](value: str, kind: TypeForm[T]) -> T: ...
+
+print(Point.__closed__, Labels.__extra_items__)
+p: Point = {"x": 1, "y": 2}
+print(p)
+</textarea>
+    </div>
+    <p>Typing on 3.14 is taught in <a href="../modules/m16-typing.html">M16</a>. Type checkers adopt new PEPs on their
+      own schedule; check your mypy version's release notes.</p>
+  </section>
+
+  <section class="lesson-section" id="interpreter">
+    <h2>Interpreter and performance</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Upgraded JIT</h4><p>The copy-and-patch JIT introduced experimentally in 3.13/3.14 is
+        significantly upgraded and gives real speedups on many benchmarks. Benchmark your own workload with and without
+        <code>PYTHON_JIT=1</code>.</p></div>
+      <div class="card"><h4>Frame pointers by default (PEP 831)</h4><p>CPython is built with frame pointers, so system
+        profilers (perf, eBPF tools, Instruments) can walk Python and C stacks cheaply and accurately.</p></div>
+      <div class="card"><h4>Generational GC restored</h4><p>3.14's incremental collector is reverted in favor of the
+        classic generational one after it caused memory growth in some workloads.</p></div>
+    </div>
+<pre data-label="Terminal"><code class="language-bash">pixi exec --spec "python=3.15" python -c "import sys; print(sys._jit.is_available())"
+PYTHON_JIT=1 pixi run -e py315 python bench.py</code></pre>
+  </section>
+
+  <section class="lesson-section" id="migration">
+    <h2>Migration notes: 3.14 → 3.15</h2>
+    <table>
+      <thead><tr><th>Change</th><th>Risk</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr><td>UTF-8 is the default text encoding</td><td>Programs on Windows that relied on cp1252 (or another locale encoding) read/write files differently.</td><td>Pass <code>encoding=</code> explicitly everywhere. Use <code>encoding="locale"</code> where you truly need the old behavior; <code>PYTHONUTF8=0</code> as a temporary escape hatch.</td></tr>
+        <tr><td>Generational GC replaces incremental GC</td><td>Pause times and memory profile change in programs with big heaps; code tuned with <code>gc.set_threshold</code> for 3.14 may behave differently.</td><td>Re-measure peak memory and latency with your real workload before switching production.</td></tr>
+        <tr><td><code>profile</code> module deprecated</td><td><code>DeprecationWarning</code> on import; scheduled for removal in 3.17.</td><td>Switch to <code>profiling.tracing</code> (or <code>cProfile</code>, which works on both versions).</td></tr>
+        <tr><td><code>import</code> lines in <code>.pth</code> files deprecated (PEP 829)</td><td>Packages that run startup code via <code>.pth</code> import lines emit warnings.</td><td>Ship a <code>&lt;name&gt;.start</code> file instead, listing <code>pkg.mod:callable</code> entry points; plain path lines in <code>.pth</code> files are still fine.</td></tr>
+        <tr><td>New soft keyword <code>lazy</code></td><td>Very low: soft keywords stay valid as names.</td><td>None, but avoid naming variables <code>lazy</code> in new code for readability.</td></tr>
+        <tr><td>Third-party wheels and conda packages</td><td>Compiled packages need 3.15 builds.</td><td>Solve a <code>py315</code> Pixi environment early; the lockfile shows exactly which packages are available.</td></tr>
+      </tbody>
+    </table>
+    <h3 id="checklist">Upgrade checklist</h3>
+    <ul class="checklist" data-id="ref-py315-upgrade">
+      <li>Add a <code>py315</code> feature and environment, and run <code>pixi install -e py315</code></li>
+      <li>Run the tests with warnings as errors: <code>pixi run -e py315 python -W error -m pytest</code></li>
+      <li>Grep for <code>open(</code> calls without <code>encoding=</code> and fix them</li>
+      <li>Replace <code>import profile</code> with <code>profiling.tracing</code> or <code>cProfile</code></li>
+      <li>Benchmark memory and latency against 3.14</li>
+      <li>Add 3.15 to the CI matrix before making it the default</li>
+    </ul>
+    <aside class="callout think"><p>Most libraries keep supporting the oldest maintained versions. If your package
+      supports 3.12–3.15, can it use <code>frozendict</code> or <code>lazy import</code>? (Only behind a version check,
+      or not at all, because <code>lazy import</code> is a <code>SyntaxError</code> on 3.14.) New syntax is adopted when
+      the oldest supported version has it.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check yourself</h2>
+    <div class="quiz" data-id="ref-py315-quiz">
+<script type="application/json">
+{"title": "Python 3.15 preview quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Where may <code>lazy import json</code> appear?", "options": ["Anywhere an import may appear", "Only at module scope, outside try/except", "Only inside functions", "Only in <code>__init__.py</code>"], "answer": 1, "explanation": "<p>PEP 810 restricts lazy imports to module scope; inside a function, class, or <code>try</code> block it is a <code>SyntaxError</code>.</p>"},
+  {"type": "single", "prompt": "Which command runs <code>app.py</code> with Python 3.15 without changing <code>pixi.toml</code>?", "options": ["<code>pixi run --python 3.15 app.py</code>", "<code>pixi exec --spec \"python=3.15\" python app.py</code>", "<code>pixi global python3.15 app.py</code>", "<code>pixi shell 3.15</code>"], "answer": 1, "explanation": "<p><code>pixi exec --spec</code> builds a temporary cached environment from the spec and runs the command in it.</p>"},
+  {"type": "output", "prompt": "In Python 3.15, what does this print?", "code": "lists = [[1], [2, 3], []]\nprint([*xs for xs in lists])", "answer": "[1, 2, 3]", "explanation": "<p>PEP 798 lets <code>*xs</code> in a comprehension unpack each item into the result, flattening one level.</p>"},
+  {"type": "multi", "prompt": "Which are true of <code>frozendict</code>?", "options": ["It is hashable", "Item assignment raises <code>TypeError</code>", "<code>fd | {...}</code> returns a new frozendict", "It is a subclass of <code>dict</code> you can mutate with <code>update()</code>"], "answer": [0, 1, 2], "explanation": "<p><code>frozendict</code> is immutable and hashable; operators build new objects instead of mutating.</p>"},
+  {"type": "single", "prompt": "What is the default encoding of <code>open()</code> in 3.15?", "options": ["The locale encoding", "UTF-8", "ASCII", "Latin-1"], "answer": 1, "explanation": "<p>PEP 686 turns UTF-8 mode on by default. Still pass <code>encoding=</code> explicitly for clarity.</p>"},
+  {"type": "text", "prompt": "Which 3.15 package contains the Tachyon sampling profiler? (dotted name)", "answer": ["profiling.sampling"], "explanation": "<p><code>python -m profiling.sampling run --flamegraph script.py</code>; the deterministic profiler lives in <code>profiling.tracing</code>.</p>"},
+  {"type": "single", "prompt": "What should a package that runs startup code from a <code>.pth</code> import line do in 3.15?", "options": ["Nothing", "Move the code into a <code>.start</code> file entry point", "Rename the file to <code>.py</code>", "Use <code>sitecustomize</code> only"], "answer": 1, "explanation": "<p>PEP 829 deprecates <code>import</code> lines in <code>.pth</code> files in favor of <code>.start</code> files that list <code>pkg.mod:callable</code> entry points.</p>"},
+  {"type": "output", "prompt": "In Python 3.15, what does this print?", "code": "from collections import Counter\nprint(Counter(a=3) ^ Counter(a=1, b=2))", "answer": "Counter({'a': 2, 'b': 2})", "explanation": "<p>Symmetric difference keeps the absolute difference of counts per key: |3-1| = 2 for a and |0-2| = 2 for b.</p>"},
+  {"type": "single", "prompt": "Which garbage collector does 3.15 use?", "options": ["The incremental collector from 3.14", "The generational collector, restored", "Reference counting only", "A tracing JIT collector"], "answer": 1, "explanation": "<p>The incremental GC added in 3.14 is reverted in 3.15; re-measure memory-heavy workloads when you upgrade.</p>"},
+  {"type": "single", "prompt": "Why use <code>sentinel(\"MISSING\")</code> instead of <code>None</code> as a default?", "options": ["It is faster", "When <code>None</code> is itself a meaningful argument value", "Because <code>None</code> is deprecated", "To make the function async"], "answer": 1, "explanation": "<p>A sentinel is a unique object you can test with <code>is</code>, so callers can still pass <code>None</code> deliberately. PEP 661 gives it a good repr.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Flashcards and further reading</h2>
+    <div class="flashcards" data-title="Python 3.15 preview">
+<script type="application/json">
+[{"front": "PEP 810", "back": "Explicit lazy imports: <code>lazy import x</code>, <code>lazy from x import y</code> (module scope only)."},
+ {"front": "PEP 814", "back": "<code>frozendict</code>: an immutable, hashable built-in mapping."},
+ {"front": "PEP 661", "back": "<code>sentinel(\"NAME\")</code>: unique marker values with a readable repr."},
+ {"front": "PEP 686", "back": "UTF-8 mode on by default; <code>open()</code> defaults to UTF-8."},
+ {"front": "PEP 798", "back": "Unpacking in comprehensions: <code>[*xs for xs in lists]</code>, <code>{**d for d in dicts}</code>."},
+ {"front": "PEP 799", "back": "<code>profiling.tracing</code> (cProfile) and <code>profiling.sampling</code> (Tachyon)."},
+ {"front": "PEP 791", "back": "<code>math.integer</code>: gcd, lcm, isqrt, comb, perm, factorial."},
+ {"front": "PEP 829", "back": "<code>.pth</code> import lines deprecated; use <code>.start</code> files."},
+ {"front": "Try 3.15 with Pixi", "back": "<code>pixi exec --spec \"python=3.15\" python</code> or a <code>py315</code> environment."},
+ {"front": "GC in 3.15", "back": "Generational collector restored (3.14's incremental GC reverted)."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.15/whatsnew/3.15.html">What's New In Python 3.15</a></li>
+      <li><a href="https://peps.python.org/pep-0810/">PEP 810</a>, <a href="https://peps.python.org/pep-0814/">PEP 814</a>, <a href="https://peps.python.org/pep-0686/">PEP 686</a>, <a href="https://peps.python.org/pep-0798/">PEP 798</a>, <a href="https://peps.python.org/pep-0799/">PEP 799</a></li>
+      <li>Back to the baseline: <a href="python-314.html">What's New in Python 3.14</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

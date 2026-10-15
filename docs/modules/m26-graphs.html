@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M26 · Graphs · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m26">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 26</p>
+    <h1>Graphs</h1>
+    <p class="lede">Trees have one parent per node. Remove that restriction and you get a graph: the shape of road
+      maps, social networks, package dependencies, web links, and course prerequisites. Two traversals, breadth-first
+      and depth-first, answer a surprising number of questions about all of them.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m22-stacks-queues.html">M22</a>,
+      <a href="m23-hash-tables.html">M23</a>, <a href="m24-trees.html">M24</a></span></div>
+    <ul class="objectives">
+      <li>Use graph vocabulary: directed, undirected, weighted, degree, path, cycle, connected, DAG</li>
+      <li>Represent graphs as edge lists, adjacency lists (<code>dict[str, set[str]]</code>), and matrices, and choose between them</li>
+      <li>Implement BFS for shortest unweighted paths and DFS recursively and iteratively</li>
+      <li>Find connected components, detect cycles, and test bipartiteness</li>
+      <li>Topologically sort a DAG with Kahn's algorithm, DFS, and <code>graphlib.TopologicalSorter</code></li>
+      <li>Treat grids as implicit graphs for flood fill and island counting</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="vocabulary">
+    <h2>Graph vocabulary</h2>
+    <p>A <strong>graph</strong> G = (V, E) is a set of <strong>vertices</strong> (nodes) V and a set of
+      <strong>edges</strong> E, each connecting two vertices. We write n = |V| and m = |E|; graph algorithm costs are stated
+      in both.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 210" width="640" role="img" aria-label="Undirected graph, directed graph, and weighted graph side by side">
+        <g font-size="13" fill="var(--fg-muted)" text-anchor="middle">
+          <text x="105" y="18">undirected</text><text x="320" y="18">directed (a DAG)</text><text x="535" y="18">weighted</text>
+        </g>
+        <defs><marker id="m26-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
+        <g stroke="var(--fg-muted)" stroke-width="1.6">
+          <line x1="50" y1="60" x2="160" y2="60"/><line x1="50" y1="60" x2="50" y2="160"/><line x1="160" y1="60" x2="50" y2="160"/><line x1="160" y1="60" x2="160" y2="160"/>
+          <line x1="268" y1="60" x2="352" y2="60" marker-end="url(#m26-arrow)"/><line x1="262" y1="74" x2="262" y2="146" marker-end="url(#m26-arrow)"/>
+          <line x1="370" y1="74" x2="370" y2="146" marker-end="url(#m26-arrow)"/><line x1="276" y1="160" x2="352" y2="160" marker-end="url(#m26-arrow)"/>
+          <line x1="480" y1="60" x2="590" y2="60"/><line x1="480" y1="60" x2="535" y2="160"/><line x1="590" y1="60" x2="535" y2="160"/>
+        </g>
+        <g stroke-width="2" fill="var(--bg-elev)" stroke="var(--viz-1)">
+          <circle cx="50" cy="60" r="14"/><circle cx="160" cy="60" r="14"/><circle cx="50" cy="160" r="14"/><circle cx="160" cy="160" r="14"/>
+          <circle cx="262" cy="60" r="14"/><circle cx="370" cy="60" r="14"/><circle cx="262" cy="160" r="14"/><circle cx="370" cy="160" r="14"/>
+          <circle cx="480" cy="60" r="14"/><circle cx="590" cy="60" r="14"/><circle cx="535" cy="160" r="14"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="50" y="65">A</text><text x="160" y="65">B</text><text x="50" y="165">C</text><text x="160" y="165">D</text>
+          <text x="262" y="65">a</text><text x="370" y="65">b</text><text x="262" y="165">c</text><text x="370" y="165">d</text>
+          <text x="480" y="65">X</text><text x="590" y="65">Y</text><text x="535" y="165">Z</text>
+          <text x="535" y="52" fill="var(--viz-2)">7</text><text x="495" y="118" fill="var(--viz-2)">2</text><text x="575" y="118" fill="var(--viz-2)">3</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)"><text x="20" y="198">deg(B) = 3; A-B-C-A is a cycle</text>
+          <text x="245" y="198">no directed cycles</text><text x="455" y="198">X→Z→Y costs 5 &lt; 7</text></g>
+      </svg>
+      <figcaption>Three kinds of graph. In the weighted graph the cheapest route from X to Y has more edges than the direct one.</figcaption>
+    </figure>
+    <table>
+      <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>Undirected / directed</td><td>Edges are two-way (friendship) or one-way arrows (follows, depends on, links to). A directed edge u → v is also called an <em>arc</em>.</td></tr>
+        <tr><td>Weighted</td><td>Each edge carries a number: distance, cost, capacity, latency.</td></tr>
+        <tr><td>Neighbors, degree</td><td>Vertices joined to v by an edge; degree is how many. Directed graphs split it into in-degree and out-degree. The degrees sum to 2m (each edge counted twice).</td></tr>
+        <tr><td>Path, simple path</td><td>A sequence of vertices joined by edges; simple if no vertex repeats. Its length is the number of edges (or total weight).</td></tr>
+        <tr><td>Cycle</td><td>A path that returns to its start. A graph with none is <em>acyclic</em>.</td></tr>
+        <tr><td>Connected, component</td><td>Undirected: every vertex reaches every other. A connected component is a maximal connected piece. (Directed graphs distinguish weakly and strongly connected.)</td></tr>
+        <tr><td>DAG</td><td>Directed acyclic graph: arrows but no directed cycles. Dependencies, schedules, spreadsheets, and git history are DAGs.</td></tr>
+        <tr><td>Sparse / dense</td><td>m close to n (roads, most real networks) versus m close to n² (complete graphs).</td></tr>
+      </tbody>
+    </table>
+    <p>A tree is a connected, acyclic, undirected graph; it always has exactly n − 1 edges. Everything from M24 is a
+      special case of what follows.</p>
+  </section>
+
+  <section class="lesson-section" id="representations">
+    <h2>Representations and their trade-offs</h2>
+    <div class="tabs">
+      <div class="tab" data-label="Edge list"><p>Just the edges: <code>[("A", "B"), ("A", "C"), ...]</code>. This is how
+        graphs arrive from files and databases. Compact, but "who are A's neighbors?" means scanning every edge, O(m).</p></div>
+      <div class="tab" data-label="Adjacency list"><p>A dict from each vertex to the collection of its neighbors:
+        <code>dict[str, set[str]]</code>. Neighbors of v in O(deg v), edge test in O(1) average with sets, and O(n + m)
+        memory. This is the default for almost everything, because real graphs are sparse.</p></div>
+      <div class="tab" data-label="Adjacency matrix"><p>An n × n grid where <code>M[i][j]</code> is 1 (or the weight) if
+        there is an edge i → j. Edge test in O(1) with no hashing, but O(n²) memory even for a sparse graph and O(n) to
+        list neighbors. Good for small dense graphs and for linear algebra (NumPy, graph spectra, counting paths with matrix
+        powers).</p></div>
+    </div>
+    <table>
+      <thead><tr><th>Operation</th><th>Edge list</th><th>Adjacency list (sets)</th><th>Adjacency matrix</th></tr></thead>
+      <tbody>
+        <tr><td>Memory</td><td>O(m)</td><td>O(n + m)</td><td>O(n²)</td></tr>
+        <tr><td>Is there an edge u–v?</td><td>O(m)</td><td>O(1) average</td><td>O(1)</td></tr>
+        <tr><td>List neighbors of v</td><td>O(m)</td><td>O(deg v)</td><td>O(n)</td></tr>
+        <tr><td>Add an edge</td><td>O(1)</td><td>O(1) average</td><td>O(1)</td></tr>
+        <tr><td>Add a vertex</td><td>O(1)</td><td>O(1)</td><td>O(n²) (rebuild)</td></tr>
+        <tr><td>Visit every edge (BFS/DFS)</td><td>O(m) per vertex</td><td>O(n + m)</td><td>O(n²)</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Build all three from one edge list">
+<textarea>
+from collections import defaultdict
+
+edges = [("A", "B"), ("A", "C"), ("B", "C"), ("B", "D")]
+
+# adjacency list (undirected: add both directions)
+adj: dict[str, set[str]] = defaultdict(set)
+for u, v in edges:
+    adj[u].add(v)
+    adj[v].add(u)
+print({v: sorted(ns) for v, ns in sorted(adj.items())})
+print("degree of B:", len(adj["B"]), "  edge A-D?", "D" in adj["A"])
+
+# adjacency matrix
+names = sorted(adj)
+index = {name: i for i, name in enumerate(names)}
+M = [[0] * len(names) for _ in names]
+for u, v in edges:
+    M[index[u]][index[v]] = M[index[v]][index[u]] = 1
+print("   " + "  ".join(names))
+for name, row in zip(names, M):
+    print(name, row)
+</textarea>
+    </div>
+    <aside class="callout warn" data-title="Isolated vertices and defaultdict"><p>A vertex with no edges never appears in
+      an adjacency list built only from edges, so add every vertex explicitly. And beware: <em>reading</em>
+      <code>adj[x]</code> on a <code>defaultdict</code> silently inserts <code>x</code>. Use <code>adj.get(x, ())</code>
+      in algorithms, or convert to a plain dict once the graph is built.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="bfs">
+    <h2>Breadth-first search and shortest paths</h2>
+    <p><strong>BFS</strong> explores in rings: the start vertex, then everything one edge away, then everything two
+      edges away. A FIFO queue makes this happen, because vertices discovered earlier are processed earlier. Mark a
+      vertex as <strong>visited when you enqueue it</strong> (not when you dequeue it), or the same vertex can be queued
+      many times.</p>
+    <p>The key property: the first time BFS reaches a vertex, it has found a path with the <em>fewest edges</em>. So BFS
+      solves shortest paths in <em>unweighted</em> graphs. Record each vertex's <code>parent</code> (the vertex it was
+      discovered from) and you can rebuild the path by walking parents back from the target. Each vertex is enqueued once
+      and each edge examined at most twice, so BFS costs O(n + m).</p>
+    <div class="viz" data-viz="graph" data-config='{"preset": "small", "algorithms": ["bfs", "dfs"], "start": "A"}'></div>
+    <div class="runnable" data-title="BFS with distances and path reconstruction">
+<textarea>
+from collections import deque
+
+graph = {
+    "A": {"B", "C"}, "B": {"A", "D", "E"}, "C": {"A", "F"},
+    "D": {"B"}, "E": {"B", "F"}, "F": {"C", "E", "G"}, "G": {"F"},
+}
+
+def bfs(graph, start):
+    dist, parent = {start: 0}, {start: None}
+    queue = deque([start])
+    while queue:
+        u = queue.popleft()
+        for v in sorted(graph[u]):          # sorted only to make output deterministic
+            if v not in dist:               # mark on discovery
+                dist[v] = dist[u] + 1
+                parent[v] = u
+                queue.append(v)
+    return dist, parent
+
+def path_to(parent, target):
+    if target not in parent:
+        return None
+    path = []
+    while target is not None:
+        path.append(target)
+        target = parent[target]
+    return path[::-1]
+
+dist, parent = bfs(graph, "A")
+print(dist)
+print(path_to(parent, "G"))
+</textarea>
+    </div>
+    <aside class="callout note"><p>BFS gives fewest <em>edges</em>, which is not cheapest <em>cost</em> when edges have
+      weights. For weighted graphs replace the queue with a priority queue (M25) and you get Dijkstra's algorithm, covered
+      in <a href="m31-graph-algorithms.html">M31</a>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="dfs">
+    <h2>Depth-first search: recursive and iterative</h2>
+    <p><strong>DFS</strong> goes as deep as it can along one path, then backtracks. It is the graph version of pre-order
+      tree traversal, with a <code>visited</code> set to avoid going around cycles forever. DFS does not find shortest
+      paths, but its structure (when each vertex is entered and finished) is what cycle detection, topological sorting,
+      and many other algorithms build on. Also O(n + m).</p>
+    <div class="runnable" data-title="Recursive and iterative DFS">
+<textarea>
+graph = {
+    "A": ["B", "C"], "B": ["A", "D", "E"], "C": ["A", "F"],
+    "D": ["B"], "E": ["B", "F"], "F": ["C", "E", "G"], "G": ["F"],
+}
+
+def dfs_recursive(graph, start, visited=None, order=None):
+    if visited is None:
+        visited, order = set(), []
+    visited.add(start)
+    order.append(start)
+    for v in graph[start]:
+        if v not in visited:
+            dfs_recursive(graph, v, visited, order)
+    return order
+
+def dfs_iterative(graph, start):
+    visited, order, stack = set(), [], [start]
+    while stack:
+        u = stack.pop()
+        if u in visited:
+            continue                          # a vertex can be pushed more than once
+        visited.add(u)
+        order.append(u)
+        for v in reversed(graph[u]):          # reversed so neighbors pop in listed order
+            if v not in visited:
+                stack.append(v)
+    return order
+
+print(dfs_recursive(graph, "A"))
+print(dfs_iterative(graph, "A"))
+</textarea>
+    </div>
+    <p>Notice the iterative version marks a vertex visited when it is <em>popped</em>, unlike BFS. That is what makes its
+      order match the recursive one. It also means a vertex can sit on the stack several times; the
+      <code>continue</code> skips the duplicates.</p>
+    <div class="tracer" data-title="Watch the DFS stack">
+<textarea>
+graph = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+visited, order, stack = set(), [], ["A"]
+while stack:
+    u = stack.pop()
+    if u in visited:
+        continue
+    visited.add(u)
+    order.append(u)
+    for v in reversed(graph[u]):
+        if v not in visited:
+            stack.append(v)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: BFS order vs DFS order" data-predict>
+<textarea>
+from collections import deque
+
+g = {1: [2, 3], 2: [4], 3: [4, 5], 4: [6], 5: [6], 6: []}
+
+def bfs(s):
+    seen, q, out = {s}, deque([s]), []
+    while q:
+        u = q.popleft(); out.append(u)
+        for v in g[u]:
+            if v not in seen:
+                seen.add(v); q.append(v)
+    return out
+
+def dfs(u, seen=None):
+    seen = seen if seen is not None else set()
+    seen.add(u)
+    out = [u]
+    for v in g[u]:
+        if v not in seen:
+            out += dfs(v, seen)
+    return out
+
+print(bfs(1), dfs(1))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="components">
+    <h2>Connected components, cycles, and bipartite graphs</h2>
+    <h3>Connected components</h3>
+    <p>Run a traversal from every vertex not yet visited; each run discovers exactly one component. Total cost is still
+      O(n + m) because every vertex and edge is processed once across all runs. Uses: clustering, finding isolated
+      groups in a network, checking whether a road network is fully connected.</p>
+    <div class="runnable" data-title="Label every component">
+<textarea>
+from collections import deque
+
+def components(graph):
+    seen, result = set(), []
+    for s in graph:
+        if s in seen:
+            continue
+        comp, queue = [], deque([s])
+        seen.add(s)
+        while queue:
+            u = queue.popleft()
+            comp.append(u)
+            for v in graph[u]:
+                if v not in seen:
+                    seen.add(v)
+                    queue.append(v)
+        result.append(sorted(comp))
+    return result
+
+friends = {
+    "ana": {"ben"}, "ben": {"ana", "cy"}, "cy": {"ben"},
+    "dee": {"eli"}, "eli": {"dee"},
+    "fay": set(),
+}
+print(components(friends))
+</textarea>
+    </div>
+    <h3>Cycle detection</h3>
+    <p>In an <strong>undirected</strong> graph, a cycle exists if DFS meets an already-visited vertex that is not the
+      vertex it just came from (its parent). In a <strong>directed</strong> graph that test is wrong: reaching a finished
+      vertex through a different route is fine (a diamond A→B→D, A→C→D has no cycle). Instead use three colors:
+      <em>white</em> (unvisited), <em>gray</em> (on the current DFS path), <em>black</em> (finished). An edge into a
+      gray vertex is a <strong>back edge</strong>, and a back edge means a cycle.</p>
+    <div class="runnable" data-title="Three-color cycle detection in a directed graph">
+<textarea>
+WHITE, GRAY, BLACK = 0, 1, 2
+
+def find_cycle(graph):
+    color = {v: WHITE for v in graph}
+    stack_path = []
+
+    def visit(u):
+        color[u] = GRAY
+        stack_path.append(u)
+        for v in graph[u]:
+            if color[v] == GRAY:                         # back edge
+                return stack_path[stack_path.index(v):] + [v]
+            if color[v] == WHITE:
+                found = visit(v)
+                if found:
+                    return found
+        color[u] = BLACK
+        stack_path.pop()
+        return None
+
+    for v in graph:
+        if color[v] == WHITE:
+            found = visit(v)
+            if found:
+                return found
+    return None
+
+diamond = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+loop = {"build": ["test"], "test": ["lint"], "lint": ["build"], "docs": []}
+print("diamond:", find_cycle(diamond))
+print("loop:   ", find_cycle(loop))
+</textarea>
+    </div>
+    <h3>Bipartite check</h3>
+    <p>A graph is <strong>bipartite</strong> if its vertices split into two groups with every edge going between the
+      groups: students and courses, job applicants and jobs, or "can these meetings be split across two rooms so no
+      conflicting pair shares one?" Test it by BFS 2-coloring: color the start 0, its neighbors 1, their neighbors 0, and
+      so on. A conflict (an edge between same colors) means an odd cycle, and the graph is not bipartite.</p>
+    <div class="runnable" data-title="Two-coloring with BFS">
+<textarea>
+from collections import deque
+
+def two_color(graph):
+    color = {}
+    for s in graph:
+        if s in color:
+            continue
+        color[s] = 0
+        queue = deque([s])
+        while queue:
+            u = queue.popleft()
+            for v in graph[u]:
+                if v not in color:
+                    color[v] = 1 - color[u]
+                    queue.append(v)
+                elif color[v] == color[u]:
+                    return None                  # odd cycle
+    return color
+
+square = {1: [2, 4], 2: [1, 3], 3: [2, 4], 4: [3, 1]}
+triangle = {1: [2, 3], 2: [1, 3], 3: [1, 2]}
+print(two_color(square))
+print(two_color(triangle))
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="toposort">
+    <h2>Topological sort</h2>
+    <p>A <strong>topological order</strong> of a DAG lists every vertex before all the vertices it points to. If edges mean
+      "must come before" (u → v: do u before v), it is a valid schedule. Build systems, package installers, spreadsheet
+      recalculation, and course planners all need one. A topological order exists if and only if the graph has no
+      directed cycle, and there are usually many valid orders.</p>
+    <div class="viz" data-viz="graph" data-config='{"preset": "dag", "algorithms": ["topo", "dfs", "bfs"], "default": "topo"}'></div>
+    <div class="two-col">
+      <div class="card"><h4>Kahn's algorithm (BFS-style)</h4><p>Compute every vertex's in-degree. Queue the vertices with
+        in-degree 0 (nothing must precede them). Repeatedly pop one, output it, and decrement its successors' in-degrees;
+        any that reach 0 join the queue. If fewer than n vertices are output, the rest are on a cycle. O(n + m).</p></div>
+      <div class="card"><h4>DFS finishing order</h4><p>Run DFS; when a vertex <em>finishes</em> (all its descendants are
+        done), prepend it to the output. A vertex finishes only after everything it points to, so the reversed finishing
+        order is topological. Combine with three colors to detect cycles at the same time. O(n + m).</p></div>
+    </div>
+    <div class="runnable" data-title="Kahn's algorithm">
+<textarea>
+from collections import deque
+
+# edge u -> v means "u must happen before v"
+steps = {
+    "wake": ["shower", "coffee"],
+    "shower": ["dress"],
+    "coffee": ["breakfast"],
+    "dress": ["leave"],
+    "breakfast": ["leave"],
+    "leave": [],
+}
+
+def kahn(graph):
+    indegree = {v: 0 for v in graph}
+    for u in graph:
+        for v in graph[u]:
+            indegree[v] += 1
+    queue = deque(sorted(v for v, d in indegree.items() if d == 0))
+    order = []
+    while queue:
+        u = queue.popleft()
+        order.append(u)
+        for v in graph[u]:
+            indegree[v] -= 1
+            if indegree[v] == 0:
+                queue.append(v)
+    if len(order) != len(graph):
+        raise ValueError("graph has a cycle")
+    return order
+
+print(kahn(steps))
+</textarea>
+    </div>
+    <p>The standard library has this built in. <code>graphlib.TopologicalSorter</code> takes a mapping from each node to
+      its <em>predecessors</em> (the things it depends on, which is the opposite direction from the dict above), raises
+      <code>graphlib.CycleError</code> on cycles, and supports parallel scheduling: <code>get_ready()</code> returns every
+      node whose dependencies are done, so independent tasks can run at the same time.</p>
+    <div class="runnable" data-title="graphlib.TopologicalSorter">
+<textarea>
+from graphlib import TopologicalSorter, CycleError
+
+# node -> the nodes it depends on
+deps = {
+    "app": {"lib", "config"},
+    "lib": {"utils"},
+    "tests": {"app", "fixtures"},
+    "config": set(),
+    "utils": set(),
+    "fixtures": set(),
+}
+print(list(TopologicalSorter(deps).static_order()))
+
+# Parallel waves: everything in one batch can run concurrently
+ts = TopologicalSorter(deps)
+ts.prepare()
+wave = 1
+while ts.is_active():
+    ready = sorted(ts.get_ready())
+    print(f"wave {wave}: {ready}")
+    ts.done(*ready)
+    wave += 1
+
+try:
+    list(TopologicalSorter({"a": {"b"}, "b": {"a"}}).static_order())
+except CycleError as e:
+    print("CycleError:", e.args[1])
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="grids">
+    <h2>Grids as implicit graphs</h2>
+    <p>Many problems hide a graph without ever building one. In a grid (a maze, an image, a game board), each cell is a
+      vertex and its up/down/left/right neighbors are its edges. You compute neighbors on the fly instead of storing an
+      adjacency list: an <strong>implicit graph</strong>. BFS on a maze finds the shortest route; DFS or BFS from a pixel
+      is the paint-bucket <strong>flood fill</strong>; counting how many traversals you start is the
+      <strong>number of islands</strong>.</p>
+    <div class="viz" data-viz="graph" data-config='{"preset": "grid", "algorithms": ["bfs", "dfs"]}'></div>
+    <div class="runnable" data-title="Number of islands and flood fill">
+<textarea>
+from collections import deque
+
+grid = [
+    "11000",
+    "11010",
+    "00100",
+    "00011",
+]
+rows, cols = len(grid), len(grid[0])
+
+def neighbors(r, c):
+    for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < rows and 0 <= nc < cols:
+            yield nr, nc
+
+def flood(start, seen):
+    cells, queue = [start], deque([start])
+    seen.add(start)
+    while queue:
+        r, c = queue.popleft()
+        for nb in neighbors(r, c):
+            if nb not in seen and grid[nb[0]][nb[1]] == "1":
+                seen.add(nb)
+                cells.append(nb)
+                queue.append(nb)
+    return cells
+
+seen, islands = set(), []
+for r in range(rows):
+    for c in range(cols):
+        if grid[r][c] == "1" and (r, c) not in seen:
+            islands.append(flood((r, c), seen))
+print("islands:", len(islands))
+print("sizes:", [len(i) for i in islands])
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Recursive DFS flood fill on a 1000 × 1000 image will hit the recursion limit. Use BFS
+      or an explicit stack for grids. For 8-directional movement (diagonals), add the four diagonal offsets.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="real-world">
+    <h2>Graphs in the real world</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Social networks</h4><p>Users are vertices and friendships undirected edges (follows are directed).
+        "People you may know" is friends-of-friends, a BFS to depth 2. "Six degrees of separation" is the BFS distance.
+        Communities are dense components.</p></div>
+      <div class="card"><h4>Dependency graphs</h4><p>Packages, build targets, and database migrations form DAGs. Pixi's solver
+        resolves a dependency graph with version constraints; <code>make</code> and CI pipelines topologically sort tasks and
+        run independent ones in parallel; a cycle is an error.</p></div>
+      <div class="card"><h4>Road and route networks</h4><p>Intersections are vertices, roads weighted directed edges
+        (one-way streets, travel times). Shortest routes need Dijkstra or A* (<a href="m31-graph-algorithms.html">M31</a>);
+        cheapest wiring needs a minimum spanning tree.</p></div>
+      <div class="card"><h4>The web and knowledge graphs</h4><p>Pages link to pages: a directed graph with billions of
+        vertices. Crawlers do BFS (you will build one in Project 5), and PageRank scores vertices by the structure of links.</p></div>
+    </div>
+    <div class="runnable" data-title="Friends-of-friends suggestions">
+<textarea>
+from collections import Counter
+
+friends = {
+    "ana": {"ben", "cy", "dee"}, "ben": {"ana", "eli"}, "cy": {"ana", "eli", "fay"},
+    "dee": {"ana", "fay"}, "eli": {"ben", "cy"}, "fay": {"cy", "dee"},
+}
+
+def suggest(user):
+    mutual = Counter()
+    for friend in friends[user]:
+        for fof in friends[friend]:
+            if fof != user and fof not in friends[user]:
+                mutual[fof] += 1
+    return mutual.most_common()
+
+print(suggest("ana"))    # (person, number of mutual friends)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>For real work, the <code>networkx</code> library (<code>pixi add networkx</code>) has
+      hundreds of tested graph algorithms and is the standard for analysis in Python. Implement the algorithms yourself to
+      understand them; use networkx (or <code>rustworkx</code> and <code>igraph</code> for speed) in production.</p></aside>
+    <table>
+      <thead><tr><th>Question</th><th>Tool</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td>Reachable from s? Fewest-edges path?</td><td>BFS</td><td>O(n + m)</td></tr>
+        <tr><td>Explore everything, backtracking structure</td><td>DFS</td><td>O(n + m)</td></tr>
+        <tr><td>Connected components</td><td>BFS/DFS from each unvisited vertex (or union-find, M27)</td><td>O(n + m)</td></tr>
+        <tr><td>Cycle in a directed graph?</td><td>DFS with three colors, or Kahn leftover</td><td>O(n + m)</td></tr>
+        <tr><td>Two-colorable?</td><td>BFS 2-coloring</td><td>O(n + m)</td></tr>
+        <tr><td>Valid order for dependencies</td><td>Kahn, DFS, <code>graphlib</code></td><td>O(n + m)</td></tr>
+        <tr><td>Cheapest weighted path</td><td>Dijkstra (M31)</td><td>O((n + m) log n)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls</h2>
+    <ul>
+      <li><strong>Marking visited too late in BFS.</strong> Mark on enqueue; marking on dequeue lets a vertex enter the queue
+        once per incoming edge.</li>
+      <li><strong>Forgetting disconnected parts.</strong> A single traversal only sees one component. Loop over all vertices.</li>
+      <li><strong>Using the undirected cycle test on a directed graph.</strong> A diamond has no cycle; use three colors.</li>
+      <li><strong>Edge direction confusion.</strong> "a depends on b" and "b before a" are opposite arrows.
+        <code>graphlib</code> wants predecessors; Kahn's algorithm as written above wants successors. Write the convention in
+        a comment.</li>
+      <li><strong>Deep recursion.</strong> Recursive DFS on a long chain or large grid raises <code>RecursionError</code>.</li>
+      <li><strong>Iterating a set gives arbitrary order.</strong> Algorithms are still correct, but output is not
+        reproducible across runs with string hashing. Sort neighbors when determinism matters (tests, teaching).</li>
+      <li><strong>Adjacency matrices for sparse graphs.</strong> A million-vertex road network would need 10<sup>12</sup> cells.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m26-e1" data-title="Build an adjacency list">
+      <div class="exercise-prompt"><p>Write <code>build_graph(vertices, edges, directed=False)</code> returning a plain
+        <code>dict[str, set[str]]</code> that includes every vertex (even isolated ones), and <code>degrees(graph)</code>
+        returning a dict of out-degrees.</p></div>
+<textarea class="starter">
+def build_graph(vertices, edges, directed=False):
+    ...
+
+def degrees(graph):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_undirected():
+    g = build_graph(["A", "B", "C", "D"], [("A", "B"), ("B", "C")])
+    assert g == {"A": {"B"}, "B": {"A", "C"}, "C": {"B"}, "D": set()}, f"got {g}"
+    assert type(g) is dict, "return a plain dict, not a defaultdict"
+
+def test_directed():
+    g = build_graph(["x", "y", "z"], [("x", "y"), ("x", "z"), ("z", "y")], directed=True)
+    assert g == {"x": {"y", "z"}, "y": set(), "z": {"y"}}
+
+def test_degrees_sum():
+    g = build_graph("ABCDE", [("A", "B"), ("A", "C"), ("B", "C"), ("D", "E")])
+    d = degrees(g)
+    assert d == {"A": 2, "B": 2, "C": 2, "D": 1, "E": 1}
+    assert sum(d.values()) == 2 * 4, "undirected degrees sum to twice the edge count"
+
+def test_duplicate_edges():
+    g = build_graph(["A", "B"], [("A", "B"), ("B", "A"), ("A", "B")])
+    assert g == {"A": {"B"}, "B": {"A"}}, "sets absorb duplicate edges"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>{v: set() for v in vertices}</code>, then add each
+        edge once (directed) or in both directions (undirected).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def build_graph(vertices, edges, directed=False):
+    graph = {v: set() for v in vertices}
+    for u, v in edges:
+        graph[u].add(v)
+        if not directed:
+            graph[v].add(u)
+    return graph
+
+def degrees(graph):
+    return {v: len(ns) for v, ns in graph.items()}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m26-e2" data-title="Shortest path with BFS">
+      <div class="exercise-prompt"><p>Write <code>shortest_path(graph, start, goal)</code> returning a list of vertices
+        from <code>start</code> to <code>goal</code> with the fewest edges, or <code>None</code> if unreachable.
+        <code>shortest_path(g, s, s)</code> is <code>[s]</code>.</p></div>
+<textarea class="starter">
+from collections import deque
+
+def shortest_path(graph, start, goal):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+G = {
+    "A": {"B", "C"}, "B": {"A", "D"}, "C": {"A", "D", "E"},
+    "D": {"B", "C", "F"}, "E": {"C", "F"}, "F": {"D", "E"}, "Z": set(),
+}
+
+def test_lengths():
+    p = shortest_path(G, "A", "F")
+    assert p is not None and p[0] == "A" and p[-1] == "F", f"path should run from A to F, got {p}"
+    assert len(p) == 4, "the shortest A-F path has 3 edges (4 vertices)"
+    for u, v in zip(p, p[1:]):
+        assert v in G[u], f"{u}-{v} is not an edge"
+
+def test_same_and_unreachable():
+    assert shortest_path(G, "C", "C") == ["C"]
+    assert shortest_path(G, "A", "Z") is None, "Z is isolated"
+
+def test_directed_respects_arrows():
+    dg = {"a": {"b"}, "b": {"c"}, "c": set()}
+    assert shortest_path(dg, "a", "c") == ["a", "b", "c"]
+    assert shortest_path(dg, "c", "a") is None
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a <code>parent</code> dict that doubles as the visited set.
+        When you dequeue the goal, follow parents back and reverse.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import deque
+
+def shortest_path(graph, start, goal):
+    parent = {start: None}
+    queue = deque([start])
+    while queue:
+        u = queue.popleft()
+        if u == goal:
+            path = []
+            while u is not None:
+                path.append(u)
+                u = parent[u]
+            return path[::-1]
+        for v in graph[u]:
+            if v not in parent:
+                parent[v] = u
+                queue.append(v)
+    return None</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m26-e3" data-title="Count connected components">
+      <div class="exercise-prompt"><p>Write <code>count_components(graph)</code> for an undirected adjacency-list graph.
+        It must work on a 10,000-vertex path graph, so don't use recursion.</p></div>
+<textarea class="starter">
+def count_components(graph):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_small():
+    g = {1: {2}, 2: {1, 3}, 3: {2}, 4: {5}, 5: {4}, 6: set()}
+    assert count_components(g) == 3, "{1,2,3}, {4,5}, {6}"
+    assert count_components({}) == 0
+
+def test_long_path():
+    n = 10_000
+    g = {i: set() for i in range(n)}
+    for i in range(n - 1):
+        g[i].add(i + 1); g[i + 1].add(i)
+    assert count_components(g) == 1, "a long path is one component (avoid recursion)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Loop over vertices; each unvisited vertex starts a new traversal
+        (stack or deque) and increments the count.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def count_components(graph):
+    seen, count = set(), 0
+    for s in graph:
+        if s in seen:
+            continue
+        count += 1
+        seen.add(s)
+        stack = [s]
+        while stack:
+            u = stack.pop()
+            for v in graph[u]:
+                if v not in seen:
+                    seen.add(v)
+                    stack.append(v)
+    return count</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m26-e4" data-title="Detect a directed cycle">
+      <div class="exercise-prompt"><p>Write <code>has_cycle(graph)</code> for a directed graph given as
+        <code>dict[str, list[str]]</code> (every vertex is a key). Diamonds are not cycles; self-loops are.</p></div>
+<textarea class="starter">
+def has_cycle(graph):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_dag():
+    assert has_cycle({"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}) is False, "a diamond is not a cycle"
+    assert has_cycle({}) is False
+
+def test_cycle():
+    assert has_cycle({"a": ["b"], "b": ["c"], "c": ["a"]}) is True
+    assert has_cycle({"x": ["x"]}) is True, "a self-loop is a cycle"
+
+def test_cycle_in_second_component():
+    g = {"p": ["q"], "q": [], "r": ["s"], "s": ["t"], "t": ["r"]}
+    assert has_cycle(g) is True, "check every component"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Three colors: gray while a vertex is on the current path, black when
+        finished. An edge to a gray vertex is a cycle. Kahn's algorithm also works: a cycle leaves vertices unprocessed.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def has_cycle(graph):
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {v: WHITE for v in graph}
+
+    def visit(u):
+        color[u] = GRAY
+        for v in graph[u]:
+            if color[v] == GRAY:
+                return True
+            if color[v] == WHITE and visit(v):
+                return True
+        color[u] = BLACK
+        return False
+
+    return any(color[v] == WHITE and visit(v) for v in graph)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m26-e5" data-title="Topological sort with Kahn's algorithm">
+      <div class="exercise-prompt"><p>Write <code>topo_sort(deps)</code> where <code>deps</code> maps each task to the
+        set of tasks it depends on (like <code>graphlib</code>). Return a list in which every task appears after its
+        dependencies; when several tasks are ready, take them in alphabetical order. Raise <code>ValueError</code> on a
+        cycle. Tasks that appear only as dependencies must be included. Don't use <code>graphlib</code>.</p></div>
+<textarea class="starter">
+import heapq
+
+def topo_sort(deps):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_order():
+    deps = {"app": {"lib", "config"}, "lib": {"utils"}, "tests": {"app"}}
+    assert topo_sort(deps) == ["config", "utils", "lib", "app", "tests"], f"got {topo_sort(deps)}"
+
+def test_valid_against_constraints():
+    deps = {"d": {"b", "c"}, "b": {"a"}, "c": {"a"}, "e": set()}
+    order = topo_sort(deps)
+    pos = {t: i for i, t in enumerate(order)}
+    assert sorted(order) == ["a", "b", "c", "d", "e"], "every task appears exactly once"
+    for task, ds in deps.items():
+        for d in ds:
+            assert pos[d] < pos[task], f"{d} must come before {task}"
+
+def test_cycle():
+    try:
+        topo_sort({"a": {"b"}, "b": {"c"}, "c": {"a"}})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a cycle should raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Build successor lists and in-degrees (in-degree = number of
+        dependencies). Use a heap instead of a deque so the ready set always yields the alphabetically smallest task.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import heapq
+
+def topo_sort(deps):
+    nodes = set(deps)
+    for ds in deps.values():
+        nodes |= set(ds)
+    indegree = {n: 0 for n in nodes}
+    successors = {n: [] for n in nodes}
+    for task, ds in deps.items():
+        for d in ds:
+            successors[d].append(task)
+            indegree[task] += 1
+    ready = [n for n in nodes if indegree[n] == 0]
+    heapq.heapify(ready)
+    order = []
+    while ready:
+        n = heapq.heappop(ready)
+        order.append(n)
+        for s in successors[n]:
+            indegree[s] -= 1
+            if indegree[s] == 0:
+                heapq.heappush(ready, s)
+    if len(order) != len(nodes):
+        raise ValueError("dependency cycle")
+    return order</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m26-e6" data-title="Number of islands">
+      <div class="exercise-prompt"><p>Write <code>num_islands(grid)</code> where <code>grid</code> is a list of strings of
+        <code>"1"</code> (land) and <code>"0"</code> (water). Islands connect horizontally and vertically only. Return 0
+        for an empty grid. A test uses a 300 × 300 all-land grid, so avoid recursion.</p></div>
+<textarea class="starter">
+from collections import deque
+
+def num_islands(grid):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_examples():
+    assert num_islands(["11000", "11010", "00100", "00011"]) == 4
+    assert num_islands(["111", "010", "111"]) == 1, "connected through the middle column"
+    assert num_islands(["101", "010", "101"]) == 5, "diagonals do not connect"
+
+def test_edge_cases():
+    assert num_islands([]) == 0
+    assert num_islands(["000"]) == 0
+
+def test_big_land():
+    assert num_islands(["1" * 300] * 300) == 1
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Scan every cell; each unseen land cell starts a BFS that marks its
+        whole island seen.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import deque
+
+def num_islands(grid):
+    if not grid:
+        return 0
+    rows, cols = len(grid), len(grid[0])
+    seen, count = set(), 0
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] != "1" or (r, c) in seen:
+                continue
+            count += 1
+            seen.add((r, c))
+            queue = deque([(r, c)])
+            while queue:
+                cr, cc = queue.popleft()
+                for nr, nc in ((cr + 1, cc), (cr - 1, cc), (cr, cc + 1), (cr, cc - 1)):
+                    if 0 &lt;= nr &lt; rows and 0 &lt;= nc &lt; cols and grid[nr][nc] == "1" and (nr, nc) not in seen:
+                        seen.add((nr, nc))
+                        queue.append((nr, nc))
+    return count</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a course-prerequisite planner</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Semester planner</span></div>
+      <div class="widget-body">
+        <p>A university publishes its catalog as a TOML file mapping each course to its prerequisites. Build
+          <code>planner.py</code> that turns it into a semester-by-semester plan.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init planner &amp;&amp; cd planner
+pixi add python=3.14 pytest
+pixi run python planner.py catalog.toml --max-per-term 3</code></pre>
+        <pre><code class="language-toml">[courses]
+"CS101" = []
+"CS102" = ["CS101"]
+"MATH120" = []
+"CS201" = ["CS102", "MATH120"]
+"CS250" = ["CS201"]</code></pre>
+        <ul>
+          <li>Load the catalog with <code>tomllib</code>; build the graph; report unknown prerequisites as errors.</li>
+          <li>Detect cycles and print the offending cycle (for example <code>CS201 → CS250 → CS201</code>).</li>
+          <li>Produce a plan of terms where each course's prerequisites were completed in an <em>earlier</em> term, with at
+            most <code>--max-per-term</code> courses per term (Kahn's algorithm by levels, or
+            <code>graphlib.TopologicalSorter</code> with <code>get_ready</code>/<code>done</code>).</li>
+          <li><code>--target CS250</code> plans only the courses needed for one target (DFS over prerequisites first).</li>
+          <li><code>--taken CS101,MATH120</code> skips courses already completed.</li>
+        </ul>
+        <ul class="checklist" data-id="m26-mini">
+          <li>The plan is valid: a test checks every prerequisite sits in an earlier term</li>
+          <li>The term limit is respected and the number of terms is minimal for unlimited capacity (the longest prerequisite chain)</li>
+          <li>Cycles and unknown courses produce clear error messages and a non-zero exit code</li>
+          <li><code>--target</code> and <code>--taken</code> work together</li>
+          <li>Tests cover a diamond, a chain, a cycle, and an empty catalog</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> courses offered only in fall or spring; credit-hour limits instead of course
+          counts; render the prerequisite graph as Mermaid text for the README; compute each course's "unlocks" count to
+          prioritize bottleneck courses.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m26-quiz">
+<script type="application/json">
+{"title": "Graphs quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "An undirected graph has 6 edges. What is the sum of all vertex degrees?", "options": ["6", "12", "36", "It depends on the number of vertices"], "answer": 1, "explanation": "<p>Each edge contributes 1 to the degree of each of its two endpoints, so the degrees sum to 2m = 12 (the handshake lemma).</p>"},
+  {"type": "single", "prompt": "Which representation is best for a sparse road network with a million intersections?", "options": ["Adjacency matrix", "Adjacency list", "Edge list only", "Nested tuples"], "answer": 1, "explanation": "<p>An adjacency list uses O(n + m) memory and lists neighbors in O(degree). A matrix would need 10<sup>12</sup> cells.</p>"},
+  {"type": "single", "prompt": "BFS finds shortest paths when…", "options": ["edges have arbitrary positive weights", "the graph is unweighted (or all weights are equal)", "the graph is a DAG", "the graph is dense"], "answer": 1, "explanation": "<p>BFS discovers vertices in order of edge count from the start. With weights, use Dijkstra's algorithm, which swaps the queue for a priority queue.</p>"},
+  {"type": "single", "prompt": "In BFS, why mark a vertex visited when it is enqueued rather than when it is dequeued?", "options": ["It changes the visiting order", "Otherwise the same vertex can be enqueued many times, wasting time and memory", "Python's deque requires it", "It is needed for DFS too"], "answer": 1, "explanation": "<p>Between being queued and being processed, other neighbors could queue it again. Marking on discovery guarantees each vertex enters the queue once.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from collections import deque\ng = {1: [2, 3], 2: [4], 3: [4], 4: []}\nseen, q, out = {1}, deque([1]), []\nwhile q:\n    u = q.popleft(); out.append(u)\n    for v in g[u]:\n        if v not in seen:\n            seen.add(v); q.append(v)\nprint(out)", "answer": "[1, 2, 3, 4]", "explanation": "<p>BFS visits 1, then its neighbors 2 and 3, then 4 (discovered from 2 and skipped when 3 sees it again).</p>"},
+  {"type": "single", "prompt": "Why is the undirected 'visited neighbor that is not my parent' test wrong for directed graphs?", "options": ["Directed graphs cannot have cycles", "Reaching a finished vertex by a second route (a diamond) is not a cycle", "DFS does not work on directed graphs", "It is too slow"], "answer": 1, "explanation": "<p>In A→B→D, A→C→D, D is visited twice but there is no cycle. Only an edge to a vertex still on the current path (gray) closes a cycle.</p>"},
+  {"type": "multi", "prompt": "Which are true about topological orderings?", "options": ["One exists if and only if the graph is a DAG", "It is always unique", "Kahn's algorithm produces one by repeatedly removing in-degree-0 vertices", "Reversed DFS finishing order is one"], "answer": [0, 2, 3], "explanation": "<p>Many orders are usually valid; for example, independent tasks can come in any order. Both Kahn's algorithm and reversed DFS finishing order work in O(n + m).</p>"},
+  {"type": "text", "prompt": "Which standard-library module provides <code>TopologicalSorter</code>?", "answer": ["graphlib"], "explanation": "<p><code>graphlib.TopologicalSorter</code> takes node → predecessors, offers <code>static_order()</code>, and supports parallel scheduling with <code>prepare</code>, <code>get_ready</code>, and <code>done</code>.</p>"},
+  {"type": "single", "prompt": "A graph has an odd-length cycle. Is it bipartite?", "options": ["Yes, always", "No, never", "Only if it is connected", "Only if it is directed"], "answer": 1, "explanation": "<p>Going around an odd cycle alternates colors an odd number of times, so the start vertex would need both colors. A graph is bipartite exactly when it has no odd cycle.</p>"},
+  {"type": "single", "prompt": "How many islands does this grid have (4-directional)?<br><code>110</code><br><code>001</code><br><code>011</code>", "options": ["1", "2", "3", "4"], "answer": 1, "explanation": "<p>The top-left pair is one island. The cells (1,2), (2,1), (2,2) connect via (2,2), forming a second island.</p>"},
+  {"type": "single", "prompt": "What is the time complexity of BFS or DFS on an adjacency-list graph?", "options": ["O(n)", "O(m)", "O(n + m)", "O(n²)"], "answer": 2, "explanation": "<p>Each vertex is processed once and each adjacency list scanned once. With an adjacency matrix, scanning neighbors costs O(n) per vertex, so O(n²).</p>"},
+  {"type": "single", "prompt": "<code>graphlib.TopologicalSorter({'a': {'b'}})</code>: which comes first in <code>static_order()</code>?", "options": ["'a'", "'b'", "Either, randomly", "It raises CycleError"], "answer": 1, "explanation": "<p>The mapping is node → predecessors, so 'a' depends on 'b' and 'b' must come first.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A graph is vertices plus edges, directed or not, weighted or not. Trees are connected acyclic graphs.</li>
+      <li>Use adjacency lists (<code>dict[str, set[str]]</code>) by default; matrices only for small dense graphs.</li>
+      <li>BFS (queue, mark on enqueue) gives fewest-edge paths; DFS (stack or recursion) gives the structure that cycle detection and topological sort need. Both are O(n + m).</li>
+      <li>Components: start a traversal from each unvisited vertex. Directed cycles: three colors. Bipartite: BFS two-coloring.</li>
+      <li>Topological sort: Kahn's in-degree queue, reversed DFS finish order, or <code>graphlib.TopologicalSorter</code> (node → predecessors).</li>
+      <li>Grids are implicit graphs; compute neighbors on the fly and prefer iteration over recursion.</li>
+    </ul>
+    <div class="flashcards" data-title="Graphs">
+<script type="application/json">
+[{"front": "DAG", "back": "Directed acyclic graph: arrows, no directed cycles. Exactly the graphs that have a topological order."},
+ {"front": "Handshake lemma", "back": "In an undirected graph the degrees sum to 2m."},
+ {"front": "Adjacency list vs matrix memory", "back": "O(n + m) vs O(n²). Lists for sparse graphs, matrices for small dense ones."},
+ {"front": "BFS data structure and guarantee", "back": "FIFO queue; reaches each vertex first by a path with the fewest edges."},
+ {"front": "When to mark visited in BFS", "back": "When the vertex is enqueued (discovered), so it is queued only once."},
+ {"front": "DFS uses…", "back": "A stack: the call stack (recursive) or an explicit list (iterative)."},
+ {"front": "Directed cycle detection", "back": "DFS with white/gray/black; an edge to a gray vertex (back edge) is a cycle."},
+ {"front": "Bipartite test", "back": "BFS two-coloring; an edge between same colors means an odd cycle, not bipartite."},
+ {"front": "Kahn's algorithm", "back": "Queue in-degree-0 vertices; pop, output, decrement successors. Leftover vertices mean a cycle."},
+ {"front": "graphlib.TopologicalSorter input", "back": "A mapping from each node to its predecessors (what it depends on)."},
+ {"front": "Implicit graph", "back": "Neighbors computed on demand (grid cells, puzzle states) instead of stored."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/graphlib.html">graphlib: functionality to operate with graph-like structures</a></li>
+      <li><a href="https://docs.python.org/3/library/collections.html#collections.deque">collections.deque</a></li>
+      <li><a href="https://networkx.org/documentation/stable/">NetworkX documentation</a></li>
+      <li>Next: <a href="m27-advanced-structures.html">M27 Advanced Structures</a> (union-find gives another way to track components), then weighted paths in <a href="m31-graph-algorithms.html">M31 Graph Algorithms</a>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

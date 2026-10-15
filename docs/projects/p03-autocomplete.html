@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 3 · Autocomplete Engine · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p03">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Graded project</p>
+    <h1>Project 3: Autocomplete Engine</h1>
+    <p class="lede">Build the search box of an online store from first principles: a trie for prefixes, a heap for
+      ranking, an LRU cache for speed, and a pruned edit-distance search for typos. Every structure from Part 3
+      earns its place.</p>
+    <div class="lesson-meta"><span>⏱ ~8–12 hours</span><span>Prerequisites: <a href="../modules/m24-trees.html">M24</a>,
+      <a href="../modules/m25-heaps.html">M25</a>, <a href="../modules/m27-advanced-structures.html">M27</a></span></div>
+    <ul class="objectives">
+      <li>Implement a trie with insert, membership, prefix search, pruning delete, and sorted iteration</li>
+      <li>Rank completions with <code>heapq</code> using a composite key that breaks ties deterministically</li>
+      <li>Build an O(1) LRU cache from a dict and a doubly linked list, and invalidate it correctly</li>
+      <li>Combine dynamic programming with tree traversal to find typo-tolerant matches efficiently</li>
+      <li>Design a facade that normalizes Unicode input, loads CSV data, and reports statistics</li>
+      <li>Prove behavior with 68 graded tests, including a performance sanity check</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>You have joined the search team at <em>VoltMart</em>, a fictional electronics store with a catalog of tens of
+      thousands of products. Product managers want a search box that behaves like the ones shoppers already know:</p>
+    <ul>
+      <li>Type <code>ip</code> and see <em>iphone</em>, <em>ipad</em>, <em>ipod</em>, best sellers first.</li>
+      <li>Type <code>IP</code> or <code>Ip</code> and see the same thing. Type <code>CRÈME</code> and match
+        <em>crème brûlée</em> (yes, they also sell espresso machines and the marketing team names bundles after
+        desserts).</li>
+      <li>Type <code>labtop</code> and still see <em>laptop</em>.</li>
+      <li>Click a suggestion and nudge it upward for the next shopper.</li>
+      <li>Answer the same keystrokes again (thousands of shoppers type <code>i</code>) without recomputing.</li>
+    </ul>
+    <p>A sorted list plus <code>bisect</code> could answer prefix queries, and a dict could answer exact lookups, but
+      neither gives you all of the above together. You will assemble the right structures yourself, which is exactly
+      what Part 3 prepared you for.</p>
+    <aside class="callout pro"><p>Production search systems (Elasticsearch completion suggesters, Lucene FSTs, Redis
+      autocomplete modules) use the same ideas: a compressed prefix structure, precomputed or heap-selected top-k
+      lists, result caches, and bounded edit-distance automata. Your version is smaller but structurally honest.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="goals">
+    <h2>Learning goals and feature spec</h2>
+    <div class="card-grid">
+      <div class="card"><h4>Trie</h4><p><code>insert(word, score)</code>, <code>contains</code>/<code>in</code>,
+        <code>starts_with</code>, <code>delete</code> (prunes dead branches), <code>len</code>, iteration in
+        lexicographic order, <code>items(prefix)</code>, <code>words_with_prefix</code>.</p></div>
+      <div class="card"><h4>Ranking</h4><p><code>score</code>, <code>add_score</code>, and
+        <code>top_k(prefix, k)</code> with <code>heapq</code>: highest score first, ties alphabetical.</p></div>
+      <div class="card"><h4>LRU cache</h4><p><code>LRUCache[K, V]</code> with O(1) <code>get</code>/<code>put</code>,
+        <code>keys()</code> (most recent first), <code>hits</code>/<code>misses</code>, <code>clear</code>. No
+        <code>OrderedDict</code>.</p></div>
+      <div class="card"><h4>Typo tolerance</h4><p><code>levenshtein</code>, <code>within_distance</code>, and
+        <code>fuzzy_search(trie, query, max_distance)</code> that prunes while walking.</p></div>
+      <div class="card"><h4>Engine facade</h4><p><code>AutocompleteEngine</code>: <code>add_term</code>,
+        <code>remove_term</code>, <code>load_csv</code>, <code>complete</code>, <code>suggest</code>,
+        <code>record_selection</code>, <code>stats()</code>.</p></div>
+      <div class="card"><h4>Normalization</h4><p><code>normalize(text)</code>: NFC, casefold, collapse whitespace,
+        so every entry point agrees on what a term is.</p></div>
+    </div>
+    <table>
+      <thead><tr><th>Operation</th><th>Target cost</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>insert</code>, <code>contains</code>, <code>delete</code></td><td>O(L)</td><td>One node per character of the term.</td></tr>
+        <tr><td><code>top_k(prefix, k)</code></td><td>O(L + m log k)</td><td>Walk to the prefix node, then heap-select among m matches.</td></tr>
+        <tr><td>cached <code>complete</code></td><td>O(L + k)</td><td>Normalize, one dict lookup, copy the list.</td></tr>
+        <tr><td><code>LRUCache.get</code>/<code>put</code></td><td>O(1)</td><td>Dict finds the node; linked list relinks it.</td></tr>
+        <tr><td><code>fuzzy_search</code></td><td>O(nodes visited × |query|)</td><td>Pruning keeps the visited set small for d ≤ 2.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="architecture">
+    <h2>Architecture</h2>
+    <p>The engine is a <strong>facade</strong>: callers see one class, and the class coordinates the structures
+      behind it. Each module is independently testable, which is how the grading tests are organized.</p>
+    <pre class="mermaid">
+flowchart LR
+  U[Shopper keystrokes] --> N[normalize]
+  N --> E[AutocompleteEngine]
+  E -- "(prefix, k)" --> C[LRUCache]
+  C -- miss --> T[Trie.top_k]
+  T --> H[heapq selection]
+  E -- "fewer than k" --> F[fuzzy_search]
+  F --> T2[Trie nodes + DP rows]
+  CSV[catalog.csv] --> E
+  S[record_selection] --> E
+  E -- "any update" --> X[cache.clear]
+    </pre>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 230" width="560" role="img" aria-label="Trie for app, apple, apply, ape with scores">
+        <g stroke="var(--fg-muted)" stroke-width="1.5">
+          <line x1="280" y1="30" x2="280" y2="70"/><line x1="280" y1="90" x2="280" y2="120"/>
+          <line x1="280" y1="140" x2="200" y2="175"/><line x1="280" y1="90" x2="400" y2="120"/>
+          <line x1="200" y1="190" x2="140" y2="210"/><line x1="200" y1="190" x2="260" y2="210"/>
+        </g>
+        <g fill="var(--bg-elev)" stroke="var(--viz-1)" stroke-width="2">
+          <circle cx="280" cy="22" r="12"/><circle cx="280" cy="80" r="12"/><circle cx="280" cy="130" r="12"/>
+          <circle cx="400" cy="130" r="12" fill="var(--ok-soft)" stroke="var(--ok)"/>
+          <circle cx="200" cy="182" r="12" fill="var(--ok-soft)" stroke="var(--ok)"/>
+        </g>
+        <g font-size="13" text-anchor="middle" class="mono">
+          <text x="280" y="26">·</text><text x="280" y="84">a</text><text x="280" y="134">p</text>
+          <text x="400" y="134">e</text><text x="200" y="186">p</text>
+          <text x="140" y="222">l→e (apple 50)</text><text x="275" y="222">l→y (apply 10)</text>
+          <text x="470" y="134">ape · 5</text><text x="140" y="178">app · 80</text>
+        </g>
+      </svg>
+      <figcaption>Green nodes end a stored term and carry its score. <code>top_k("ap", 2)</code> walks to the
+        <code>p</code> node, gathers the four terms beneath it, and heap-selects app (80) and apple (50).</figcaption>
+    </figure>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Getting started with Pixi</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run projects            # list every project and its status
+pixi run start p03           # copy the starter into work/p03_autocomplete/
+pixi run grade p03           # run all 68 tests against your work/ copy</code></pre>
+    <p>The starter contains the full public API with type hints, docstrings, and <code>TODO(milestone N)</code>
+      comments; every body raises <code>NotImplementedError</code>, so every test fails at first. Work milestone by
+      milestone and watch the failure count fall. Open <code>work/p03_autocomplete/</code> in your editor; the tests
+      live in <code>projects/p03_autocomplete/tests/</code> and you can read them for the exact contract.</p>
+    <aside class="callout pixi"><p>Experiment in a REPL with your package on the path:
+      <code>pixi run python -i -c "import sys; sys.path.insert(0, 'work/p03_autocomplete'); from autocomplete import *"</code>.
+      Lint as you go with <code>pixi run ruff check work/p03_autocomplete</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+
+    <div class="milestone">
+      <h4>Milestone 1: the Trie (<code>trie.py</code>)</h4>
+      <p>Each <code>TrieNode</code> holds a <code>children</code> dict, an <code>is_word</code> flag, and a
+        <code>score</code>. Write a private <code>_find(prefix)</code> helper that returns the node at the end of a
+        path or <code>None</code>; most methods are three lines on top of it. Iteration must be lexicographic, which
+        means visiting children in sorted key order and yielding a node's own word before its descendants.</p>
+      <ul class="checklist" data-id="p03-m1">
+        <li><code>insert</code> creates nodes on demand, rejects the empty string, and counts only new terms</li>
+        <li><code>contains</code> distinguishes words from mere prefixes; <code>in</code> works and rejects non-strings</li>
+        <li><code>delete</code> returns a bool and prunes nodes that no longer lead to any word</li>
+        <li><code>items</code>, <code>words_with_prefix</code>, and <code>iter</code> are sorted regardless of insertion order</li>
+        <li>Unicode terms (<code>日本語</code>, <code>café</code>) work without special cases</li>
+      </ul>
+      <details class="reveal"><summary>Hint: pruning on delete</summary>
+        <p>Record <code>(parent, char)</code> pairs on the way down. After unmarking the final node, walk that list
+          backwards: delete <code>parent.children[char]</code> while the child is neither a word nor has children;
+          stop at the first node that is still needed.</p></details>
+      <details class="reveal"><summary>Hint: iterative sorted DFS</summary>
+        <p>With an explicit stack, push children in <em>reverse</em> sorted order so the smallest pops first. Yield
+          the current node's word when you pop it, before its children are pushed.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 2: weighted completions (<code>Trie.top_k</code>)</h4>
+      <p>Sorting all m matches costs O(m log m). A heap of size k does it in O(m log k), which matters when the
+        prefix is one letter and m is in the thousands. The ordering rule is "highest score first, then
+        alphabetical", which is ascending order of the key <code>(-score, term)</code>.</p>
+      <ul class="checklist" data-id="p03-m2">
+        <li><code>score</code> and <code>add_score</code> raise <code>KeyError</code> for unknown terms</li>
+        <li>Re-inserting a term replaces its score without changing <code>len</code></li>
+        <li><code>top_k</code> uses <code>heapq</code> and breaks ties alphabetically</li>
+        <li>Edge cases: empty prefix ranks everything, unknown prefix returns <code>[]</code>, <code>k=0</code> returns <code>[]</code>, negative k raises</li>
+      </ul>
+      <details class="reveal"><summary>Hint: two heap strategies</summary>
+        <p><code>heapq.nsmallest(k, self.items(prefix), key=lambda p: (-p[1], p[0]))</code> is one line. To build it
+          yourself, keep a min-heap of the k best seen so far keyed by a value whose smallest element is the
+          <em>worst</em> of the k; replace the root when a better item arrives (<code>heapreplace</code>). Python 3.14's
+          <code>heappushpop_max</code> family can help with the inverted order.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 3: an LRU cache from scratch (<code>lru.py</code>)</h4>
+      <p>A dict maps keys to nodes; a doubly linked list orders nodes from most to least recently used. Two
+        <strong>sentinel</strong> nodes (head and tail) mean you never special-case an empty list. A test reads your
+        module's source to make sure <code>OrderedDict</code> and <code>lru_cache</code> are not used.</p>
+      <ul class="checklist" data-id="p03-m3">
+        <li><code>get</code> moves a hit to the front and counts hits and misses</li>
+        <li><code>put</code> updates existing keys in place and evicts from the back when full</li>
+        <li><code>in</code> does not count as a use; <code>keys()</code> is most-recent-first</li>
+        <li>Capacity below 1 raises <code>ValueError</code>; capacity 1 works</li>
+      </ul>
+      <details class="reveal"><summary>Hint: two helpers do all the work</summary>
+        <p><code>_unlink(node)</code> sets <code>node.prev.next = node.next</code> and <code>node.next.prev = node.prev</code>;
+          <code>_push_front(node)</code> splices it between <code>head</code> and <code>head.next</code>. A "move to
+          front" is unlink then push. Eviction is unlink <code>tail.prev</code> and <code>del self._map[node.key]</code>,
+          which is why each node stores its key.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 4: typo tolerance (<code>fuzzy.py</code>)</h4>
+      <p>Computing <code>levenshtein(query, term)</code> for every term costs O(n × L²). Instead, walk the trie and
+        compute one DP row per node: the row for node "lap" is derived from the row for "la". Terms that share a
+        prefix share the work. Better still, if every value in a row exceeds the bound, no extension of that prefix
+        can come back under it, so the whole subtree is skipped.</p>
+      <div class="viz" data-viz="dp-table" data-config='{"problem": "edit-distance", "a": "labtop", "b": "laptop"}'></div>
+      <ul class="checklist" data-id="p03-m4">
+        <li><code>levenshtein</code> passes the classic cases (kitten/sitting = 3, flaw/lawn = 2) using two rows</li>
+        <li><code>within_distance</code> fails fast on length gaps and stops when <code>min(row)</code> exceeds the bound</li>
+        <li><code>fuzzy_search</code> matches a brute-force scan exactly, sorted by (distance, term)</li>
+      </ul>
+      <details class="reveal"><summary>Hint: the row recurrence</summary>
+        <p>For trie character <code>c</code> and parent row <code>prev</code>: <code>row[0] = prev[0] + 1</code>, and for
+          each query position j, <code>row[j] = min(row[j-1] + 1, prev[j] + 1, prev[j-1] + (query[j-1] != c))</code>.
+          The node is a match if it ends a word and <code>row[-1] &lt;= max_distance</code>.</p></details>
+    </div>
+
+    <div class="milestone">
+      <h4>Milestone 5: the engine facade (<code>engine.py</code>)</h4>
+      <p>The facade makes the parts behave as one product. Normalize at every entry point, cache
+        <code>(normalized prefix, k)</code> results, and clear the cache on every mutation: adding, removing,
+        loading, and selecting. A stale cache is the classic bug here, and three tests target it.</p>
+      <ul class="checklist" data-id="p03-m5">
+        <li><code>normalize</code> handles case, <code>ß</code>, combining accents, and whitespace</li>
+        <li><code>load_csv</code> reads a <code>term,score</code> header, skips blank rows, and reports bad rows with line numbers</li>
+        <li><code>complete</code> returns copies, so mutating a result never corrupts the cache</li>
+        <li><code>suggest</code> tops up with typo matches ordered by distance, score, term, without duplicates</li>
+        <li><code>record_selection</code> boosts the score, and <code>stats()</code> reports terms, queries, hits, misses, selections, and hit rate</li>
+        <li>20,000 terms plus 21 queries finish well within the generous time bound</li>
+      </ul>
+      <details class="reveal"><summary>Hint: why copies matter</summary>
+        <p>If <code>complete</code> returns the very list stored in the cache, a caller doing
+          <code>results.append("ad")</code> changes what the next shopper sees. Store one list and return
+          <code>list(cached)</code>. This is the aliasing lesson from <a href="../modules/m02-values-types.html">early in the course</a>, now with consequences.</p></details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="grading">
+    <h2>Grading and rubric</h2>
+    <p><code>pixi run grade p03</code> runs 68 tests in five files, one per milestone. Passing all of them is the
+      automated part; the rubric below is how a reviewer would judge the code.</p>
+    <table class="rubric">
+      <thead><tr><th>Criterion</th><th>Excellent</th><th>Weight</th></tr></thead>
+      <tbody>
+        <tr><td>Correctness</td><td>All 68 tests pass; edge cases (empty prefix, unicode, ties) handled deliberately.</td><td>40%</td></tr>
+        <tr><td>Complexity</td><td>Trie operations O(L); top-k uses a heap; LRU is O(1); fuzzy search prunes.</td><td>20%</td></tr>
+        <tr><td>Design</td><td>Small helpers (<code>_find</code>, <code>_unlink</code>), a facade with no leaking internals, cache invalidation in one place.</td><td>15%</td></tr>
+        <tr><td>Types and docs</td><td>Full hints (generic <code>LRUCache[K, V]</code>), Google docstrings, ruff-clean.</td><td>15%</td></tr>
+        <tr><td>Robustness</td><td>Clear exceptions with useful messages; no aliasing bugs; no prints in library code.</td><td>10%</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li><strong>Fuzzy prefixes:</strong> suggest <em>laptop</em> after only <code>labt</code>. Accept a node when
+        <code>min(row) &lt;= d</code> rather than <code>row[-1]</code> at the end of the query, then collect its subtree.</li>
+      <li><strong>Damerau-Levenshtein:</strong> make the transposition <code>ipda</code> → <code>ipad</code> cost 1
+        (you need the grandparent row).</li>
+      <li><strong>Precomputed top-k:</strong> store the best k terms at each node for O(L) queries, and keep them
+        correct when scores change.</li>
+      <li><strong>Selective invalidation:</strong> clear only cache entries whose prefix is a prefix of the changed term.</li>
+      <li><strong>A CLI:</strong> <code>pixi run python -m autocomplete catalog.csv</code> with an interactive prompt (add a
+        <code>__main__.py</code>).</li>
+      <li><strong>Measure:</strong> use <code>timeit</code> to compare <code>top_k</code> against sorting all matches, and
+        the cache hit rate on a realistic query log (Zipf-distributed prefixes).</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Reflection quiz</h2>
+    <div class="quiz" data-id="p03-quiz">
+<script type="application/json">
+{"title": "Autocomplete engine reflection", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why is a trie a better fit than a dict for prefix completion?", "options": ["Dict lookups are slower than trie lookups", "A trie groups all terms sharing a prefix under one node, so reaching them costs O(L)", "Dicts cannot store strings with Unicode characters", "A trie uses less memory than a dict in every case"], "answer": 1, "explanation": "<p>A dict answers exact keys in O(1) but has no notion of prefix; finding all keys starting with <code>ip</code> means scanning every key. A trie's path for <code>ip</code> leads to exactly the subtree of matches.</p>"},
+  {"type": "single", "prompt": "Which key makes <code>heapq.nsmallest</code> return highest score first with alphabetical tie-breaks?", "options": ["<code>(score, term)</code>", "<code>(-score, term)</code>", "<code>(score, -term)</code>", "<code>(-score, -term)</code>"], "answer": 1, "explanation": "<p>Negating the score turns 'largest first' into 'smallest first'; the term then sorts ascending. Strings cannot be negated, which is why the score is the part that flips.</p>"},
+  {"type": "multi", "prompt": "Which engine operations must invalidate the completion cache?", "options": ["<code>add_term</code>", "<code>remove_term</code>", "<code>record_selection</code>", "<code>load_csv</code>", "<code>complete</code>"], "answer": [0, 1, 2, 3], "explanation": "<p>Anything that changes terms or scores can change a ranking. <code>complete</code> only reads; it fills the cache rather than invalidating it.</p>"},
+  {"type": "single", "prompt": "Why does each LRU node store its key as well as its value?", "options": ["So keys() can be sorted", "So eviction can delete the evicted node's entry from the dict", "Because Python linked lists require it", "To compute the hash faster"], "answer": 1, "explanation": "<p>Eviction starts from the list (the node before the tail). To remove it from the dict as well you need its key, and only the node can tell you.</p>"},
+  {"type": "output", "prompt": "What is <code>levenshtein('ipda', 'ipad')</code> with plain Levenshtein (no transpositions)?", "code": "levenshtein('ipda', 'ipad')", "answer": "2", "explanation": "<p>Swapping two adjacent letters needs two substitutions (d→a, a→d). Damerau-Levenshtein counts a transposition as one edit; that is a stretch goal.</p>"},
+  {"type": "single", "prompt": "In <code>fuzzy_search</code>, when is it safe to skip a node's whole subtree?", "options": ["When the node is not a word", "When <code>row[-1]</code> exceeds the bound", "When every value in the node's row exceeds the bound", "When the node has more than 26 children"], "answer": 2, "explanation": "<p>The minimum of a row never decreases as the prefix grows, so if even the best cell exceeds d, no longer term can get back under it. <code>row[-1]</code> alone is not enough: 'lap' is far from 'laptop' at the last cell but close in the middle.</p>"},
+  {"type": "text", "prompt": "Which <code>str</code> method folds case more aggressively than <code>lower()</code>, mapping <code>ß</code> to <code>ss</code>?", "answer": ["casefold", "casefold()", "str.casefold"], "explanation": "<p><code>casefold()</code> is designed for caseless matching. Combine it with <code>unicodedata.normalize('NFC', ...)</code> so composed and decomposed accents compare equal.</p>"},
+  {"type": "single", "prompt": "<code>complete()</code> returns the cached list object itself, and a caller appends to it. What happens?", "options": ["Nothing; lists are copied on return", "The next identical query returns the modified list", "Python raises an error because cached values are frozen", "The cache evicts the entry"], "answer": 1, "explanation": "<p>Returning a reference shares the object (aliasing). Return <code>list(cached)</code> so each caller gets its own copy.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

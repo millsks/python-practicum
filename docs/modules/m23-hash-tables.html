@@ -1,0 +1,1398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M23 · Hash Tables &amp; Sets · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m23">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 3 · Data Structures · Module 23</p>
+    <h1>Hash Tables &amp; Sets</h1>
+    <p class="lede">The hash table is the reason <code>dict</code> and <code>set</code> lookups take the same time whether
+      they hold ten items or ten million. It is arguably the most useful data structure in practical programming, and
+      Python itself is built on it: modules, classes, objects, and keyword arguments are all dicts underneath.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m19-complexity.html">M19</a>,
+      <a href="m06-collections.html">M06</a>, <a href="m11-data-model.html">M11</a></span></div>
+    <ul class="objectives">
+      <li>Explain how a hash function turns a key into an array index, and what makes a hash function good</li>
+      <li>Use <code>hash()</code> correctly, and explain why string hashes change between runs (<code>PYTHONHASHSEED</code>)</li>
+      <li>Implement <code>__hash__</code> and <code>__eq__</code> that respect the hash/equality contract</li>
+      <li>Compare separate chaining and open addressing, and reason about load factor and resizing</li>
+      <li>Describe CPython's compact dict: an indices array, an insertion-ordered entries array, and perturbed probing</li>
+      <li>Build your own <code>HashMap</code>, and use <code>set</code>, <code>frozenset</code>, <code>Counter</code>, <code>defaultdict</code>, and <code>OrderedDict</code> well</li>
+      <li>Solve hash-based problems: two-sum, anagram groups, de-duplication, and the first unique character</li>
+    </ul>
+  </header>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="motivation">
+    <h2>The problem: look up by key, instantly</h2>
+    <p>You have a million user records and need to find the one whose email is <code>ada@example.com</code>. In a list you
+      scan: O(n). If the list were sorted by email you could binary search: O(log n), but keeping it sorted makes inserts
+      O(n). Arrays give O(1) access, but only by <em>integer position</em>.</p>
+    <p>The hash table's idea is beautifully simple: <strong>turn the key into an integer position</strong>. Compute a number
+      from the key, reduce it to an index into an array, and store the record there. To find it again, compute the same
+      number and look in the same place. No scanning.</p>
+    <div class="runnable" data-title="List scan vs dict lookup">
+<textarea>
+import timeit
+
+n = 200_000
+emails = [f"user{i}@example.com" for i in range(n)]
+records = [(e, i) for i, e in enumerate(emails)]
+by_email = dict(records)
+target = emails[-1]
+
+def scan():
+    for email, rec in records:
+        if email == target:
+            return rec
+
+print("list scan :", min(timeit.repeat(scan, number=5, repeat=3)) / 5, "s")
+print("dict get  :", min(timeit.repeat(lambda: by_email[target], number=5, repeat=3)) / 5, "s")
+</textarea>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="hash-functions">
+    <h2>The hash-function idea</h2>
+    <p>A <strong>hash function</strong> maps a key of any size to a fixed-size integer, its <strong>hash</strong>. A hash
+      table then maps that integer into one of <em>m</em> <strong>buckets</strong> (array slots), usually with
+      <code>hash % m</code>, or <code>hash &amp; (m − 1)</code> when <em>m</em> is a power of two (a bit mask is cheaper than
+      division).</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 200" role="img" aria-label="Keys pass through a hash function and modulo into bucket indexes">
+        <g font-size="13" text-anchor="middle">
+          <g fill="var(--viz-1)" fill-opacity="0.15" stroke="var(--viz-1)">
+            <rect x="20" y="30" width="100" height="32" rx="4"/><rect x="20" y="84" width="100" height="32" rx="4"/>
+            <rect x="20" y="138" width="100" height="32" rx="4"/>
+          </g>
+          <g fill="var(--fg)"><text x="70" y="51">"cat"</text><text x="70" y="105">"dog"</text><text x="70" y="159">"emu"</text></g>
+          <rect x="170" y="70" width="110" height="60" rx="8" fill="var(--viz-2)" fill-opacity="0.15" stroke="var(--viz-2)"/>
+          <text x="225" y="98" fill="var(--fg)">hash(key)</text><text x="225" y="116" fill="var(--fg-muted)" font-size="11">% 8</text>
+          <g stroke="var(--fg-muted)" stroke-width="1.3" fill="none">
+            <line x1="120" y1="46" x2="170" y2="85"/><line x1="120" y1="100" x2="170" y2="100"/><line x1="120" y1="154" x2="170" y2="115"/>
+          </g>
+          <g stroke="var(--viz-3)" fill="none">
+            <rect x="380" y="10" width="140" height="22"/><rect x="380" y="32" width="140" height="22"/>
+            <rect x="380" y="54" width="140" height="22"/><rect x="380" y="76" width="140" height="22"/>
+            <rect x="380" y="98" width="140" height="22"/><rect x="380" y="120" width="140" height="22"/>
+            <rect x="380" y="142" width="140" height="22"/><rect x="380" y="164" width="140" height="22"/>
+          </g>
+          <g fill="var(--fg-muted)" font-size="11">
+            <text x="365" y="25">0</text><text x="365" y="47">1</text><text x="365" y="69">2</text><text x="365" y="91">3</text>
+            <text x="365" y="113">4</text><text x="365" y="135">5</text><text x="365" y="157">6</text><text x="365" y="179">7</text>
+          </g>
+          <g fill="var(--fg)" font-size="12"><text x="450" y="47">"dog" → rec</text><text x="450" y="113">"cat" → rec</text><text x="450" y="179">"emu" → rec</text></g>
+          <g stroke="var(--fg-muted)" stroke-width="1.3" fill="none">
+            <line x1="280" y1="90" x2="380" y2="109"/><line x1="280" y1="100" x2="380" y2="43"/><line x1="280" y1="110" x2="380" y2="175"/>
+          </g>
+        </g>
+      </svg>
+      <figcaption>The same key always lands in the same bucket, so lookup goes straight there.</figcaption>
+    </figure>
+    <p>What makes a hash function good for a hash table?</p>
+    <ul>
+      <li><strong>Deterministic:</strong> the same key always gives the same hash (within one program run).</li>
+      <li><strong>Consistent with equality:</strong> keys that are equal must hash equally.</li>
+      <li><strong>Uniform:</strong> keys spread evenly over the buckets, so no bucket gets crowded.</li>
+      <li><strong>Fast:</strong> it runs on every lookup.</li>
+    </ul>
+    <p>Note what is <em>not</em> required: hash tables do not need cryptographic strength or uniqueness. Different keys may
+      share a hash; that is a <strong>collision</strong>, and every hash table must handle it.</p>
+    <div class="runnable" data-title="A bad hash and a better one">
+<textarea>
+from collections import Counter
+
+words = ["cat", "act", "tac", "dog", "god", "odg", "emu", "mue", "bird", "drib"]
+
+def bad_hash(s):
+    return sum(ord(c) for c in s)          # anagrams always collide!
+
+def poly_hash(s):
+    h = 0
+    for c in s:
+        h = (h * 31 + ord(c)) & 0xFFFFFFFF # order matters: like Java's String.hashCode
+    return h
+
+m = 8
+print("bad :", Counter(bad_hash(w) % m for w in words))
+print("poly:", Counter(poly_hash(w) % m for w in words))
+</textarea>
+    </div>
+    <p>Summing character codes ignores order, so every anagram collides. A polynomial hash weighs each position differently.
+      Python's real string hash is stronger still, as the next section explains.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> hash → index via modulo (or a bit mask). Equal keys must hash
+      equally; different keys may collide.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="python-hash">
+    <h2><code>hash()</code> in Python, and PYTHONHASHSEED</h2>
+    <p>The built-in <code>hash(obj)</code> calls <code>obj.__hash__()</code> and returns a 64-bit signed integer on 64-bit
+      platforms. Some details worth knowing:</p>
+    <ul>
+      <li><strong>Small integers hash to themselves</strong>: <code>hash(42) == 42</code>. Larger ints are reduced modulo the
+        prime 2⁶¹ − 1 (<code>sys.hash_info.modulus</code>).</li>
+      <li><strong><code>hash(-1) == -2</code></strong>, because CPython's C API uses −1 to signal an error.</li>
+      <li><strong>Numbers that compare equal hash equally</strong> across types: <code>hash(1) == hash(1.0) == hash(True)</code>.
+        That is why <code>{1: "a", 1.0: "b"}</code> has only one key.</li>
+      <li><strong>Tuples</strong> combine the hashes of their items; <strong>lists, dicts, and sets are unhashable</strong>
+        because they are mutable.</li>
+      <li><strong><code>str</code> and <code>bytes</code> hashes are randomised per process.</strong></li>
+    </ul>
+    <div class="runnable" data-title="Explore hash()">
+<textarea>
+import sys
+
+print(hash(42), hash(-1), hash(2**61 - 1))
+print(hash(1) == hash(1.0) == hash(True), {1: "a", 1.0: "b", True: "c"})
+print(hash((1, 2)) == hash((1, 2)), hash("abc"))   # run again: the str hash changes!
+print(sys.hash_info.algorithm, sys.hash_info.width, "bits")
+try:
+    hash([1, 2])
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <h3>Why string hashes vary between runs</h3>
+    <p>If an attacker knows your hash function, they can craft thousands of keys that all land in the same bucket. A web
+      framework that puts request parameters into a dict would then do O(n²) work per request: a
+      <strong>hash-flooding</strong> denial-of-service attack, demonstrated against many languages in 2011. Python's defence
+      (default since 3.3) is to hash <code>str</code> and <code>bytes</code> with <strong>SipHash</strong>, a fast keyed hash,
+      using a random key chosen at interpreter start-up. The attacker can't predict the buckets, so they can't flood one.</p>
+    <p>The <code>PYTHONHASHSEED</code> environment variable controls the key: unset or <code>random</code> means random;
+      an integer fixes it (and <code>0</code> disables randomisation), which is occasionally useful for reproducing a bug.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi run python -c "print(hash('abc'))"      # differs each run
+pixi run python -c "print(hash('abc'))"
+PYTHONHASHSEED=0 pixi run python -c "print(hash('abc'))"   # same every run</code></pre>
+    <aside class="callout warn"><p>Never persist <code>hash()</code> values (in files, databases, or caches shared between
+      processes) or use them to pick a shard. They are only stable within one process. For stable fingerprints use
+      <code>hashlib</code> (for example <code>hashlib.sha256(data).hexdigest()</code>). This also means set iteration order
+      of strings can differ between runs; never depend on it.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>hash()</code> is for in-memory tables only. str/bytes hashes
+      are salted per process to defeat hash flooding.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="contract">
+    <h2>The <code>__hash__</code> / <code>__eq__</code> contract</h2>
+    <p>A hash table finds a key by going to the bucket for its hash, then checking candidates with <code>==</code>. For that
+      to work, one rule must hold:</p>
+    <p style="text-align:center"><strong>If <code>a == b</code>, then <code>hash(a) == hash(b)</code>.</strong></p>
+    <p>The reverse is not required (collisions are allowed). A second rule follows: <strong>an object's hash must not change
+      while it is in a hash table</strong>, otherwise it sits in the bucket for its old hash and lookups look in the wrong
+      place. In practice, that means hash only immutable state.</p>
+    <p>Python enforces part of this for you. By default, objects compare and hash by identity. If a class defines
+      <code>__eq__</code> but not <code>__hash__</code>, Python sets <code>__hash__ = None</code>, making instances
+      unhashable, because the inherited identity hash would break the rule.</p>
+    <div class="runnable" data-title="Get the contract right">
+<textarea>
+class Point:
+    __slots__ = ("x", "y")
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __eq__(self, other):
+        if not isinstance(other, Point):
+            return NotImplemented
+        return (self.x, self.y) == (other.x, other.y)
+
+    def __hash__(self):
+        return hash((self.x, self.y))      # hash exactly the fields used by __eq__
+
+    def __repr__(self):
+        return f"Point({self.x}, {self.y})"
+
+visited = {Point(1, 2), Point(1, 2), Point(3, 4)}
+print(visited, Point(1, 2) in visited)
+
+class OnlyEq:
+    def __init__(self, v): self.v = v
+    def __eq__(self, other): return self.v == other.v
+
+try:
+    {OnlyEq(1)}
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: mutate a key after inserting it" data-predict>
+<textarea>
+class Box:
+    def __init__(self, v): self.v = v
+    def __eq__(self, other): return self.v == other.v
+    def __hash__(self): return hash(self.v)
+
+b = Box(1)
+s = {b}
+b.v = 2              # the hash changes while b is inside the set!
+print(b in s, Box(1) in s, len(s))
+</textarea>
+    </div>
+    <p>The object is still in the set, but neither its new value nor its old value finds it: the new hash points at the
+      wrong bucket, and the old value no longer compares equal. This is why mutable built-ins are unhashable.</p>
+    <aside class="callout pro"><p>The easy, correct way: <code>@dataclass(frozen=True)</code> (<a href="m13-dataclasses.html">M13</a>)
+      generates <code>__eq__</code> and a matching <code>__hash__</code> over the fields and forbids mutation. Named tuples
+      and plain tuples work too.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> equal implies equal hashes; hash only the fields
+      <code>__eq__</code> compares, and only immutable ones.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="collisions">
+    <h2>Collisions are inevitable</h2>
+    <p>If there are more possible keys than buckets (always), some keys must share a bucket: that is the
+      <strong>pigeonhole principle</strong>. Collisions also arrive much sooner than intuition suggests. The
+      <strong>birthday paradox</strong> says that with just 23 people, there is a better than even chance two share a
+      birthday out of 365. In general, with <em>m</em> buckets, you expect the first collision after about √(πm/2) insertions.</p>
+    <div class="runnable" data-title="How soon is the first collision?">
+<textarea>
+import math
+import random
+
+def first_collision(m, rng):
+    seen = set()
+    while True:
+        b = rng.randrange(m)
+        if b in seen:
+            return len(seen) + 1
+        seen.add(b)
+
+rng = random.Random(1)
+for m in [365, 1_000, 1_000_000]:
+    avg = sum(first_collision(m, rng) for _ in range(300)) / 300
+    print(f"m={m:>9,}: first collision after ~{avg:6.0f} keys (theory {math.sqrt(math.pi * m / 2):6.0f})")
+</textarea>
+    </div>
+    <p>So a hash table's real design question is not "how do we avoid collisions?" but "how do we resolve them cheaply?"
+      There are two families of answers.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="resolution">
+    <h2>Separate chaining vs open addressing</h2>
+    <div class="two-col">
+      <div>
+        <h3>Separate chaining</h3>
+        <p>Each bucket holds a small list (a "chain") of the entries that hashed there. Insert appends to the chain (or
+          replaces an existing key); lookup scans only that chain. Deletion just removes from the chain. Simple and robust;
+          Java's <code>HashMap</code> uses chains (switching long ones to trees).</p>
+      </div>
+      <div>
+        <h3>Open addressing</h3>
+        <p>All entries live in the array itself, one per slot. On a collision, follow a <strong>probe sequence</strong> to the
+          next candidate slot until you find the key or an empty slot. <strong>Linear probing</strong> tries
+          <code>i, i+1, i+2, …</code>. Cache-friendly and compact, but deletion needs care. Python's dict uses open addressing.</p>
+      </div>
+    </div>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 200" role="img" aria-label="Left: chaining with lists per bucket. Right: linear probing placing a colliding key in the next slot">
+        <g font-size="12" text-anchor="middle">
+          <text x="140" y="18" fill="var(--fg)">chaining</text>
+          <g stroke="var(--viz-1)" fill="none">
+            <rect x="40" y="30" width="40" height="30"/><rect x="40" y="60" width="40" height="30"/>
+            <rect x="40" y="90" width="40" height="30"/><rect x="40" y="120" width="40" height="30"/>
+          </g>
+          <g fill="var(--fg-muted)" font-size="11"><text x="28" y="50">0</text><text x="28" y="80">1</text><text x="28" y="110">2</text><text x="28" y="140">3</text></g>
+          <g fill="var(--viz-2)" fill-opacity="0.15" stroke="var(--viz-2)">
+            <rect x="110" y="62" width="60" height="26" rx="4"/><rect x="190" y="62" width="60" height="26" rx="4"/>
+            <rect x="110" y="122" width="60" height="26" rx="4"/>
+          </g>
+          <g fill="var(--fg)"><text x="140" y="80">cat</text><text x="220" y="80">emu</text><text x="140" y="140">dog</text></g>
+          <g stroke="var(--fg-muted)" fill="none"><line x1="80" y1="75" x2="110" y2="75"/><line x1="170" y1="75" x2="190" y2="75"/><line x1="80" y1="135" x2="110" y2="135"/></g>
+
+          <text x="440" y="18" fill="var(--fg)">linear probing</text>
+          <g stroke="var(--viz-1)" fill="none">
+            <rect x="400" y="30" width="80" height="30"/><rect x="400" y="60" width="80" height="30"/>
+            <rect x="400" y="90" width="80" height="30"/><rect x="400" y="120" width="80" height="30"/>
+          </g>
+          <g fill="var(--fg-muted)" font-size="11"><text x="388" y="50">0</text><text x="388" y="80">1</text><text x="388" y="110">2</text><text x="388" y="140">3</text></g>
+          <g fill="var(--fg)"><text x="440" y="80">cat</text><text x="440" y="110" fill="var(--viz-3)">emu</text><text x="440" y="140">dog</text></g>
+          <path d="M480,72 C510,75 510,100 482,104" fill="none" stroke="var(--viz-3)" stroke-width="1.5"/>
+          <text x="440" y="180" fill="var(--fg-muted)">emu hashed to 1 (taken) → probe 2</text>
+        </g>
+      </svg>
+      <figcaption>Same three keys; "cat" and "emu" both hash to bucket 1.</figcaption>
+    </figure>
+    <h3>Deletion in open addressing: tombstones</h3>
+    <p>Suppose "cat" (slot 1) and "emu" (slot 2, displaced) are stored, and you delete "cat" by emptying slot 1. A lookup of
+      "emu" starts at slot 1, sees empty, and stops: "not found". Wrong! Probing relies on an unbroken run. The fix is a
+      <strong>tombstone</strong> (CPython calls it a <em>dummy</em>): a marker meaning "something was here; keep probing."
+      Lookups skip tombstones; inserts may reuse them; a resize discards them.</p>
+    <p>Try all three strategies in the visualizer: chaining, linear probing, and Python's perturbed probing.</p>
+    <div class="tabs">
+      <div class="tab" data-label="Chaining"><div class="viz" data-viz="hash-table" data-config='{"size": 8, "strategy": "chaining"}'></div></div>
+      <div class="tab" data-label="Linear probing"><div class="viz" data-viz="hash-table" data-config='{"size": 8, "strategy": "linear"}'></div></div>
+      <div class="tab" data-label="Python (perturbed)"><div class="viz" data-viz="hash-table" data-config='{"size": 8, "strategy": "python"}'></div></div>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> chaining stores lists per bucket; open addressing probes for
+      another slot and needs tombstones for deletion.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="load-factor">
+    <h2>Load factor and resizing</h2>
+    <p>The <strong>load factor</strong> α = n / m is the number of entries divided by the number of buckets. It controls
+      performance:</p>
+    <ul>
+      <li><strong>Chaining:</strong> with a uniform hash, the average chain length is α, so an unsuccessful lookup inspects
+        about α entries and a successful one about 1 + α/2. Chaining keeps working above α = 1, just more slowly.</li>
+      <li><strong>Linear probing:</strong> Knuth's classic analysis gives about ½(1 + 1/(1 − α)) probes for a successful
+        search and ½(1 + 1/(1 − α)²) for an unsuccessful one. At α = 0.5 that is 1.5 and 2.5 probes; at α = 0.9 it is 5.5 and
+        50.5. Performance falls off a cliff as the table fills, because occupied slots clump into long runs
+        (<strong>primary clustering</strong>).</li>
+    </ul>
+    <p>So hash tables <strong>resize</strong>: when α passes a threshold (often 0.75 for chaining; CPython's dict uses 2/3),
+      allocate a table about twice as large and <strong>rehash</strong> every entry into it, since each key's bucket
+      depends on <em>m</em>. Rehashing is O(n), but geometric growth makes insertion amortized O(1), exactly the
+      dynamic-array argument from <a href="m19-complexity.html#amortized">M19</a>.</p>
+    <div class="runnable" data-title="Probes vs load factor (linear probing simulation)">
+<textarea>
+import random
+
+def average_probes(alpha, m=10_007, trials=2000, seed=0):
+    rng = random.Random(seed)
+    table = [False] * m
+    for _ in range(int(alpha * m)):
+        i = rng.randrange(m)
+        while table[i]:
+            i = (i + 1) % m
+        table[i] = True
+    total = 0
+    for _ in range(trials):              # unsuccessful search: probe until empty
+        i, probes = rng.randrange(m), 1
+        while table[i]:
+            i, probes = (i + 1) % m, probes + 1
+        total += probes
+    return total / trials
+
+for alpha in [0.25, 0.5, 0.66, 0.75, 0.9]:
+    theory = 0.5 * (1 + 1 / (1 - alpha) ** 2)
+    print(f"alpha={alpha:4}: measured {average_probes(alpha):6.2f} probes, theory {theory:6.2f}")
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> keep α bounded by resizing geometrically; that makes operations
+      O(1) on average and insertion amortized O(1). The O(n) worst case needs pathological collisions.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="cpython-dict">
+    <h2>How CPython's dict works</h2>
+    <p>Since Python 3.6, CPython uses a <strong>compact dict</strong> (proposed by Raymond Hettinger). Instead of one sparse
+      array of (hash, key, value) entries, it uses two arrays:</p>
+    <ul>
+      <li>a sparse <strong>indices</strong> array, the actual hash table, whose slots hold small integers: an index into the
+        entries array, or EMPTY, or DUMMY (a tombstone). Each slot is 1, 2, 4, or 8 bytes depending on the table size, so
+        small dicts use 1-byte indices.</li>
+      <li>a dense <strong>entries</strong> array of (hash, key, value) records, appended in <strong>insertion order</strong>.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 580 220" role="img" aria-label="Compact dict: an indices array of 8 small slots pointing into a dense entries array in insertion order">
+        <g font-size="12" text-anchor="middle">
+          <text x="150" y="20" fill="var(--fg)">indices (the hash table, 8 slots)</text>
+          <g stroke="var(--viz-1)" fill="none">
+            <rect x="20" y="30" width="32" height="30"/><rect x="52" y="30" width="32" height="30"/><rect x="84" y="30" width="32" height="30"/>
+            <rect x="116" y="30" width="32" height="30"/><rect x="148" y="30" width="32" height="30"/><rect x="180" y="30" width="32" height="30"/>
+            <rect x="212" y="30" width="32" height="30"/><rect x="244" y="30" width="32" height="30"/>
+          </g>
+          <g fill="var(--fg)"><text x="36" y="50">·</text><text x="68" y="50">2</text><text x="100" y="50">·</text><text x="132" y="50">0</text>
+            <text x="164" y="50">·</text><text x="196" y="50">·</text><text x="228" y="50">1</text><text x="260" y="50">·</text></g>
+          <g fill="var(--fg-muted)" font-size="10"><text x="36" y="72">0</text><text x="68" y="72">1</text><text x="100" y="72">2</text><text x="132" y="72">3</text>
+            <text x="164" y="72">4</text><text x="196" y="72">5</text><text x="228" y="72">6</text><text x="260" y="72">7</text></g>
+          <text x="440" y="20" fill="var(--fg)">entries (dense, insertion order)</text>
+          <g fill="var(--viz-2)" fill-opacity="0.12" stroke="var(--viz-2)">
+            <rect x="330" y="30" width="230" height="30"/><rect x="330" y="60" width="230" height="30"/><rect x="330" y="90" width="230" height="30"/>
+          </g>
+          <g fill="var(--fg)" text-anchor="start">
+            <text x="340" y="50">0: hash("b")  "b" → 2</text><text x="340" y="80">1: hash("a")  "a" → 1</text><text x="340" y="110">2: hash("c")  "c" → 3</text>
+          </g>
+          <g stroke="var(--fg-muted)" stroke-width="1.2" fill="none">
+            <path d="M132,60 C132,140 300,140 330,45"/><path d="M228,60 C228,120 300,120 330,75"/><path d="M68,60 C68,170 300,170 330,105"/>
+          </g>
+          <text x="290" y="205" fill="var(--fg-muted)">d = {"b": 2, "a": 1, "c": 3}: iteration walks entries in order; lookups go through indices</text>
+        </g>
+      </svg>
+      <figcaption>Iteration is a fast scan of the dense entries array, which is why dicts preserve insertion order.</figcaption>
+    </figure>
+    <p>Benefits: memory drops sharply (the sparse part holds tiny integers instead of 24-byte entries), iteration is a
+      tight loop over a dense array, and <strong>insertion order is preserved</strong> for free. Order preservation became a
+      language guarantee in Python 3.7.</p>
+    <h3>Lookup and perturbed probing</h3>
+    <p>The table size is a power of two, so <code>mask = size − 1</code> and the first slot is <code>hash &amp; mask</code>,
+      which uses only the hash's low bits. Linear probing would cluster badly for keys like consecutive integers (which hash
+      to themselves), so CPython mixes in the higher bits as it probes:</p>
+    <pre><code class="language-python"># Simplified from Objects/dictobject.c
+perturb = hash_value                      # treated as unsigned
+i = hash_value &amp; mask
+while True:
+    ix = indices[i]
+    if ix == EMPTY:
+        return NOT_FOUND                  # an empty slot ends the probe sequence
+    if ix != DUMMY:
+        h, k, v = entries[ix]
+        if h == hash_value and (k is key or k == key):   # identity check first: fast path
+            return v
+    perturb &gt;&gt;= 5                          # PERTURB_SHIFT
+    i = (i * 5 + perturb + 1) &amp; mask</code></pre>
+    <p>The recurrence <code>i = 5i + 1 (mod 2ᵏ)</code> on its own visits every slot exactly once before repeating, so the
+      probe always finds an empty slot. Adding <code>perturb</code> lets every bit of the hash influence the path early on;
+      after enough shifts <code>perturb</code> becomes 0 and the pure <code>5i + 1</code> sequence takes over. Note the
+      comparison order: hash first (a cheap integer compare that rules out most non-matches), then identity, then
+      <code>==</code>.</p>
+    <h3>Growth</h3>
+    <p>A dict keeps its table at most 2/3 full ("usable" slots). When an insert would exceed that, it resizes to a larger
+      power of two (based on about 3× the number of items) and rebuilds the indices, also discarding tombstones. The
+      smallest table has 8 slots and 5 usable entries, which is why you see the size jump at the 6th key:</p>
+    <div class="runnable" data-title="Watch a dict resize">
+<textarea>
+import sys
+
+d = {}
+last = sys.getsizeof(d)
+print(f"len  0: {last} bytes")
+for i in range(50):
+    d[i] = i
+    size = sys.getsizeof(d)
+    if size != last:
+        print(f"len {len(d):2}: {size} bytes  (resized)")
+        last = size
+</textarea>
+    </div>
+    <aside class="callout note" data-title="Key-sharing dicts"><p>Instances of the same class usually have the same attribute
+      names. CPython stores those keys once, shared by all instances (PEP 412), and in modern versions keeps the values
+      inline in the object until you actually ask for <code>obj.__dict__</code>. That is why plain objects are cheaper than
+      they used to be, though <code>__slots__</code> is still smaller (<a href="m21-linked-lists.html#pythonic">M21</a>).</p></aside>
+    <aside class="callout py315"><p>Python 3.15 adds a built-in immutable, hashable mapping, <code>frozendict</code> (PEP 814).
+      Because it cannot change, it can be a dict key or a set member, and it is safe to share between threads.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Preview: frozendict as a dict key">
+<textarea>
+config = frozendict(host="localhost", port=8080)
+cache = {config: "connection-1"}
+print(cache[frozendict(port=8080, host="localhost")])
+try:
+    config["port"] = 9090
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> CPython's dict = sparse indices + dense insertion-ordered entries,
+      power-of-two size, perturbed probing, resize at 2/3 full.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="sets">
+    <h2>Sets and frozenset</h2>
+    <p>A <code>set</code> is a hash table of keys with no values. It gives O(1) average membership, insertion, and removal,
+      and fast set algebra. CPython's set has its own implementation tuned for membership tests: it tries a few adjacent
+      slots (cheap, cache-friendly linear probes) before jumping with perturbation, and it does not preserve insertion order.</p>
+    <table>
+      <thead><tr><th>Operation</th><th>Operator</th><th>Average cost</th></tr></thead>
+      <tbody>
+        <tr><td>membership</td><td><code>x in s</code></td><td>O(1)</td></tr>
+        <tr><td>union</td><td><code>s | t</code></td><td>O(len(s) + len(t))</td></tr>
+        <tr><td>intersection</td><td><code>s &amp; t</code></td><td>O(min(len(s), len(t)))</td></tr>
+        <tr><td>difference</td><td><code>s - t</code></td><td>O(len(s))</td></tr>
+        <tr><td>symmetric difference</td><td><code>s ^ t</code></td><td>O(len(s) + len(t))</td></tr>
+        <tr><td>subset</td><td><code>s &lt;= t</code></td><td>O(len(s))</td></tr>
+      </tbody>
+    </table>
+    <p><code>frozenset</code> is the immutable, hashable version: use it as a dict key or as an element of another set.</p>
+    <div class="runnable" data-title="Set algebra and frozenset">
+<textarea>
+python_devs = {"ada", "grace", "linus", "guido"}
+rust_devs = {"linus", "graydon", "ada"}
+
+print("both    :", sorted(python_devs & rust_devs))
+print("either  :", sorted(python_devs | rust_devs))
+print("only py :", sorted(python_devs - rust_devs))
+print("exactly one:", sorted(python_devs ^ rust_devs))
+
+# Sets of sets need frozenset
+teams = {frozenset({"ada", "grace"}), frozenset({"grace", "ada"}), frozenset({"linus"})}
+print(len(teams), "distinct teams")
+print({frozenset("listen"): "anagram key"}[frozenset("silent")])
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+s = {3, 1, 3, 2, 1}
+s.add(2)
+s.discard(5)
+print(len(s), 2 in s, {1, 2} <= s)
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>{}</code> is an empty <em>dict</em>, not an empty set. Write <code>set()</code>.</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="collections">
+    <h2>Counter, defaultdict, and OrderedDict</h2>
+    <div class="tabs">
+      <div class="tab" data-label="Counter">
+        <p>A dict subclass for counting hashable things. Missing keys count as 0. <code>most_common(k)</code> returns the top
+          <em>k</em>; counters support <code>+</code>, <code>-</code>, <code>&amp;</code> (min), and <code>|</code> (max).</p>
+        <pre><code class="language-python">from collections import Counter
+c = Counter("mississippi")
+c.most_common(2)          # [('i', 4), ('s', 4)]
+c["z"]                    # 0, no KeyError
+c.update("sip")           # add more counts
+c.total()                 # sum of all counts</code></pre>
+      </div>
+      <div class="tab" data-label="defaultdict">
+        <p>A dict that calls a factory to create a value for a missing key on first access. Perfect for grouping.</p>
+        <pre><code class="language-python">from collections import defaultdict
+groups = defaultdict(list)
+for word in ["apple", "avocado", "banana"]:
+    groups[word[0]].append(word)
+# {'a': ['apple', 'avocado'], 'b': ['banana']}</code></pre>
+        <p>Beware: merely <em>reading</em> <code>groups["z"]</code> inserts an empty list. Use <code>"z" in groups</code> or
+          <code>groups.get("z")</code> to test without inserting.</p>
+      </div>
+      <div class="tab" data-label="OrderedDict">
+        <p>Regular dicts preserve insertion order now, so <code>OrderedDict</code> is for its extra behaviour:
+          <code>move_to_end(key, last=True)</code> and <code>popitem(last=False)</code> in O(1), and order-sensitive equality.
+          That makes it a ready-made LRU cache skeleton.</p>
+        <pre><code class="language-python">from collections import OrderedDict
+lru = OrderedDict()
+lru["a"] = 1; lru["b"] = 2; lru["c"] = 3
+lru.move_to_end("a")        # a was used: now most recent
+lru.popitem(last=False)     # evict least recent: ('b', 2)</code></pre>
+      </div>
+    </div>
+    <div class="runnable" data-title="All three together">
+<textarea>
+from collections import Counter, defaultdict, OrderedDict
+
+text = "the quick brown fox jumps over the lazy dog the end"
+counts = Counter(text.split())
+print(counts.most_common(3))
+
+by_length = defaultdict(list)
+for word in counts:
+    by_length[len(word)].append(word)
+print(dict(sorted(by_length.items())))
+
+print(OrderedDict(a=1, b=2) == OrderedDict(b=2, a=1), dict(a=1, b=2) == dict(b=2, a=1))
+</textarea>
+    </div>
+    <div class="viz" data-viz="lru-cache" data-config='{"capacity": 3}'></div>
+    <aside class="callout py315"><p>Python 3.15 adds symmetric difference to <code>Counter</code>: <code>c1 ^ c2</code> keeps,
+      for each element, the absolute difference of the counts, for example
+      <code>Counter(a=3, b=1) ^ Counter(a=1, b=1)</code> gives <code>Counter({'a': 2})</code>.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Preview: Counter ^">
+<textarea>
+from collections import Counter
+
+print(Counter(a=3, b=1) ^ Counter(a=1, b=1, c=2))
+</textarea>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="problems">
+    <h2>Hash-based problem solving</h2>
+    <p>A huge class of problems becomes O(n) once you ask: "what do I need to look up, and can I keep it in a dict or set?"</p>
+    <div class="card-grid">
+      <div class="card"><h4>Two-sum</h4><p>Find indexes of two numbers summing to a target. For each <code>x</code>, check
+        whether <code>target − x</code> was already seen (dict from value to index). O(n) instead of O(n²).</p></div>
+      <div class="card"><h4>Group anagrams</h4><p>Words are anagrams iff their sorted letters match. Use
+        <code>"".join(sorted(w))</code> (or a letter-count tuple) as a dict key mapping to a list.</p></div>
+      <div class="card"><h4>De-duplicate</h4><p><code>set(items)</code> if order doesn't matter;
+        <code>list(dict.fromkeys(items))</code> keeps first-seen order (dicts are ordered).</p></div>
+      <div class="card"><h4>First unique character</h4><p>Count with <code>Counter</code> in one pass, then scan again for the
+        first character with count 1. Two O(n) passes.</p></div>
+    </div>
+    <div class="runnable" data-title="Two-sum, both ways">
+<textarea>
+import time
+
+def two_sum_slow(nums, target):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] + nums[j] == target:
+                return i, j
+
+def two_sum(nums, target):
+    seen = {}                       # value -> index
+    for i, x in enumerate(nums):
+        if target - x in seen:
+            return seen[target - x], i
+        seen[x] = i
+
+nums = list(range(4000))
+target = nums[-1] + nums[-2]
+for fn in (two_sum_slow, two_sum):
+    t0 = time.perf_counter()
+    result = fn(nums, target)
+    print(f"{fn.__name__:13} {result}  {time.perf_counter() - t0:.4f}s")
+</textarea>
+    </div>
+    <aside class="callout think"><p>Why does <code>two_sum</code> check <code>target - x in seen</code> <em>before</em> adding
+      <code>x</code>? (So an element can't pair with itself: with <code>[3]</code> and target 6, it must not return
+      <code>(0, 0)</code>.)</p></aside>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="pitfalls">
+    <h2>Pitfalls</h2>
+    <ul>
+      <li><strong>Mutable keys:</strong> lists can't be keys; convert to tuples. Custom classes must not hash mutable state.</li>
+      <li><strong>Defining <code>__eq__</code> without <code>__hash__</code></strong> makes instances unhashable (by design).</li>
+      <li><strong>Mutating a dict while iterating</strong> raises <code>RuntimeError: dictionary changed size during iteration</code>.
+        Iterate over <code>list(d)</code> if you must delete.</li>
+      <li><strong>Relying on <code>hash()</code> across runs</strong>, or on set order of strings. Use <code>hashlib</code> and <code>sorted</code>.</li>
+      <li><strong><code>1</code>, <code>1.0</code>, and <code>True</code> are the same key.</strong></li>
+      <li><strong>Float keys</strong> suffer from rounding: <code>0.1 + 0.2</code> is not the key <code>0.3</code>. NaN never equals
+        itself, so each NaN is a separate key.</li>
+      <li><strong>defaultdict reads insert keys.</strong></li>
+      <li><strong>Worst case is O(n)</strong> per operation if many keys collide (bad custom <code>__hash__</code>, e.g.
+        <code>return 1</code>).</li>
+    </ul>
+    <div class="runnable" data-title="A terrible __hash__">
+<textarea>
+import time
+
+class Bad:
+    def __init__(self, v): self.v = v
+    def __eq__(self, other): return self.v == other.v
+    def __hash__(self): return 1            # every key collides
+
+class Good(Bad):
+    def __hash__(self): return hash(self.v)
+
+for cls in (Good, Bad):
+    t0 = time.perf_counter()
+    s = {cls(i) for i in range(2000)}
+    print(f"{cls.__name__}: {time.perf_counter() - t0:.3f}s for 2000 inserts")
+</textarea>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="practice">
+    <h2>Practice: build HashMap, then use hashing</h2>
+
+    <div class="exercise" data-id="m23-e1" data-title="HashMap with separate chaining">
+      <div class="exercise-prompt">
+        <p>Build <code>HashMap</code> with separate chaining. <code>self._buckets</code> is a list of <code>capacity</code> lists,
+          each holding <code>[key, value]</code> pairs. Implement <code>_bucket(key)</code> (return the list for
+          <code>hash(key) % len(self._buckets)</code>), <code>put(key, value)</code> (insert or replace),
+          <code>get(key, default=None)</code>, <code>__len__</code>, plus <code>__getitem__</code> (raise <code>KeyError</code>
+          if missing) and <code>__setitem__</code>. Do not resize yet.</p>
+      </div>
+<textarea class="starter">
+class HashMap:
+    def __init__(self, capacity=8):
+        self._buckets = [[] for _ in range(capacity)]
+        self._size = 0
+
+    def _bucket(self, key):
+        ...
+
+    def put(self, key, value):
+        ...
+
+    def get(self, key, default=None):
+        ...
+
+    def __getitem__(self, key):
+        ...
+
+    def __setitem__(self, key, value):
+        self.put(key, value)
+
+    def __len__(self):
+        return self._size
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_put_get():
+    m = HashMap()
+    m.put("a", 1)
+    m["b"] = 2
+    assert m.get("a") == 1 and m["b"] == 2, "stored values should be retrievable"
+    assert m.get("zzz") is None and m.get("zzz", 0) == 0, "get returns the default for missing keys"
+
+def test_replace_does_not_grow():
+    m = HashMap()
+    m["k"] = 1
+    m["k"] = 2
+    assert m["k"] == 2 and len(m) == 1, "putting an existing key replaces the value and keeps len at 1"
+
+def test_missing_raises():
+    m = HashMap()
+    try:
+        m["nope"]
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("m[missing] should raise KeyError")
+
+def test_collisions_in_one_bucket():
+    m = HashMap(capacity=1)
+    for i in range(50):
+        m[i] = i * i
+    assert len(m._buckets) == 1 and len(m._buckets[0]) == 50, "with capacity 1 every key chains into bucket 0"
+    assert all(m[i] == i * i for i in range(50)), "lookups must work with every key in one chain"
+
+def test_equal_keys_unify():
+    m = HashMap()
+    m[1] = "int"
+    m[1.0] = "float"
+    assert len(m) == 1 and m[True] == "float", "1, 1.0 and True are equal keys, like in dict"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>put</code>, loop over the bucket's pairs; if
+        <code>pair[0] == key</code>, set <code>pair[1] = value</code> and return. Otherwise append <code>[key, value]</code> and
+        increment <code>_size</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class HashMap:
+    def __init__(self, capacity=8):
+        self._buckets = [[] for _ in range(capacity)]
+        self._size = 0
+
+    def _bucket(self, key):
+        return self._buckets[hash(key) % len(self._buckets)]
+
+    def put(self, key, value):
+        bucket = self._bucket(key)
+        for pair in bucket:
+            if pair[0] == key:
+                pair[1] = value
+                return
+        bucket.append([key, value])
+        self._size += 1
+
+    def get(self, key, default=None):
+        for k, v in self._bucket(key):
+            if k == key:
+                return v
+        return default
+
+    def __getitem__(self, key):
+        for k, v in self._bucket(key):
+            if k == key:
+                return v
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        self.put(key, value)
+
+    def __len__(self):
+        return self._size</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m23-e2" data-title="Resize, delete, and iterate">
+      <div class="exercise-prompt">
+        <p>Extend the chaining <code>HashMap</code>: after an insertion, if <code>len / capacity &gt; 0.75</code>, double the
+          number of buckets and <strong>rehash</strong> every pair. Add <code>__delitem__</code> (<code>KeyError</code> if missing),
+          <code>__contains__</code>, <code>__iter__</code> (yield keys), <code>items()</code>, and a <code>load_factor</code>
+          property.</p>
+      </div>
+<textarea class="starter">
+class HashMap:
+    MAX_LOAD = 0.75
+
+    def __init__(self, capacity=8):
+        self._buckets = [[] for _ in range(capacity)]
+        self._size = 0
+
+    def _bucket(self, key):
+        return self._buckets[hash(key) % len(self._buckets)]
+
+    @property
+    def load_factor(self):
+        ...
+
+    def _resize(self, new_capacity):
+        ...
+
+    def __setitem__(self, key, value):
+        bucket = self._bucket(key)
+        for pair in bucket:
+            if pair[0] == key:
+                pair[1] = value
+                return
+        bucket.append([key, value])
+        self._size += 1
+        # TODO: resize when the load factor exceeds MAX_LOAD
+
+    def __getitem__(self, key):
+        for k, v in self._bucket(key):
+            if k == key:
+                return v
+        raise KeyError(key)
+
+    def __delitem__(self, key):
+        ...
+
+    def __contains__(self, key):
+        ...
+
+    def __iter__(self):
+        ...
+
+    def items(self):
+        ...
+
+    def __len__(self):
+        return self._size
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_resizes_and_keeps_data():
+    m = HashMap(capacity=4)
+    for i in range(100):
+        m[f"k{i}"] = i
+    assert len(m) == 100, "all 100 keys should be stored"
+    assert m.load_factor <= 0.75, f"load factor should stay at most 0.75, got {m.load_factor}"
+    assert all(m[f"k{i}"] == i for i in range(100)), "every key must be found after rehashing"
+    assert len(m._buckets) >= 134, "capacity should have doubled several times"
+
+def test_doubling_threshold():
+    m = HashMap(capacity=4)
+    for i in range(3):
+        m[i] = i
+    assert len(m._buckets) == 4, "3/4 = 0.75 is not above the limit; no resize yet"
+    m[3] = 3
+    assert len(m._buckets) == 8, "4/4 exceeds 0.75, so capacity doubles to 8"
+
+def test_delete():
+    m = HashMap()
+    m["a"] = 1
+    m["b"] = 2
+    del m["a"]
+    assert "a" not in m and "b" in m and len(m) == 1, "del removes only that key"
+    try:
+        del m["a"]
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("deleting a missing key should raise KeyError")
+
+def test_iteration():
+    m = HashMap()
+    data = {"x": 1, "y": 2, "z": 3}
+    for k, v in data.items():
+        m[k] = v
+    assert sorted(m) == ["x", "y", "z"], "iterating yields the keys"
+    assert sorted(m.items()) == sorted(data.items()), "items() yields (key, value) tuples"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>_resize</code>: save the old buckets, create
+        <code>new_capacity</code> empty ones, then re-insert every pair into <code>self._bucket(k)</code> (the bucket depends
+        on the new capacity). Don't call <code>__setitem__</code> inside, or you'll double-count <code>_size</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class HashMap:
+    MAX_LOAD = 0.75
+
+    def __init__(self, capacity=8):
+        self._buckets = [[] for _ in range(capacity)]
+        self._size = 0
+
+    def _bucket(self, key):
+        return self._buckets[hash(key) % len(self._buckets)]
+
+    @property
+    def load_factor(self):
+        return self._size / len(self._buckets)
+
+    def _resize(self, new_capacity):
+        old = self._buckets
+        self._buckets = [[] for _ in range(new_capacity)]
+        for bucket in old:
+            for k, v in bucket:
+                self._bucket(k).append([k, v])
+
+    def __setitem__(self, key, value):
+        bucket = self._bucket(key)
+        for pair in bucket:
+            if pair[0] == key:
+                pair[1] = value
+                return
+        bucket.append([key, value])
+        self._size += 1
+        if self.load_factor &gt; self.MAX_LOAD:
+            self._resize(2 * len(self._buckets))
+
+    def __getitem__(self, key):
+        for k, v in self._bucket(key):
+            if k == key:
+                return v
+        raise KeyError(key)
+
+    def __delitem__(self, key):
+        bucket = self._bucket(key)
+        for i, (k, _) in enumerate(bucket):
+            if k == key:
+                del bucket[i]
+                self._size -= 1
+                return
+        raise KeyError(key)
+
+    def __contains__(self, key):
+        return any(k == key for k, _ in self._bucket(key))
+
+    def __iter__(self):
+        for bucket in self._buckets:
+            for k, _ in bucket:
+                yield k
+
+    def items(self):
+        for bucket in self._buckets:
+            for k, v in bucket:
+                yield (k, v)
+
+    def __len__(self):
+        return self._size</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m23-e3" data-title="Open addressing with linear probing and tombstones">
+      <div class="exercise-prompt">
+        <p>Build <code>ProbingMap(capacity=8)</code> using one list <code>self._slots</code> of length capacity. Each slot is
+          <code>None</code> (empty), the sentinel <code>TOMBSTONE</code>, or a <code>(key, value)</code> tuple. Probe linearly
+          from <code>hash(key) % capacity</code>. Implement <code>put</code>, <code>get(key, default=None)</code>,
+          <code>delete(key)</code> (leave a tombstone; <code>KeyError</code> if missing), and <code>__len__</code>. Double the
+          capacity (re-inserting live entries, dropping tombstones) when <code>(size + tombstones + 1) / capacity &gt; 2/3</code>
+          before inserting a new key.</p>
+      </div>
+<textarea class="starter">
+TOMBSTONE = object()
+
+class ProbingMap:
+    def __init__(self, capacity=8):
+        self._slots = [None] * capacity
+        self._size = 0
+        self._tombstones = 0
+
+    def __len__(self):
+        return self._size
+
+    def _find(self, key):
+        """Return the slot index holding key, or None if absent."""
+        ...
+
+    def _resize(self, new_capacity):
+        ...
+
+    def put(self, key, value):
+        ...
+
+    def get(self, key, default=None):
+        ...
+
+    def delete(self, key):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+class Collide:
+    def __init__(self, v): self.v = v
+    def __eq__(self, other): return isinstance(other, Collide) and self.v == other.v
+    def __hash__(self): return 0
+
+def test_basic():
+    m = ProbingMap()
+    m.put("a", 1)
+    m.put("b", 2)
+    m.put("a", 10)
+    assert m.get("a") == 10 and m.get("b") == 2 and len(m) == 2, "put inserts or replaces"
+    assert m.get("x", "?") == "?", "missing keys return the default"
+
+def test_probing_past_collisions():
+    m = ProbingMap(capacity=16)
+    keys = [Collide(i) for i in range(5)]
+    for i, k in enumerate(keys):
+        m.put(k, i)
+    assert [m.get(Collide(i)) for i in range(5)] == [0, 1, 2, 3, 4], "colliding keys occupy consecutive slots"
+
+def test_tombstone_keeps_chain_intact():
+    m = ProbingMap(capacity=16)
+    for i in range(3):
+        m.put(Collide(i), i)
+    m.delete(Collide(0))
+    assert m._slots.count(TOMBSTONE) == 1, "delete should leave exactly one tombstone"
+    assert m.get(Collide(2)) == 2, "lookups must probe past the tombstone"
+    assert m.get(Collide(0)) is None and len(m) == 2, "the deleted key is gone"
+    try:
+        m.delete(Collide(0))
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("deleting a missing key should raise KeyError")
+
+def test_resize_and_many():
+    m = ProbingMap()
+    for i in range(500):
+        m.put(i, str(i))
+    for i in range(0, 500, 2):
+        m.delete(i)
+    for i in range(500, 700):
+        m.put(i, str(i))
+    assert len(m) == 450, f"expected 450 live keys, got {len(m)}"
+    assert all(m.get(i) == str(i) for i in range(1, 500, 2)), "odd keys should survive"
+    assert all(m.get(i) is None for i in range(0, 500, 2)), "even keys were deleted"
+    assert len(m) / len(m._slots) <= 2 / 3, "load must stay at most 2/3"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>_find</code>: start at <code>i = hash(key) % cap</code>; loop: if the
+        slot is <code>None</code> return <code>None</code>; if it is a tuple whose key equals <code>key</code> return
+        <code>i</code>; otherwise (tombstone or other key) <code>i = (i + 1) % cap</code>. In <code>put</code>, if the key
+        is absent, resize if needed, then probe from the start to the first <code>None</code> <em>or tombstone</em> and
+        store there (reusing a tombstone decrements the tombstone count).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">TOMBSTONE = object()
+
+class ProbingMap:
+    def __init__(self, capacity=8):
+        self._slots = [None] * capacity
+        self._size = 0
+        self._tombstones = 0
+
+    def __len__(self):
+        return self._size
+
+    def _find(self, key):
+        cap = len(self._slots)
+        i = hash(key) % cap
+        for _ in range(cap):
+            slot = self._slots[i]
+            if slot is None:
+                return None
+            if slot is not TOMBSTONE and slot[0] == key:
+                return i
+            i = (i + 1) % cap
+        return None
+
+    def _resize(self, new_capacity):
+        live = [s for s in self._slots if s is not None and s is not TOMBSTONE]
+        self._slots = [None] * new_capacity
+        self._size = 0
+        self._tombstones = 0
+        for k, v in live:
+            self._insert_new(k, v)
+
+    def _insert_new(self, key, value):
+        cap = len(self._slots)
+        i = hash(key) % cap
+        while self._slots[i] is not None and self._slots[i] is not TOMBSTONE:
+            i = (i + 1) % cap
+        if self._slots[i] is TOMBSTONE:
+            self._tombstones -= 1
+        self._slots[i] = (key, value)
+        self._size += 1
+
+    def put(self, key, value):
+        i = self._find(key)
+        if i is not None:
+            self._slots[i] = (key, value)
+            return
+        if (self._size + self._tombstones + 1) / len(self._slots) &gt; 2 / 3:
+            self._resize(2 * len(self._slots))
+        self._insert_new(key, value)
+
+    def get(self, key, default=None):
+        i = self._find(key)
+        return default if i is None else self._slots[i][1]
+
+    def delete(self, key):
+        i = self._find(key)
+        if i is None:
+            raise KeyError(key)
+        self._slots[i] = TOMBSTONE
+        self._size -= 1
+        self._tombstones += 1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m23-e4" data-title="Honour the hash/eq contract">
+      <div class="exercise-prompt">
+        <p>Write a class <code>Money(amount, currency)</code> usable as a dict key and set member. Two values are equal when
+          both the amount and the currency (case-insensitive: <code>"usd"</code> equals <code>"USD"</code>) match. Store the
+          currency upper-cased, make the object immutable (assigning an attribute after creation raises
+          <code>AttributeError</code>), return <code>NotImplemented</code> when compared with a non-<code>Money</code>, and give it a
+          <code>__repr__</code> like <code>Money(5, 'USD')</code>.</p>
+      </div>
+<textarea class="starter">
+class Money:
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_equality_and_hash():
+    a, b = Money(5, "usd"), Money(5, "USD")
+    assert a == b, "currency comparison is case-insensitive"
+    assert hash(a) == hash(b), "equal objects must have equal hashes"
+    assert Money(5, "USD") != Money(5, "EUR") and Money(5, "USD") != Money(6, "USD"), "different amount or currency differ"
+
+def test_in_sets_and_dicts():
+    wallet = {Money(1, "usd"), Money(1, "USD"), Money(2, "eur")}
+    assert len(wallet) == 2, "equal Money values collapse in a set"
+    prices = {Money(10, "gbp"): "ten pounds"}
+    assert prices[Money(10, "GBP")] == "ten pounds", "lookup with an equal key must succeed"
+
+def test_immutable():
+    m = Money(3, "usd")
+    try:
+        m.amount = 4
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("Money should be immutable")
+
+def test_other_types_and_repr():
+    assert (Money(1, "USD") == 1) is False, "comparison with other types should be False (via NotImplemented)"
+    assert Money(1, "USD").__eq__("x") is NotImplemented, "__eq__ should return NotImplemented for other types"
+    assert repr(Money(5, "usd")) == "Money(5, 'USD')", "repr should look like Money(5, 'USD')"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The simplest route is <code>@dataclass(frozen=True)</code> with a
+        <code>__post_init__</code> that uses <code>object.__setattr__(self, "currency", self.currency.upper())</code>, plus a
+        custom <code>__repr__</code>. Or write <code>__slots__</code>, <code>__eq__</code>, <code>__hash__</code>, and a
+        <code>__setattr__</code> that raises.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from dataclasses import dataclass
+
+@dataclass(frozen=True, repr=False)
+class Money:
+    amount: int
+    currency: str
+
+    def __post_init__(self):
+        object.__setattr__(self, "currency", self.currency.upper())
+
+    def __repr__(self):
+        return f"Money({self.amount!r}, {self.currency!r})"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m23-e5" data-title="Two-sum and anagram groups">
+      <div class="exercise-prompt">
+        <p>Write <code>two_sum(nums, target)</code> returning a tuple <code>(i, j)</code> with <code>i &lt; j</code> and
+          <code>nums[i] + nums[j] == target</code> (the first such pair found scanning <code>j</code> left to right), or
+          <code>None</code>. It must be O(n). Then write <code>group_anagrams(words)</code> returning a list of groups (lists),
+          each in first-seen order, with groups ordered by their first word's appearance.</p>
+      </div>
+<textarea class="starter">
+def two_sum(nums, target):
+    ...
+
+def group_anagrams(words):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_two_sum_basic():
+    assert two_sum([2, 7, 11, 15], 9) == (0, 1), "2 + 7 = 9"
+    assert two_sum([3, 2, 4], 6) == (1, 2), "must not use the same element twice"
+    assert two_sum([3, 3], 6) == (0, 1), "duplicates can pair"
+    assert two_sum([1, 2], 10) is None, "None when no pair exists"
+
+def test_two_sum_fast():
+    nums = list(range(100_000))
+    t0 = time.perf_counter()
+    assert two_sum(nums, 199_997) == (99_998, 99_999), "pair at the very end"
+    assert time.perf_counter() - t0 < 1.0, "two_sum should be O(n) using a dict"
+
+def test_group_anagrams():
+    words = ["eat", "tea", "tan", "ate", "nat", "bat"]
+    assert group_anagrams(words) == [["eat", "tea", "ate"], ["tan", "nat"], ["bat"]], "group anagrams in first-seen order"
+    assert group_anagrams([]) == [], "no words, no groups"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>two_sum: a dict from value to index; check
+        <code>target - x</code> before storing <code>x</code>. group_anagrams: a dict (ordered!) from
+        <code>"".join(sorted(w))</code> to a list; return <code>list(groups.values())</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def two_sum(nums, target):
+    seen = {}
+    for j, x in enumerate(nums):
+        if target - x in seen:
+            return (seen[target - x], j)
+        if x not in seen:
+            seen[x] = j
+    return None
+
+def group_anagrams(words):
+    groups = {}
+    for w in words:
+        groups.setdefault("".join(sorted(w)), []).append(w)
+    return list(groups.values())</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m23-e6" data-title="De-duplicate and first unique character">
+      <div class="exercise-prompt">
+        <p>Write <code>dedupe(items)</code> that removes duplicates keeping first-seen order (items are hashable), and
+          <code>first_unique(s)</code> that returns the index of the first character appearing exactly once in <code>s</code>,
+          or <code>-1</code>. Both must be O(n).</p>
+      </div>
+<textarea class="starter">
+def dedupe(items):
+    ...
+
+def first_unique(s):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import time
+
+def test_dedupe():
+    assert dedupe([3, 1, 3, 2, 1]) == [3, 1, 2], "keep first occurrences in order"
+    assert dedupe("banana") == ["b", "a", "n"], "works on any iterable of hashables"
+    assert dedupe([]) == [], "empty stays empty"
+
+def test_first_unique():
+    assert first_unique("leetcode") == 0, "'l' is unique at index 0"
+    assert first_unique("loveleetcode") == 2, "'v' at index 2 is the first unique"
+    assert first_unique("aabb") == -1, "no unique character gives -1"
+    assert first_unique("") == -1, "empty string gives -1"
+
+def test_fast():
+    s = "ab" * 200_000 + "z"
+    t0 = time.perf_counter()
+    assert first_unique(s) == 400_000, "the only unique char is the final z"
+    assert len(dedupe(list(range(200_000)) * 2)) == 200_000, "dedupe of 400k items"
+    assert time.perf_counter() - t0 < 2.0, "both functions should be O(n)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>list(dict.fromkeys(items))</code> dedupes in order.
+        For <code>first_unique</code>, build a <code>Counter(s)</code> then <code>enumerate(s)</code> to find the first count of 1.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import Counter
+
+def dedupe(items):
+    return list(dict.fromkeys(items))
+
+def first_unique(s):
+    counts = Counter(s)
+    for i, ch in enumerate(s):
+        if counts[ch] == 1:
+            return i
+    return -1</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a word-frequency analyzer</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">wordfreq: your HashMap vs dict</span></div>
+      <div class="widget-body">
+        <p>Build a tool that counts word frequencies in a text file twice, once with your own chaining <code>HashMap</code> and
+          once with <code>collections.Counter</code>, checks that the results agree, and reports how the two compare in speed
+          and in internal behaviour (load factor, chain lengths, resize count).</p>
+        <h4>Set up</h4>
+        <pre data-label="Terminal"><code class="language-bash">pixi init wordfreq
+cd wordfreq
+pixi add python=3.14 pytest matplotlib
+pixi run python wordfreq.py book.txt --top 20</code></pre>
+        <p>Any large plain-text file works; public-domain books from Project Gutenberg are a good source.</p>
+        <h4>Spec</h4>
+        <ul>
+          <li><code>hashmap.py</code>: your <code>HashMap</code> from exercises 1–2, plus <code>resizes</code> (a counter),
+            <code>chain_lengths()</code> (a list), and a <code>get_or(key, default)</code> helper.</li>
+          <li><code>tokenize(text)</code>: lower-case, split on anything that isn't a letter or apostrophe (use <code>re.findall</code>).</li>
+          <li><code>count_with_hashmap(words)</code> and <code>count_with_counter(words)</code>; a test asserts they produce the same mapping.</li>
+          <li><code>top_k(counts, k)</code> sorted by count descending, then word ascending for ties.</li>
+          <li>A report printing the top <em>k</em>, total and distinct words, the timing of both counters (best of 5 with
+            <code>perf_counter</code>), your map's final load factor, number of resizes, and longest chain.</li>
+          <li>Save <code>chains.png</code>: a histogram of chain lengths, and compare it with the Poisson distribution you would
+            expect for a uniform hash at that load factor.</li>
+        </ul>
+        <ul class="checklist" data-id="m23-mini">
+          <li>Both counting methods produce identical results (checked by a test)</li>
+          <li>Ties in <code>top_k</code> break alphabetically and deterministically</li>
+          <li>The report includes timings for both implementations and explains the ratio</li>
+          <li>Load factor never exceeds your threshold; the resize count is roughly log₂(distinct words / initial capacity)</li>
+          <li>The chain-length histogram is saved with labelled axes</li>
+          <li>Try a deliberately bad hash (for example <code>len(word)</code>) and record how the timings and the histogram change</li>
+          <li><code>pixi run python -m pytest -q</code> passes</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add an open-addressing backend (exercise 3) and compare probes per lookup at several load factors.</li>
+          <li>Count bigrams (pairs of consecutive words) using tuple keys.</li>
+          <li>Stream the file line by line so memory stays flat for multi-gigabyte inputs.</li>
+          <li>Find words that appear in one book but not another with set difference.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m23-quiz">
+<script type="application/json">
+{"title": "Hash tables & sets quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What rule must <code>__hash__</code> and <code>__eq__</code> satisfy?", "options": ["If hash(a) == hash(b) then a == b", "If a == b then hash(a) == hash(b)", "hash must be unique per object", "hash must be positive"], "answer": 1, "explanation": "<p>Equal objects must hash equally so they land in the same bucket. Unequal objects may collide; that is allowed and handled.</p>"},
+  {"type": "single", "prompt": "Why does <code>hash(\"abc\")</code> differ between two runs of Python?", "options": ["A bug in CPython", "str hashing uses SipHash with a random per-process key to prevent hash-flooding attacks", "Strings are mutable", "The hash includes the memory address"], "answer": 1, "explanation": "<p>Randomisation stops attackers from crafting many keys that collide. <code>PYTHONHASHSEED</code> can fix the seed for debugging.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "d = {1: \"a\", 1.0: \"b\", True: \"c\"}\nprint(len(d), d[1])", "answer": "1 c", "explanation": "<p>1, 1.0, and True are equal and hash equally, so they are one key. The first insertion fixes the key (1), and later assignments update its value to \"c\".</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(hash(-1) == hash(-2))", "answer": "True", "explanation": "<p>CPython's C API reserves −1 as an error signal, so <code>hash(-1)</code> is −2. It is a legal collision.</p>"},
+  {"type": "single", "prompt": "What happens if a class defines <code>__eq__</code> but not <code>__hash__</code>?", "options": ["It inherits identity hashing", "Its instances become unhashable (<code>__hash__</code> is set to None)", "Python generates a hash from all attributes", "A SyntaxError"], "answer": 1, "explanation": "<p>Keeping the identity hash would break the contract (equal objects with different hashes), so Python disables hashing until you define a compatible <code>__hash__</code>.</p>"},
+  {"type": "single", "prompt": "In open addressing, why do deletions leave a tombstone instead of emptying the slot?", "options": ["To save memory", "An empty slot would end probe sequences early, hiding keys stored further along", "To keep insertion order", "Because Python lists can't hold None"], "answer": 1, "explanation": "<p>Lookups stop at the first empty slot. A tombstone says \"keep probing\", preserving access to displaced keys.</p>"},
+  {"type": "single", "prompt": "With linear probing, roughly what happens to unsuccessful-search cost as the load factor goes from 0.5 to 0.9?", "options": ["Stays about the same", "Roughly doubles", "Grows about twentyfold (≈2.5 to ≈50 probes)", "Halves"], "answer": 2, "explanation": "<p>Knuth's estimate ½(1 + 1/(1−α)²) gives 2.5 at α = 0.5 and 50.5 at α = 0.9. Clustering makes nearly full tables very slow, so tables resize early.</p>"},
+  {"type": "multi", "prompt": "Which statements about CPython's dict are true?", "options": ["It uses a sparse indices array plus a dense entries array", "Iteration follows insertion order (guaranteed since 3.7)", "It uses separate chaining with linked lists", "It resizes when about 2/3 full", "Probing mixes in higher hash bits via <code>perturb</code>"], "answer": [0, 1, 3, 4], "explanation": "<p>The compact dict stores entries densely in insertion order and uses open addressing with perturbed probing over the indices array, keeping it at most 2/3 full.</p>"},
+  {"type": "single", "prompt": "Why are lists unhashable?", "options": ["They are too big", "They are mutable, so their hash could change while stored in a table", "They contain pointers", "Lists are hashable"], "answer": 1, "explanation": "<p>A key whose hash changes sits in the wrong bucket and becomes unfindable. Use a tuple for an immutable sequence key.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from collections import Counter\nc = Counter(\"banana\")\nprint(c.most_common(1), c[\"z\"])", "answer": "[('a', 3)] 0", "explanation": "<p>'a' appears three times. Missing keys in a Counter count as 0 instead of raising KeyError.</p>"},
+  {"type": "single", "prompt": "What does reading <code>d[\"x\"]</code> on a <code>defaultdict(list)</code> that lacks \"x\" do?", "options": ["Raises KeyError", "Returns None", "Inserts \"x\" with an empty list and returns it", "Returns an empty list without inserting"], "answer": 2, "explanation": "<p>The factory runs and the result is stored. Use <code>in</code> or <code>.get()</code> to test without inserting.</p>"},
+  {"type": "text", "prompt": "Which built-in type is the immutable, hashable counterpart of <code>set</code>?", "answer": ["frozenset"], "explanation": "<p><code>frozenset</code> can be a dict key or a member of another set.</p>"},
+  {"type": "single", "prompt": "What is the average-case complexity of the dict-based two-sum algorithm?", "options": ["O(n²)", "O(n log n)", "O(n)", "O(1)"], "answer": 2, "explanation": "<p>One pass; each step does an O(1)-average dict lookup and insertion.</p>"},
+  {"type": "single", "prompt": "Which tool gives a stable fingerprint of data across processes and machines?", "options": ["<code>hash()</code>", "<code>id()</code>", "<code>hashlib.sha256</code>", "<code>PYTHONHASHSEED</code>"], "answer": 2, "explanation": "<p><code>hash()</code> is salted per process and <code>id()</code> is a memory address. Cryptographic digests from <code>hashlib</code> are deterministic everywhere.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A hash table turns a key into an array index: hash, then reduce modulo the table size.</li>
+      <li>Equal keys must hash equally; hashes must not change while stored. Mutable built-ins are unhashable.</li>
+      <li>str/bytes hashes are randomised per process (SipHash, <code>PYTHONHASHSEED</code>); never persist <code>hash()</code>.</li>
+      <li>Collisions are inevitable: resolve with chaining or open addressing (with tombstones for deletion).</li>
+      <li>Load factor drives performance; resizing geometrically keeps operations O(1) average and insertion amortized O(1).</li>
+      <li>CPython's dict: sparse indices + dense ordered entries, perturbed probing, resize at 2/3.</li>
+      <li>Sets are key-only hash tables; <code>frozenset</code> is hashable. <code>Counter</code>, <code>defaultdict</code>, and
+        <code>OrderedDict</code> cover counting, grouping, and recency.</li>
+      <li>"What do I need to look up?" turns many O(n²) problems into O(n).</li>
+    </ul>
+    <div class="flashcards" data-title="Hashing">
+<script type="application/json">
+[{"front": "Hash → bucket", "back": "index = hash(key) % m (or hash &amp; (m − 1) for power-of-two m)."},
+ {"front": "Hash/eq contract", "back": "a == b implies hash(a) == hash(b); the hash must not change while the key is stored."},
+ {"front": "PYTHONHASHSEED", "back": "Controls the per-process random key for str/bytes hashing; set an integer to make hashes reproducible."},
+ {"front": "<code>hash(-1)</code>", "back": "−2, because −1 signals an error in CPython's C API."},
+ {"front": "Separate chaining", "back": "Each bucket holds a list of entries; average chain length equals the load factor."},
+ {"front": "Open addressing", "back": "Entries live in the array; collisions probe for another slot; deletions leave tombstones."},
+ {"front": "Load factor", "back": "α = n / m. Resize (about 2×) when it passes a threshold such as 0.75 or 2/3."},
+ {"front": "CPython compact dict", "back": "Sparse indices array → dense entries array (hash, key, value) in insertion order."},
+ {"front": "Perturbed probing", "back": "perturb &gt;&gt;= 5; i = (5i + perturb + 1) &amp; mask"},
+ {"front": "<code>frozenset</code>", "back": "Immutable, hashable set: usable as a dict key or set element."},
+ {"front": "Order-preserving dedupe", "back": "<code>list(dict.fromkeys(items))</code>"},
+ {"front": "Two-sum in O(n)", "back": "Dict from value to index; check target − x before inserting x."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html#object.__hash__">Data model: object.__hash__</a></li>
+      <li><a href="https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHASHSEED">PYTHONHASHSEED</a> and
+        <a href="https://docs.python.org/3/library/sys.html#sys.hash_info">sys.hash_info</a></li>
+      <li><a href="https://docs.python.org/3/library/collections.html">collections: Counter, defaultdict, OrderedDict</a></li>
+      <li><a href="https://github.com/python/cpython/blob/main/Objects/dictobject.c">CPython's dictobject.c</a>: the long comment at the top explains probing.</li>
+      <li><a href="https://peps.python.org/pep-0412/">PEP 412: key-sharing dictionaries</a></li>
+      <li>Next: <a href="m24-trees.html">M24 Trees &amp; Binary Search Trees</a>, ordered structures that hash tables can't replace.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

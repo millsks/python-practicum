@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M14 · Iterators &amp; Generators · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m14">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 14</p>
+    <h1>Iterators &amp; Generators</h1>
+    <p class="lede">The <code>for</code> loop is the most-used statement in Python, and behind it sits one tiny protocol. Once you understand it, you can process a 50 GB log file in constant memory, describe infinite sequences, and chain data transformations into clean, lazy pipelines.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m10-classes.html">M10 Classes</a>, <a href="m11-data-model.html">M11 Data Model</a></span></div>
+    <ul class="objectives">
+      <li>Distinguish iterables from iterators and use <code>iter()</code> and <code>next()</code> directly</li>
+      <li>Explain exactly what a <code>for</code> loop does, step by step</li>
+      <li>Write iterator classes and, more often, generator functions with <code>yield</code></li>
+      <li>Use generator expressions and measure their memory advantage</li>
+      <li>Delegate with <code>yield from</code> and understand <code>send()</code> and <code>close()</code></li>
+      <li>Build lazy pipelines over large files and infinite streams</li>
+      <li>Apply the essential <code>itertools</code> tools, plus <code>batched(strict=True)</code> and <code>map(strict=True)</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="iterable-iterator">
+    <h2>Iterables and iterators</h2>
+    <p>Two words that sound alike mean different things, and keeping them apart is the key to this module.</p>
+    <ul>
+      <li>An <dfn>iterable</dfn> is anything you can loop over: lists, strings, dicts, sets, files, <code>range</code> objects. Technically, an object is iterable if <code>iter(obj)</code> works, which means its type defines <code>__iter__</code> (or the older <code>__getitem__</code> fallback from M11).</li>
+      <li>An <dfn>iterator</dfn> is the object that does the actual stepping. It remembers a position and hands out one item each time you call <code>next()</code> on it, raising <code>StopIteration</code> when it's exhausted. Its type defines <code>__next__</code>, and its <code>__iter__</code> returns itself.</li>
+    </ul>
+    <p>An analogy: a book is an iterable; a bookmark is an iterator. Many readers can each have their own bookmark in the same book, and a bookmark only moves forward.</p>
+    <div class="runnable" data-title="iter() and next() by hand">
+<textarea>
+colors = ["red", "green", "blue"]      # an iterable
+it = iter(colors)                      # ask it for an iterator
+print(type(colors).__name__, "->", type(it).__name__)
+print(next(it))
+print(next(it))
+print(next(it))
+try:
+    next(it)
+except StopIteration:
+    print("StopIteration: exhausted")
+print(next(it, "no more"))             # a default avoids the exception
+print(iter(it) is it)                  # an iterator's iterator is itself
+
+a, b = iter(colors), iter(colors)      # two independent bookmarks
+print(next(a), next(a), next(b))
+</textarea>
+    </div>
+    <h3>The exhaustion trap</h3>
+    <p>A list can be looped over any number of times, because each loop calls <code>iter()</code> and gets a fresh iterator. An iterator, once consumed, stays empty. Many built-ins return iterators (<code>map</code>, <code>filter</code>, <code>zip</code>, <code>enumerate</code>, <code>reversed</code>, file objects, generators), so this surprises everyone at least once:</p>
+    <div class="runnable" data-title="Predict: looping twice" data-predict>
+<textarea>
+squares = map(lambda n: n * n, [1, 2, 3])
+print(list(squares))
+print(list(squares))
+print(sum(squares), 4 in map(abs, [-4]))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>If a function needs to loop over its argument more than once, either accept a <code>Sequence</code> (list, tuple) or convert once at the top: <code>items = list(items)</code>. Otherwise a caller passing a generator gets silently wrong results on the second pass.</p></aside>
+    <p><strong>Remember:</strong> an iterable can produce iterators; an iterator produces items, once, until <code>StopIteration</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="for-desugared">
+    <h2>The <code>for</code> loop, desugared</h2>
+    <p>"Syntactic sugar" is syntax that is shorthand for something longer. The <code>for</code> loop is sugar for a <code>while</code> loop over an iterator. These two programs do exactly the same thing:</p>
+    <div class="two-col">
+      <div>
+<pre><code class="language-python">for item in iterable:
+    body(item)</code></pre>
+      </div>
+      <div>
+<pre><code class="language-python">_it = iter(iterable)
+while True:
+    try:
+        item = next(_it)
+    except StopIteration:
+        break
+    body(item)</code></pre>
+      </div>
+    </div>
+    <p>Step through the desugared version. Watch the iterator's hidden position advance and the loop end when <code>StopIteration</code> is caught:</p>
+    <div class="tracer" data-title="A for loop without the sugar">
+<textarea>
+prices = [4, 10, 3]
+total = 0
+_it = iter(prices)
+while True:
+    try:
+        price = next(_it)
+    except StopIteration:
+        break
+    total = total + price
+done = "loop finished"
+</textarea>
+    </div>
+    <p>This is the whole <dfn>iterator protocol</dfn>: <code>__iter__</code> to get an iterator, <code>__next__</code> to get items, <code>StopIteration</code> to finish. Every consumer of iterables, including <code>list()</code>, <code>sum()</code>, <code>sorted()</code>, <code>in</code>, unpacking (<code>a, b = pair</code>), <code>*args</code>, comprehensions, and <code>str.join</code>, speaks this same protocol. So any object you make iterable works with all of them.</p>
+    <p><strong>Remember:</strong> <code>for</code> calls <code>iter()</code> once, then <code>next()</code> repeatedly until <code>StopIteration</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="iterator-class">
+    <h2>Writing an iterator class</h2>
+    <p>To make your own iterator, implement the protocol directly: <code>__next__</code> returns the next item or raises <code>StopIteration</code>, and <code>__iter__</code> returns <code>self</code>.</p>
+    <div class="runnable" data-title="A Countdown iterator">
+<textarea>
+class Countdown:
+    def __init__(self, start):
+        self.current = start
+
+    def __iter__(self):
+        return self                 # an iterator is its own iterable
+
+    def __next__(self):
+        if self.current <= 0:
+            raise StopIteration
+        value = self.current
+        self.current -= 1
+        return value
+
+c = Countdown(3)
+print(list(c))
+print(list(c))                       # exhausted: iterators are single-use
+print([n for n in Countdown(5) if n % 2])
+</textarea>
+    </div>
+    <p>A container that should be loopable many times must <em>not</em> be its own iterator. Instead, its <code>__iter__</code> returns a <em>new</em> iterator each time. This is the iterable/iterator split from the first section, in code:</p>
+    <div class="runnable" data-title="Reusable iterable, fresh iterator per loop">
+<textarea>
+class Playlist:
+    def __init__(self, songs):
+        self._songs = list(songs)
+
+    def __iter__(self):
+        return PlaylistIterator(self._songs)   # a new bookmark per loop
+
+class PlaylistIterator:
+    def __init__(self, songs):
+        self._songs = songs
+        self._index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index >= len(self._songs):
+            raise StopIteration
+        song = self._songs[self._index]
+        self._index += 1
+        return song
+
+p = Playlist(["intro", "verse", "outro"])
+print(list(p), list(p))          # works twice
+print([(a, b) for a in p for b in p if a < b][:2])   # nested loops over the same object
+</textarea>
+    </div>
+    <p>That is a lot of code for "go through a list". Generators, next, collapse it to three lines.</p>
+    <p><strong>Remember:</strong> iterators implement <code>__next__</code> and return <code>self</code> from <code>__iter__</code>; reusable containers return a fresh iterator from <code>__iter__</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="generators">
+    <h2>Generator functions and <code>yield</code></h2>
+    <p>A <dfn>generator function</dfn> is any function whose body contains <code>yield</code>. Calling it does <em>not</em> run the body. Instead it returns a <dfn>generator</dfn>: an iterator that runs the body lazily. Each <code>next()</code> runs the code until the next <code>yield</code>, hands out the yielded value, and then <dfn>pauses</dfn>, freezing the function's local variables and position. The next <code>next()</code> resumes right after the <code>yield</code>. When the function returns, the generator raises <code>StopIteration</code>.</p>
+    <p>Step through the trace and watch the generator's frame appear, pause with its locals intact, and resume, interleaved with the caller's code:</p>
+    <div class="tracer" data-title="A generator pausing and resuming">
+<textarea>
+def countdown(n):
+    while n > 0:
+        yield n
+        n = n - 1
+    return "liftoff"
+
+gen = countdown(3)
+first = next(gen)
+second = next(gen)
+rest = [x for x in gen]
+</textarea>
+    </div>
+    <p>Notice that calling <code>countdown(3)</code> executed no line of the body; the first line ran only on <code>next(gen)</code>. That's <dfn>lazy evaluation</dfn>: work is done only when a value is requested. The <code>return</code> value isn't yielded; it rides along inside the <code>StopIteration</code> exception (used by <code>yield from</code>, below).</p>
+    <p>Now the <code>Playlist</code> from the previous section, with a generator as its <code>__iter__</code>. Each call creates a new generator, so it's automatically reusable:</p>
+    <div class="runnable" data-title="Generators make iterators trivial">
+<textarea>
+import inspect
+
+class Playlist:
+    def __init__(self, songs):
+        self._songs = list(songs)
+
+    def __iter__(self):
+        for song in self._songs:
+            yield song
+
+def countdown(n):
+    print("  (starting)")
+    while n > 0:
+        yield n
+        n -= 1
+
+g = countdown(2)
+print(type(g).__name__, inspect.isgenerator(g))
+print("nothing has run yet")
+print(next(g))
+print(next(g))
+print(next(g, "done"))
+print(list(Playlist("ab")), list(Playlist("ab")))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Write generators instead of building and returning a list whenever the caller might not need all the results, or the results are large. A function that <code>return</code>s a list forces all the work up front; one that <code>yield</code>s lets the caller decide how much to take.</p></aside>
+    <p><strong>Remember:</strong> calling a generator function returns a paused generator; each <code>next()</code> runs to the next <code>yield</code>; locals survive between steps.</p>
+  </section>
+
+  <section class="lesson-section" id="genexpr">
+    <h2>Generator expressions and memory</h2>
+    <p>A <dfn>generator expression</dfn> is a comprehension in parentheses: <code>(n * n for n in nums)</code>. It produces a generator instead of a list. When it's the only argument to a function, the extra parentheses can be dropped: <code>sum(n * n for n in nums)</code>.</p>
+    <p>The difference is memory. A list comprehension builds every element at once; a generator expression stores only its current state, regardless of how many items it will produce.</p>
+    <div class="runnable" data-title="Measure it">
+<textarea>
+import sys
+
+N = 1_000_000
+as_list = [n * n for n in range(N)]
+as_gen = (n * n for n in range(N))
+
+print(f"list: {sys.getsizeof(as_list):>12,} bytes (just the list's pointer array!)")
+print(f"gen:  {sys.getsizeof(as_gen):>12,} bytes")
+print(f"range:{sys.getsizeof(range(N)):>12,} bytes (range is lazy too)")
+print(sum(as_gen) == sum(as_list))
+</textarea>
+    </div>
+    <p><code>sys.getsizeof</code> reports only the container itself; the million int objects the list points to take tens of megabytes more. The generator's size is the same for ten items or ten billion.</p>
+    <table>
+      <thead><tr><th></th><th>List comprehension <code>[...]</code></th><th>Generator expression <code>(...)</code></th></tr></thead>
+      <tbody>
+        <tr><td>Evaluation</td><td>Eager: all items now</td><td>Lazy: one item per <code>next()</code></td></tr>
+        <tr><td>Memory</td><td>Proportional to length</td><td>Constant</td></tr>
+        <tr><td>Reusable</td><td>Yes, loop as often as you like</td><td>No, single pass</td></tr>
+        <tr><td>Indexing, <code>len()</code></td><td>Yes</td><td>No</td></tr>
+        <tr><td>Best for</td><td>Results you'll reuse, index, or that are small</td><td>Feeding <code>sum</code>, <code>max</code>, <code>any</code>, <code>join</code>, and other one-pass consumers</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Predict: laziness and short-circuiting" data-predict>
+<textarea>
+def check(n):
+    print("checking", n)
+    return n > 2
+
+print(any(check(n) for n in [1, 3, 5, 7]))
+</textarea>
+    </div>
+    <p><code>any</code> stops at the first true value, and because the generator is lazy, <code>check(5)</code> and <code>check(7)</code> never run. With a list comprehension inside <code>any([...])</code>, all four checks would run first.</p>
+    <p><strong>Remember:</strong> parentheses make it lazy and constant-memory; use generator expressions for single-pass consumers.</p>
+  </section>
+
+  <section class="lesson-section" id="yield-from">
+    <h2><code>yield from</code>, <code>send</code>, and <code>close</code></h2>
+    <h3>Delegating with <code>yield from</code></h3>
+    <p><code>yield from iterable</code> yields every item of another iterable, as if you'd written <code>for x in iterable: yield x</code>. With a sub-generator it does more: it passes <code>send()</code> and <code>close()</code> through, and its value is the sub-generator's <code>return</code> value. It's the natural tool for recursive generators, such as walking a tree:</p>
+    <div class="runnable" data-title="Recursive flattening with yield from">
+<textarea>
+def flatten(items):
+    for item in items:
+        if isinstance(item, (list, tuple)):
+            yield from flatten(item)     # delegate to a recursive generator
+        else:
+            yield item
+
+print(list(flatten([1, [2, [3, 4], 5], (6, [7])])))
+
+def inner():
+    yield "a"
+    yield "b"
+    return "inner result"
+
+def outer():
+    result = yield from inner()          # captures inner's return value
+    yield f"inner returned {result!r}"
+
+print(list(outer()))
+</textarea>
+    </div>
+    <h3><code>send()</code> and <code>close()</code> (briefly)</h3>
+    <p>A <code>yield</code> is also an expression: <code>received = yield value</code>. Calling <code>gen.send(x)</code> resumes the generator and makes that <code>yield</code> evaluate to <code>x</code>. (<code>next(gen)</code> is the same as <code>gen.send(None)</code>.) You must start a generator with <code>next()</code> before you can <code>send</code> to it. <code>gen.close()</code> raises <code>GeneratorExit</code> at the paused <code>yield</code> so <code>finally</code> blocks run and resources are released.</p>
+    <div class="runnable" data-title="A running-average coroutine">
+<textarea>
+def averager():
+    total = count = 0
+    average = None
+    try:
+        while True:
+            value = yield average      # hand out the average, receive the next value
+            total += value
+            count += 1
+            average = total / count
+    finally:
+        print("averager closed")
+
+avg = averager()
+next(avg)                      # "prime" it: run to the first yield
+print(avg.send(10))
+print(avg.send(20))
+print(avg.send(60))
+avg.close()                    # triggers the finally block
+</textarea>
+    </div>
+    <aside class="callout note"><p>Generators that receive values this way were the foundation of Python's early coroutines. Modern asynchronous code uses <code>async def</code> and <code>await</code> instead, which you'll meet in Part 4. Day to day, you'll use <code>yield</code> and <code>yield from</code> constantly and <code>send</code> rarely.</p></aside>
+    <p><strong>Remember:</strong> <code>yield from</code> delegates to another iterable (and returns a sub-generator's result); <code>send</code> passes values in; <code>close</code> triggers cleanup.</p>
+  </section>
+
+  <section class="lesson-section" id="pipelines">
+    <h2>Infinite generators and lazy pipelines</h2>
+    <p>Because generators produce values on demand, they can describe sequences with no end. The consumer decides when to stop, usually with <code>itertools.islice</code>, a <code>break</code>, or a function like <code>next</code> or <code>any</code>.</p>
+    <div class="runnable" data-title="Infinite sequences, finite use">
+<textarea>
+from itertools import islice
+
+def fibonacci():
+    a, b = 0, 1
+    while True:              # never ends on its own
+        yield a
+        a, b = b, a + b
+
+def primes():
+    found = []
+    n = 2
+    while True:
+        if all(n % p for p in found if p * p <= n):
+            found.append(n)
+            yield n
+        n += 1
+
+print(list(islice(fibonacci(), 12)))
+print(next(f for f in fibonacci() if f > 1000))
+print(list(islice(primes(), 10)))
+</textarea>
+    </div>
+    <h3>Pipelines over big files</h3>
+    <p>The real professional payoff is processing data that doesn't fit in memory. A file object is already a lazy iterator over lines. Chain generator stages, each taking an iterator and yielding transformed items, and the whole pipeline holds just one line at a time, whether the file has 100 lines or 100 million.</p>
+    <pre><code class="language-python">def read_lines(path):
+    with open(path, encoding="utf-8") as f:   # the file closes when the generator finishes
+        for line in f:                          # one line in memory at a time
+            yield line.rstrip("\n")
+
+def parse(lines):
+    for line in lines:
+        level, _, message = line.partition(" ")
+        yield {"level": level, "message": message}
+
+def errors_only(records):
+    return (r for r in records if r["level"] == "ERROR")
+
+# Nothing is read until the final consumer pulls values through:
+pipeline = errors_only(parse(read_lines("app.log")))
+print(sum(1 for _ in pipeline))</code></pre>
+    <p>The visualizer below shows the same idea in a data pipeline. Switch between <em>batch</em> mode (each stage processes everything before the next starts, like chaining lists) and <em>streaming</em> mode (records flow through one at a time, like chaining generators). Notice how much sooner the first record arrives when streaming.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["read", "parse", "validate", "aggregate"]}'></div>
+    <p>Try a runnable version, with an in-memory "file" (an <code>io.StringIO</code> behaves like an open text file) and a print in each stage so you can see the interleaving:</p>
+    <div class="runnable" data-title="Watch values flow through a lazy pipeline">
+<textarea>
+import io
+
+LOG = io.StringIO("""INFO started
+ERROR disk full
+INFO retrying
+ERROR disk still full
+WARN low memory
+""")
+
+def read_lines(f):
+    for line in f:
+        print(f"  read  {line.strip()!r}")
+        yield line.rstrip("\n")
+
+def parse(lines):
+    for line in lines:
+        level, _, msg = line.partition(" ")
+        yield level, msg
+
+def errors_only(records):
+    for level, msg in records:
+        if level == "ERROR":
+            print(f"  match {msg!r}")
+            yield msg
+
+pipeline = errors_only(parse(read_lines(LOG)))
+print("pipeline built, nothing read yet")
+print("first error:", next(pipeline))      # reads only as far as needed
+print("rest:", list(pipeline))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>This "generator pipeline" style is the same architecture used by real ETL tools and streaming frameworks: small, single-purpose, testable stages, composed lazily. Each stage can be unit-tested by passing a plain list. You'll build a full ETL system in Part 7.</p></aside>
+    <p><strong>Remember:</strong> infinite generators are fine because consumers stop them; chain generator stages for constant-memory processing of any amount of data.</p>
+  </section>
+
+  <section class="lesson-section" id="itertools">
+    <h2>The <code>itertools</code> toolkit</h2>
+    <p>The standard library's <code>itertools</code> module is a set of fast, memory-efficient building blocks for iterators, implemented in C. Learning them saves you from writing (and debugging) your own loops.</p>
+    <table>
+      <thead><tr><th>Tool</th><th>What it does</th><th>Example → result</th></tr></thead>
+      <tbody>
+        <tr><td><code>count(start, step)</code></td><td>Infinite arithmetic sequence</td><td><code>count(10, 5)</code> → 10, 15, 20, …</td></tr>
+        <tr><td><code>cycle(it)</code></td><td>Repeat an iterable forever</td><td><code>cycle("ab")</code> → a, b, a, b, …</td></tr>
+        <tr><td><code>repeat(x, n)</code></td><td>The same value, n times (or forever)</td><td><code>repeat(0, 3)</code> → 0, 0, 0</td></tr>
+        <tr><td><code>islice(it, start, stop, step)</code></td><td>Slice any iterator lazily</td><td><code>islice(count(), 2, 8, 2)</code> → 2, 4, 6</td></tr>
+        <tr><td><code>chain(a, b, …)</code></td><td>Concatenate iterables</td><td><code>chain([1], [2, 3])</code> → 1, 2, 3</td></tr>
+        <tr><td><code>chain.from_iterable(its)</code></td><td>Flatten one level</td><td><code>[[1], [2]]</code> → 1, 2</td></tr>
+        <tr><td><code>groupby(it, key)</code></td><td>Group <em>consecutive</em> items with equal keys</td><td><code>"aabba"</code> → (a, aa), (b, bb), (a, a)</td></tr>
+        <tr><td><code>accumulate(it, func)</code></td><td>Running totals (or running max, etc.)</td><td><code>[1, 2, 3, 4]</code> → 1, 3, 6, 10</td></tr>
+        <tr><td><code>pairwise(it)</code></td><td>Overlapping pairs (3.10+)</td><td><code>[1, 2, 4]</code> → (1, 2), (2, 4)</td></tr>
+        <tr><td><code>batched(it, n)</code></td><td>Non-overlapping tuples of size n (3.12+)</td><td><code>"ABCDE", 2</code> → AB, CD, E</td></tr>
+        <tr><td><code>product(a, b)</code></td><td>Cartesian product (nested loops)</td><td><code>product("ab", repeat=2)</code> → aa, ab, ba, bb</td></tr>
+        <tr><td><code>permutations(it, r)</code></td><td>Ordered arrangements</td><td><code>permutations("abc", 2)</code> → ab, ac, ba, …</td></tr>
+        <tr><td><code>combinations(it, r)</code></td><td>Unordered selections</td><td><code>combinations("abc", 2)</code> → ab, ac, bc</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="itertools in action">
+<textarea>
+from itertools import (count, cycle, islice, chain, groupby, accumulate,
+                       pairwise, batched, product, permutations, combinations)
+
+# Label rows with alternating colors and ids starting at 100
+rows = ["alpha", "beta", "gamma", "delta"]
+print(list(zip(count(100), cycle(["light", "dark"]), rows)))
+
+# Daily balance from transactions, and the day-over-day change
+deposits = [100, -20, 50, -5]
+balances = list(accumulate(deposits))
+print(balances, [b - a for a, b in pairwise(balances)])
+
+# groupby only groups ADJACENT items: sort by the same key first!
+words = ["apple", "bob", "avocado", "cat", "banana"]
+by_letter = {k: list(g) for k, g in groupby(sorted(words), key=lambda w: w[0])}
+print(by_letter)
+
+# Send items to an API in batches of 2
+print(list(batched(range(5), 2)))
+
+# Search spaces
+print(["".join(p) for p in product("HT", repeat=3)])
+print(len(list(permutations(range(5), 3))), len(list(combinations(range(5), 3))))
+print(list(chain.from_iterable([[1, 2], [3], []])))
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>groupby</code> is not SQL's <code>GROUP BY</code>. It groups runs of <em>consecutive</em> equal keys, so unsorted input produces repeated groups. Sort by the same key first, or use a dict (<code>collections.defaultdict(list)</code>) when you don't need streaming. Also, each group is a sub-iterator that is invalidated when <code>groupby</code> advances; convert it with <code>list(g)</code> immediately if you need to keep it.</p></aside>
+    <div class="runnable" data-title="Predict: groupby on unsorted data" data-predict>
+<textarea>
+from itertools import groupby
+print([(k, len(list(g))) for k, g in groupby("aabbbac")])
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> reach for <code>itertools</code> before writing a loop; <code>groupby</code> needs sorted input.</p>
+  </section>
+
+  <section class="lesson-section" id="strict">
+    <h2>Strictness: <code>zip</code>, <code>batched</code>, and <code>map</code></h2>
+    <p>Lazy tools have one dangerous default: when input lengths don't line up, they quietly stop or produce a short final chunk. <code>zip(names, scores)</code> silently drops extra names if <code>scores</code> is shorter, hiding a data bug. Modern Python adds <code>strict=True</code> options that turn the mismatch into a <code>ValueError</code>:</p>
+    <ul>
+      <li><code>zip(a, b, strict=True)</code> (3.10+): raise if the iterables have different lengths.</li>
+      <li><code>itertools.batched(it, n, strict=True)</code> (3.13+): raise if the final batch is incomplete.</li>
+      <li><code>map(func, a, b, strict=True)</code> (3.14+): raise if the iterables have different lengths.</li>
+    </ul>
+    <aside class="callout py314"><p>Python 3.14 adds <code>strict=True</code> to <code>map()</code>, matching <code>zip()</code>. Previously, a multi-argument <code>map</code> stopped silently at the shortest input.</p></aside>
+    <div class="runnable" data-title="Fail loudly on mismatched data">
+<textarea>
+from itertools import batched
+
+names = ["ada", "grace", "linus"]
+scores = [90, 85]                      # one missing!
+
+print(list(zip(names, scores)))        # silently drops linus
+for label, make in [
+    ("zip", lambda: list(zip(names, scores, strict=True))),
+    ("map", lambda: list(map(lambda n, s: f"{n}={s}", names, scores, strict=True))),
+    ("batched", lambda: list(batched("ABCDEFG", 3, strict=True))),
+]:
+    try:
+        make()
+    except ValueError as exc:
+        print(f"{label}: ValueError: {exc}")
+print(list(batched("ABCDEF", 3, strict=True)))   # complete batches are fine
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Use <code>strict=True</code> whenever the inputs are <em>supposed</em> to line up, such as parallel columns, keys and values, or fixed-size records. It costs nothing and catches data bugs at the point they occur. Many teams enforce it with the ruff rule <code>B905</code> (<code>zip()</code> without an explicit <code>strict=</code>).</p></aside>
+    <p><strong>Remember:</strong> pass <code>strict=True</code> to <code>zip</code>, <code>batched</code> (3.13+), and <code>map</code> (3.14+) when lengths must match.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m14-e1" data-title="An iterator class">
+      <div class="exercise-prompt">
+        <p>Write an iterator class <code>Steps(start, stop, step)</code> that behaves like <code>range</code> for positive steps but also works with floats: it yields <code>start</code>, <code>start + step</code>, … while the value is less than <code>stop</code>. Compute each value as <code>start + i * step</code> (not by repeated addition) to avoid accumulating floating-point error. Raise <code>ValueError</code> in <code>__init__</code> if <code>step &lt;= 0</code>.</p>
+      </div>
+<textarea class="starter">
+class Steps:
+    def __init__(self, start, stop, step):
+        ...
+
+    def __iter__(self):
+        ...
+
+    def __next__(self):
+        ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_ints():
+    assert list(Steps(0, 5, 2)) == [0, 2, 4], "like range(0, 5, 2)"
+
+def test_floats():
+    assert list(Steps(0, 1, 0.25)) == [0, 0.25, 0.5, 0.75], "floats work"
+    assert len(list(Steps(0, 1, 0.1))) == 10, "start + i*step avoids drift"
+
+def test_protocol():
+    s = Steps(0, 3, 1)
+    assert iter(s) is s, "__iter__ returns self"
+    assert next(s) == 0 and next(s) == 1 and next(s) == 2, "next() steps"
+    try:
+        next(s)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("raise StopIteration when done")
+
+def test_bad_step():
+    try:
+        Steps(0, 1, 0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("step <= 0 must raise ValueError")
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep a counter <code>self._i</code>. In <code>__next__</code>, compute <code>value = self.start + self._i * self.step</code>; if <code>value &gt;= self.stop</code>, raise <code>StopIteration</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">class Steps:
+    def __init__(self, start, stop, step):
+        if step &lt;= 0:
+            raise ValueError("step must be positive")
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self._i = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        value = self.start + self._i * self.step
+        if value &gt;= self.stop:
+            raise StopIteration
+        self._i += 1
+        return value</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m14-e2" data-title="Infinite generators and take()">
+      <div class="exercise-prompt">
+        <p>Write an infinite generator <code>collatz(n)</code> that yields <code>n</code>, then the next Collatz value (<code>n // 2</code> if even, else <code>3 * n + 1</code>), forever. Then write <code>take(n, iterable)</code> returning a list of the first <code>n</code> items (use <code>itertools.islice</code>), and <code>collatz_length(n)</code> returning how many values the sequence has up to and including the first <code>1</code>.</p>
+      </div>
+<textarea class="starter">
+from itertools import islice
+
+def collatz(n):
+    ...
+
+def take(n, iterable):
+    ...
+
+def collatz_length(n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import inspect
+
+def test_generator():
+    assert inspect.isgeneratorfunction(collatz), "collatz must use yield"
+
+def test_take():
+    assert take(6, collatz(6)) == [6, 3, 10, 5, 16, 8], "first six values from 6"
+    assert take(3, "abcdef") == ["a", "b", "c"], "take works on any iterable"
+    assert take(5, [1, 2]) == [1, 2], "take stops if the iterable is short"
+
+def test_infinite():
+    assert take(4, collatz(1)) == [1, 4, 2, 1], "the sequence keeps going after 1"
+
+def test_length():
+    assert collatz_length(1) == 1, "just [1]"
+    assert collatz_length(6) == 9, "6 3 10 5 16 8 4 2 1"
+    assert collatz_length(27) == 112, "27 takes 111 steps"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For <code>collatz_length</code>, loop over <code>enumerate(collatz(n), start=1)</code> and return the count when the value is 1.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from itertools import islice
+
+
+def collatz(n):
+    while True:
+        yield n
+        n = n // 2 if n % 2 == 0 else 3 * n + 1
+
+
+def take(n, iterable):
+    return list(islice(iterable, n))
+
+
+def collatz_length(n):
+    for count, value in enumerate(collatz(n), start=1):
+        if value == 1:
+            return count</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m14-e3" data-title="Sliding windows">
+      <div class="exercise-prompt">
+        <p>Write a generator <code>windows(iterable, size)</code> that yields tuples of <code>size</code> consecutive items: <code>windows([1, 2, 3, 4], 3)</code> yields <code>(1, 2, 3)</code> and <code>(2, 3, 4)</code>. It must work on any iterable, including infinite generators, using constant memory (use <code>collections.deque(maxlen=size)</code>). Then write <code>moving_average(values, size)</code> as a generator of window averages.</p>
+      </div>
+<textarea class="starter">
+from collections import deque
+
+def windows(iterable, size):
+    ...
+
+def moving_average(values, size):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from itertools import count, islice
+
+def test_windows():
+    assert list(windows([1, 2, 3, 4], 3)) == [(1, 2, 3), (2, 3, 4)], "two windows of size 3"
+    assert list(windows("ab", 3)) == [], "too short: no windows"
+    assert list(windows("abc", 1)) == [("a",), ("b",), ("c",)], "size 1"
+
+def test_lazy_on_infinite():
+    assert list(islice(windows(count(), 2), 3)) == [(0, 1), (1, 2), (2, 3)], "must work on infinite input"
+
+def test_moving_average():
+    assert list(moving_average([2, 4, 6, 8], 2)) == [3.0, 5.0, 7.0], "averages of pairs"
+
+def test_is_generator():
+    import inspect
+    assert inspect.isgenerator(windows([1], 1)), "windows should be a generator"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Append each item to a <code>deque(maxlen=size)</code>; once <code>len(window) == size</code>, yield <code>tuple(window)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import deque
+
+
+def windows(iterable, size):
+    window = deque(maxlen=size)
+    for item in iterable:
+        window.append(item)
+        if len(window) == size:
+            yield tuple(window)
+
+
+def moving_average(values, size):
+    for w in windows(values, size):
+        yield sum(w) / size</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m14-e4" data-title="Recursive flatten with yield from">
+      <div class="exercise-prompt">
+        <p>Write a generator <code>flatten(obj)</code> that yields every leaf of arbitrarily nested lists, tuples, and sets, using <code>yield from</code> for the recursion. Strings and bytes must be treated as leaves (not split into characters), as must dicts.</p>
+      </div>
+<textarea class="starter">
+def flatten(obj):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import inspect
+
+def test_basic():
+    assert list(flatten([1, [2, [3, [4]]], 5])) == [1, 2, 3, 4, 5], "deep nesting"
+
+def test_strings_are_leaves():
+    assert list(flatten(["ab", ["cd", b"ef"]])) == ["ab", "cd", b"ef"], "strings and bytes are not split"
+
+def test_tuples_sets_dicts():
+    assert list(flatten((1, (2,), {3}))) == [1, 2, 3], "tuples and sets are flattened"
+    assert list(flatten([{"a": 1}])) == [{"a": 1}], "dicts are leaves"
+
+def test_scalar_and_generator():
+    assert list(flatten(7)) == [7], "a non-container is a single leaf"
+    assert inspect.isgeneratorfunction(flatten), "use yield / yield from"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>If <code>obj</code> is a list, tuple, or set, loop over it and <code>yield from flatten(item)</code>; otherwise <code>yield obj</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def flatten(obj):
+    if isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            yield from flatten(item)
+    else:
+        yield obj</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m14-e5" data-title="A lazy log pipeline">
+      <div class="exercise-prompt">
+        <p>Build three generator stages and a consumer. Lines look like <code>"2026-10-01T12:00:00 ERROR db timeout"</code> (timestamp, level, message, separated by single spaces; the message may contain spaces).</p>
+        <ul>
+          <li><code>parse(lines)</code>: skip blank lines and lines starting with <code>#</code>; yield tuples <code>(timestamp, level, message)</code>.</li>
+          <li><code>at_least(records, level)</code>: yield records whose level is at or above <code>level</code> in the order <code>DEBUG &lt; INFO &lt; WARN &lt; ERROR</code>.</li>
+          <li><code>messages(records)</code>: yield just the messages.</li>
+          <li><code>count_levels(records)</code>: return a dict of level counts (this one consumes).</li>
+        </ul>
+        <p>The stages must be lazy: they must not read more input than needed.</p>
+      </div>
+<textarea class="starter">
+LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"]
+
+def parse(lines):
+    ...
+
+def at_least(records, level):
+    ...
+
+def messages(records):
+    ...
+
+def count_levels(records):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+LINES = [
+    "# header",
+    "t1 INFO started up",
+    "",
+    "t2 ERROR db timeout after 5s",
+    "t3 DEBUG cache miss",
+    "t4 WARN slow query",
+]
+
+def test_parse():
+    assert list(parse(LINES))[1] == ("t2", "ERROR", "db timeout after 5s"), "message keeps its spaces"
+    assert len(list(parse(LINES))) == 4, "skip blanks and comments"
+
+def test_filter_and_messages():
+    assert list(messages(at_least(parse(LINES), "WARN"))) == ["db timeout after 5s", "slow query"], "WARN and above"
+
+def test_count():
+    assert count_levels(parse(LINES)) == {"INFO": 1, "ERROR": 1, "DEBUG": 1, "WARN": 1}, "count each level"
+
+def test_lazy():
+    pulled = []
+    def source():
+        for line in LINES:
+            pulled.append(line)
+            yield line
+    first = next(messages(at_least(parse(source()), "ERROR")))
+    assert first == "db timeout after 5s", "first ERROR message"
+    assert len(pulled) == 4, f"should read only 4 lines to find it, read {len(pulled)}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>line.split(" ", 2)</code> splits into at most three parts. Compare levels with <code>LEVELS.index(r[1]) &gt;= LEVELS.index(level)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"]
+
+
+def parse(lines):
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        timestamp, level, message = line.split(" ", 2)
+        yield timestamp, level, message
+
+
+def at_least(records, level):
+    threshold = LEVELS.index(level)
+    for record in records:
+        if LEVELS.index(record[1]) &gt;= threshold:
+            yield record
+
+
+def messages(records):
+    for _, _, message in records:
+        yield message
+
+
+def count_levels(records):
+    counts = {}
+    for _, level, _ in records:
+        counts[level] = counts.get(level, 0) + 1
+    return counts</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m14-e6" data-title="Run-length encoding with itertools">
+      <div class="exercise-prompt">
+        <p>Using <code>itertools</code>, write <code>rle_encode(text)</code> returning a list of <code>(char, count)</code> pairs for consecutive runs (<code>"aaabcc"</code> → <code>[("a", 3), ("b", 1), ("c", 2)]</code>), and <code>rle_decode(pairs)</code> returning the original string. Use <code>groupby</code> for encoding and <code>chain.from_iterable</code> with <code>repeat</code> for decoding.</p>
+      </div>
+<textarea class="starter">
+from itertools import groupby, chain, repeat
+
+def rle_encode(text):
+    ...
+
+def rle_decode(pairs):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_encode():
+    assert rle_encode("aaabcc") == [("a", 3), ("b", 1), ("c", 2)], "runs of consecutive chars"
+    assert rle_encode("abab") == [("a", 1), ("b", 1), ("a", 1), ("b", 1)], "non-adjacent repeats are separate runs"
+    assert rle_encode("") == [], "empty string"
+
+def test_decode():
+    assert rle_decode([("x", 2), ("y", 3)]) == "xxyyy", "decode pairs"
+    assert rle_decode([]) == "", "empty"
+
+def test_round_trip():
+    for s in ["", "a", "wwwwbbbw", "hello  world"]:
+        assert rle_decode(rle_encode(s)) == s, f"round trip failed for {s!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Encode: <code>[(ch, len(list(group))) for ch, group in groupby(text)]</code>. Decode: <code>"".join(chain.from_iterable(repeat(ch, n) for ch, n in pairs))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from itertools import groupby, chain, repeat
+
+
+def rle_encode(text):
+    return [(ch, sum(1 for _ in group)) for ch, group in groupby(text)]
+
+
+def rle_decode(pairs):
+    return "".join(chain.from_iterable(repeat(ch, n) for ch, n in pairs))</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a log-processing pipeline</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Streaming log analyzer</span></div>
+      <div class="widget-body">
+        <p>Build a command-line tool that analyzes web-server logs of any size in constant memory, using only generators and <code>itertools</code>. Then prove it: generate a log with a million lines and watch memory stay flat.</p>
+<pre data-label="Terminal"><code class="language-bash">pixi init logpipe
+cd logpipe
+mkdir -p src
+pixi run python src/make_logs.py 1000000 &gt; big.log      # step 1: a generator that writes fake logs
+pixi run python src/logpipe.py big.log --level WARN --top 5</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li><code>make_logs.py</code>: an infinite generator of realistic lines (<code>timestamp level path status latency_ms</code>), sliced with <code>islice</code> to the requested count and written line by line.</li>
+          <li><code>read_lines(paths)</code>: yields lines from one or more files, chained with <code>yield from</code>; transparently opens <code>.gz</code> files with <code>gzip.open(path, "rt")</code>.</li>
+          <li><code>parse(lines)</code>: yields <code>LogRecord</code> NamedTuples (or frozen dataclasses from M13); counts and skips malformed lines instead of crashing.</li>
+          <li><code>filter_level(records, minimum)</code> and <code>between(records, start, end)</code> stages.</li>
+          <li><code>per_minute(records)</code>: uses <code>groupby</code> on the timestamp truncated to the minute (logs are already in time order) to yield <code>(minute, count, error_rate)</code>.</li>
+          <li><code>top_paths(records, n)</code>: the n slowest paths by average latency (this stage may hold one dict of per-path totals, but never the records).</li>
+          <li><code>batched(records, 1000)</code> to "upload" results in chunks (just count the batches).</li>
+          <li><code>main()</code> parses arguments with <code>argparse</code> and prints a short report.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m14-mini">
+          <li>Every stage is a generator (or a consumer that iterates once); no stage calls <code>list()</code> on the full stream</li>
+          <li>Processing a million-line file keeps memory roughly constant (check with <code>/usr/bin/time -l</code> on macOS or <code>/usr/bin/time -v</code> on Linux, or <code>tracemalloc</code>)</li>
+          <li>Malformed lines are counted and reported, not fatal</li>
+          <li><code>--head 10</code> stops reading the file after the first 10 matching records (use <code>islice</code>)</li>
+          <li>Each stage has a small test that feeds it a plain list (run with <code>pixi run pytest</code> after <code>pixi add pytest</code>)</li>
+          <li>All <code>zip</code>/<code>map</code> calls over parallel data use <code>strict=True</code></li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a <code>--follow</code> mode that tails a growing file forever (an infinite generator that sleeps and retries at end of file).</li>
+          <li>Support compressed input with <code>compression.zstd</code> (new in 3.14) as well as gzip.</li>
+          <li>Compare the speed and memory of your generator pipeline against loading everything into pandas.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m14-quiz">
+<script type="application/json">
+{"title": "Iterators & generators quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the difference between an iterable and an iterator?", "options": ["They are the same thing", "An iterable can produce an iterator via <code>iter()</code>; an iterator produces items via <code>next()</code> and remembers its position", "Iterators can be looped over many times; iterables only once", "Only lists are iterables"], "answer": 1, "explanation": "<p>Lists are iterables; <code>iter(list)</code> gives a list iterator. Iterators are single-pass and are also iterable (their <code>__iter__</code> returns self).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "nums = iter([1, 2, 3])\nprint(sum(nums), sum(nums))", "answer": "6 0", "explanation": "<p>The first <code>sum</code> exhausts the iterator; the second sees no items.</p>"},
+  {"type": "single", "prompt": "Which exception tells a <code>for</code> loop to stop?", "options": ["<code>IndexError</code>", "<code>StopIteration</code>", "<code>GeneratorExit</code>", "<code>EOFError</code>"], "answer": 1, "explanation": "<p><code>next()</code> raises <code>StopIteration</code> when the iterator is exhausted; the loop catches it silently.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def gen():\n    print('A')\n    yield 1\n    print('B')\n    yield 2\n\ng = gen()\nprint('C')\nprint(next(g))", "answer": "C\nA\n1", "explanation": "<p>Calling <code>gen()</code> runs nothing. The body starts on the first <code>next()</code> and pauses at the first <code>yield</code>.</p>"},
+  {"type": "single", "prompt": "Why does <code>sys.getsizeof((n for n in range(10**9)))</code> report only a couple of hundred bytes?", "options": ["Python compresses the numbers", "The generator stores only its current state, not the values", "getsizeof is broken for generators", "range is cached"], "answer": 1, "explanation": "<p>Generator expressions are lazy: values are computed one at a time when requested.</p>"},
+  {"type": "multi", "prompt": "Which of these return iterators (single-pass)?", "options": ["<code>map(str, [1, 2])</code>", "<code>range(10)</code>", "<code>zip(a, b)</code>", "<code>open('f.txt')</code>", "<code>[x for x in y]</code>"], "answer": [0, 2, 3], "explanation": "<p><code>range</code> is a lazy but reusable <em>sequence</em>, and a list comprehension builds a list. <code>map</code>, <code>zip</code>, and file objects are iterators.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def inner():\n    yield 1\n    return 'r'\n\ndef outer():\n    x = yield from inner()\n    yield x\n\nprint(list(outer()))", "answer": "[1, 'r']", "explanation": "<p><code>yield from</code> yields the inner items, and evaluates to the inner generator's return value.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from itertools import groupby\nprint([k for k, _ in groupby('aabbaa')])", "answer": "['a', 'b', 'a']", "explanation": "<p><code>groupby</code> groups only consecutive equal items; sort first if you want one group per key.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from itertools import islice, count\nprint(list(islice(count(1), 2, 5)))", "answer": "[3, 4, 5]", "explanation": "<p><code>count(1)</code> yields 1, 2, 3, ...; islice skips indexes 0 and 1 and stops before index 5.</p>"},
+  {"type": "single", "prompt": "What does <code>itertools.batched('ABCDEFG', 3, strict=True)</code> do when consumed?", "options": ["Yields ABC, DEF, G", "Yields ABC, DEF and drops G", "Raises <code>ValueError</code> when it reaches the incomplete final batch", "Pads G with None"], "answer": 2, "explanation": "<p>The <code>strict</code> flag (3.13+) makes an incomplete final batch an error instead of a short tuple.</p>"},
+  {"type": "text", "prompt": "Which keyword argument, new for <code>map()</code> in Python 3.14, raises if the input iterables have different lengths?", "answer": ["strict", "strict=True"], "explanation": "<p><code>map(f, a, b, strict=True)</code> mirrors <code>zip(..., strict=True)</code>.</p>"},
+  {"type": "single", "prompt": "What must you do before calling <code>send(value)</code> on a fresh generator?", "options": ["Nothing", "Call <code>next(gen)</code> (or <code>send(None)</code>) to advance it to the first <code>yield</code>", "Call <code>close()</code>", "Wrap it in <code>iter()</code>"], "answer": 1, "explanation": "<p>A just-started generator isn't paused at a <code>yield</code> yet, so there's nowhere to deliver the value.</p>"},
+  {"type": "multi", "prompt": "Which are good uses of generators?", "options": ["Processing a file too large for memory", "Describing an infinite sequence", "Data you need to index randomly and loop over many times", "Chaining transformation stages into a lazy pipeline"], "answer": [0, 1, 3], "explanation": "<p>Random access and repeated passes call for a list or other sequence.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from itertools import pairwise, accumulate\nprint(list(pairwise(accumulate([1, 2, 3]))))", "answer": "[(1, 3), (3, 6)]", "explanation": "<p><code>accumulate</code> gives running totals 1, 3, 6; <code>pairwise</code> yields overlapping pairs.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>An iterable gives iterators (<code>__iter__</code>); an iterator gives items (<code>__next__</code>) and raises <code>StopIteration</code>.</li>
+      <li><code>for x in it</code> = <code>iter()</code> once, then <code>next()</code> until <code>StopIteration</code>.</li>
+      <li>Iterators are single-use; containers should return a fresh iterator from <code>__iter__</code>.</li>
+      <li>Generator functions (<code>yield</code>) pause and resume, keeping their locals; calling one runs nothing yet.</li>
+      <li>Generator expressions are lazy and constant-memory, ideal for one-pass consumers.</li>
+      <li><code>yield from</code> delegates; <code>send</code> passes values in; <code>close</code> runs cleanup.</li>
+      <li>Infinite generators are safe; consumers decide when to stop. Chain stages for big-data pipelines.</li>
+      <li><code>itertools</code> provides count, cycle, islice, chain, groupby (sorted input!), accumulate, pairwise, batched, product, permutations, combinations.</li>
+      <li>Use <code>strict=True</code> with <code>zip</code>, <code>batched</code> (3.13+), and <code>map</code> (3.14+).</li>
+    </ul>
+    <div class="flashcards" data-title="Iterators & generators">
+<script type="application/json">
+[
+  {"front": "Iterable", "back": "An object you can call <code>iter()</code> on to get an iterator: lists, strings, dicts, files, ranges..."},
+  {"front": "Iterator", "back": "An object with <code>__next__</code> (returns items, raises StopIteration) whose <code>__iter__</code> returns itself. Single pass."},
+  {"front": "How a <code>for</code> loop works", "back": "<code>_it = iter(x)</code>, then repeatedly <code>next(_it)</code> until StopIteration is raised."},
+  {"front": "Generator function", "back": "A function containing <code>yield</code>. Calling it returns a paused generator; each <code>next()</code> runs to the next yield."},
+  {"front": "Generator expression", "back": "<code>(expr for x in it)</code>: a lazy, constant-memory comprehension."},
+  {"front": "<code>yield from it</code>", "back": "Yield every item of <code>it</code>; with a sub-generator, also forwards send/close and returns its return value."},
+  {"front": "<code>gen.send(v)</code>", "back": "Resume the generator, making the paused <code>yield</code> expression evaluate to <code>v</code>. Prime with next() first."},
+  {"front": "<code>itertools.groupby</code> caveat", "back": "Groups only consecutive equal keys: sort by the same key first."},
+  {"front": "<code>islice</code>", "back": "Lazy slicing of any iterator, including infinite ones: <code>islice(it, start, stop, step)</code>."},
+  {"front": "<code>batched(it, n, strict=True)</code>", "back": "Tuples of n items; strict (3.13+) raises ValueError on an incomplete final batch."},
+  {"front": "<code>map(f, a, b, strict=True)</code>", "back": "New in Python 3.14: raises ValueError if the iterables differ in length."}
+]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/stdtypes.html#iterator-types">Iterator types</a> and <a href="https://docs.python.org/3/glossary.html#term-generator">the glossary on generators</a></li>
+      <li><a href="https://docs.python.org/3/howto/functional.html#iterators">Functional Programming HOWTO: iterators and generators</a></li>
+      <li><a href="https://docs.python.org/3/library/itertools.html"><code>itertools</code></a>, including the "Itertools Recipes" section</li>
+      <li><a href="https://peps.python.org/pep-0255/">PEP 255 (simple generators)</a>, <a href="https://peps.python.org/pep-0380/">PEP 380 (<code>yield from</code>)</a></li>
+      <li><a href="https://www.dabeaz.com/generators/">David Beazley: Generator Tricks for Systems Programmers</a></li>
+      <li>Next: <a href="m15-decorators.html">M15 Decorators &amp; Context Managers</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

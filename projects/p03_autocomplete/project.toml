@@ -1,0 +1,4 @@
+id = "p03"
+title = "Project 3: Autocomplete Engine"
+part = 3
+package = "autocomplete"

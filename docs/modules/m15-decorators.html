@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M15 · Decorators &amp; Context Managers · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m15">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 15</p>
+    <h1>Decorators &amp; Context Managers</h1>
+    <p class="lede">Decorators let you wrap behavior (timing, retries, caching, access checks) around a function without
+      touching its body. Context managers guarantee that setup is always paired with cleanup. Together they are how
+      professional Python code keeps cross-cutting concerns out of business logic.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m05-functions.html">M05 Functions</a>, <a href="m14-iterators.html">M14 Iterators &amp; Generators</a></span></div>
+    <ul class="objectives">
+      <li>Treat functions as values: store them, pass them, return them, and inspect their attributes</li>
+      <li>Explain closures and cell variables, use <code>nonlocal</code>, and avoid the late-binding trap</li>
+      <li>Write decorators with and without arguments, preserve metadata with <code>functools.wraps</code>, and predict stacking order</li>
+      <li>Apply decorators to real problems: timing, retry, caching, registration, and authorization</li>
+      <li>Write context managers as classes (<code>__enter__</code>/<code>__exit__</code>) and with <code>contextlib.contextmanager</code></li>
+      <li>Use <code>ExitStack</code>, <code>suppress</code>, <code>redirect_stdout</code>, and preview async context managers</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="functions-are-objects">
+    <h2>Functions are objects</h2>
+    <p>In Python, <code>def</code> is an assignment statement in disguise. It builds a <strong>function object</strong>
+      and binds it to a name, exactly like <code>x = 42</code> binds an int. Because a function is an ordinary object you
+      can do everything with it that you can do with any other object: put it in a list, store it in a dict, pass it as an
+      argument, return it from another function, and read its attributes. Languages with this property are said to have
+      <strong>first-class functions</strong>.</p>
+    <p>A function that takes or returns another function is called a <strong>higher-order function</strong>. You have
+      used several already: <code>sorted(words, key=len)</code> passes the function <code>len</code>;
+      <code>map(str.upper, words)</code> passes a method. Decorators are simply higher-order functions with a special
+      syntax.</p>
+    <div class="runnable" data-title="Functions as values">
+<textarea>
+def shout(text):
+    """Return text in capitals."""
+    return text.upper() + "!"
+
+def whisper(text):
+    return text.lower() + "..."
+
+# 1. A function is an object with a type and attributes
+print(type(shout), shout.__name__, shout.__doc__)
+
+# 2. Bind another name to the same object (no parentheses: we are not calling it)
+yell = shout
+print(yell("hi"), yell is shout)
+
+# 3. Store functions in a data structure: a dispatch table
+styles = {"loud": shout, "quiet": whisper}
+for mood, fn in styles.items():
+    print(mood, "->", fn("Hello"))
+
+# 4. Pass a function as an argument
+def apply_twice(fn, value):
+    return fn(fn(value))
+print(apply_twice(shout, "hey"))
+</textarea>
+    </div>
+    <aside class="callout danger"><p><strong>The most common beginner bug here:</strong> writing <code>styles = {"loud": shout()}</code>.
+      The parentheses <em>call</em> the function immediately (and here raise a <code>TypeError</code> for the missing
+      argument). Without parentheses you refer to the function; with them you run it.</p></aside>
+    <p>Functions can also be <em>created</em> inside other functions and returned. Each call to the outer function
+      produces a brand-new function object:</p>
+    <div class="runnable" data-title="Functions that build functions" data-predict>
+<textarea>
+def make_greeter(greeting):
+    def greet(name):
+        return f"{greeting}, {name}!"
+    return greet
+
+hello = make_greeter("Hello")
+howdy = make_greeter("Howdy")
+print(hello("Ada"))
+print(howdy("Ada"))
+print(hello is howdy)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a function name is just a reference to a function object. <code>fn</code> refers;
+      <code>fn()</code> calls.</p>
+  </section>
+
+  <section class="lesson-section" id="closures">
+    <h2>Closures and cell variables</h2>
+    <p>Look again at <code>make_greeter</code>. By the time we call <code>hello("Ada")</code>, <code>make_greeter</code>
+      has returned and its local variable <code>greeting</code> should be gone. Yet <code>greet</code> still knows it was
+      <code>"Hello"</code>. How?</p>
+    <p>When the compiler sees that an inner function uses a variable from an enclosing function, it stores that variable
+      in a <strong>cell</strong>: a tiny box that lives on the heap instead of in the outer function's stack frame. The
+      inner function keeps a reference to the cell. A function bundled with the cells it needs is a
+      <strong>closure</strong>. The variable is called a <strong>free variable</strong> of the inner function and a
+      <strong>cell variable</strong> of the outer one.</p>
+    <p>Step through this program. Watch <code>count</code> survive after <code>make_counter</code> returns, and notice
+      that the two counters have independent cells.</p>
+    <div class="tracer" data-title="A closure keeps its cell alive">
+<textarea>
+def make_counter():
+    count = 0
+    def increment():
+        nonlocal count
+        count += 1
+        return count
+    return increment
+
+a = make_counter()
+b = make_counter()
+a()
+a()
+result = b()
+</textarea>
+    </div>
+    <h3><code>nonlocal</code></h3>
+    <p>Reading a variable from an enclosing scope needs nothing special (that is the "E" in the LEGB rule from M05).
+      <em>Assigning</em> to it is different: <code>count += 1</code> is an assignment, and an assignment anywhere in a
+      function makes the name local to that function. Without <code>nonlocal count</code>, Python would treat
+      <code>count</code> as a new local and fail with <code>UnboundLocalError</code> when it tries to read it before
+      assigning. <code>nonlocal</code> says "this name refers to the variable in the nearest enclosing function".</p>
+    <div class="runnable" data-title="Inspecting a closure">
+<textarea>
+def make_counter():
+    count = 0
+    def increment():
+        nonlocal count
+        count += 1
+        return count
+    return increment
+
+c = make_counter()
+c(); c()
+print("free variables:", c.__code__.co_freevars)
+print("cell contents: ", c.__closure__[0].cell_contents)
+print("outer's cell variables:", make_counter.__code__.co_cellvars)
+
+def broken_counter():
+    count = 0
+    def increment():
+        count += 1        # no nonlocal: count is local here
+        return count
+    return increment
+
+try:
+    broken_counter()()
+except UnboundLocalError as e:
+    print("UnboundLocalError:", e)
+</textarea>
+    </div>
+    <h3>The late-binding trap</h3>
+    <p>A closure captures the <em>variable</em>, not its value at the moment the inner function was created. The value
+      is looked up when the inner function <em>runs</em>. This surprises almost everyone once:</p>
+    <div class="runnable" data-title="Predict: closures in a loop" data-predict>
+<textarea>
+callbacks = [lambda: i for i in range(3)]
+print([f() for f in callbacks])
+</textarea>
+    </div>
+    <details class="reveal"><summary>Why, and the fix</summary>
+      <p>All three lambdas close over the same variable <code>i</code>. By the time they run, the loop has finished and
+        <code>i</code> is 2, so you get <code>[2, 2, 2]</code>. Fix it by binding the current value as a default argument
+        (defaults are evaluated once, at definition time) or with <code>functools.partial</code>:</p>
+      <pre><code class="language-python">callbacks = [lambda i=i: i for i in range(3)]    # [0, 1, 2]</code></pre>
+    </details>
+    <p><strong>Remember:</strong> a closure is a function plus the cells of the enclosing variables it uses. Use
+      <code>nonlocal</code> to rebind them. Closures see the variable's <em>current</em> value, not a snapshot.</p>
+  </section>
+
+  <section class="lesson-section" id="decorator-syntax">
+    <h2>Decorators, desugared</h2>
+    <p>A <strong>decorator</strong> is a callable that takes a function and returns a replacement for it. The
+      <code>@</code> syntax is pure shorthand. These two snippets are exactly equivalent:</p>
+    <div class="two-col">
+      <pre><code class="language-python">@announce
+def greet(name):
+    return f"Hi {name}"</code></pre>
+      <pre><code class="language-python">def greet(name):
+    return f"Hi {name}"
+greet = announce(greet)</code></pre>
+    </div>
+    <p>The replacement is almost always a closure, conventionally called <code>wrapper</code>, that does something
+      before and/or after calling the original. It accepts <code>*args, **kwargs</code> so it can wrap a function of any
+      signature and forwards them unchanged:</p>
+    <pre><code class="language-python">def announce(func):                      # runs ONCE, when the decorated def executes
+    def wrapper(*args, **kwargs):        # runs on EVERY call
+        print(f"calling {func.__name__}")
+        result = func(*args, **kwargs)   # call the original
+        print(f"{func.__name__} returned {result!r}")
+        return result                    # don't forget to return it!
+    return wrapper</code></pre>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 170" role="img" aria-label="After decoration the name greet points to wrapper, whose closure cell points to the original function">
+        <rect x="20" y="60" width="90" height="40" rx="6" fill="none" stroke="var(--fg-muted)"/>
+        <text x="65" y="85" text-anchor="middle" fill="var(--fg)" font-size="14">greet</text>
+        <line x1="110" y1="80" x2="210" y2="80" stroke="var(--fg-muted)" marker-end="url(#m15a)"/>
+        <rect x="215" y="40" width="170" height="80" rx="8" fill="var(--viz-1)" fill-opacity="0.18" stroke="var(--viz-1)"/>
+        <text x="300" y="66" text-anchor="middle" fill="var(--fg)" font-size="14">wrapper</text>
+        <text x="300" y="88" text-anchor="middle" fill="var(--fg-muted)" font-size="12">closure cell: func</text>
+        <line x1="385" y1="80" x2="470" y2="80" stroke="var(--fg-muted)" marker-end="url(#m15a)"/>
+        <rect x="475" y="40" width="150" height="80" rx="8" fill="var(--viz-2)" fill-opacity="0.18" stroke="var(--viz-2)"/>
+        <text x="550" y="66" text-anchor="middle" fill="var(--fg)" font-size="14">original greet</text>
+        <text x="550" y="88" text-anchor="middle" fill="var(--fg-muted)" font-size="12">(only wrapper can reach it)</text>
+        <text x="320" y="150" text-anchor="middle" fill="var(--fg-muted)" font-size="12">greet = announce(greet): the name now points at the wrapper</text>
+        <defs><marker id="m15a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
+      </svg>
+      <figcaption>Decoration rebinds the name. The original function survives only inside the wrapper's closure.</figcaption>
+    </figure>
+    <p>A crucial detail: the decorator itself runs at <strong>definition time</strong>, when Python executes the
+      <code>def</code> statement (usually at import). The wrapper runs at <strong>call time</strong>. Predict the order
+      of the printed lines:</p>
+    <div class="runnable" data-title="Predict: when does each part run?" data-predict>
+<textarea>
+def announce(func):
+    print(f"decorating {func.__name__}")
+    def wrapper(*args, **kwargs):
+        print(f"calling {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
+
+@announce
+def greet(name):
+    return f"Hi {name}"
+
+print("defined")
+print(greet("Ada"))
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Two classic decorator bugs: forgetting <code>return result</code> in the wrapper
+      (every decorated call then returns <code>None</code>), and forgetting <code>return wrapper</code> in the decorator
+      (the name is then bound to <code>None</code> and calling it raises <code>TypeError: 'NoneType' object is not
+      callable</code>).</p></aside>
+    <p><strong>Remember:</strong> <code>@deco</code> above <code>def f</code> means <code>f = deco(f)</code>. Decorator
+      body: once, at definition. Wrapper body: every call.</p>
+  </section>
+
+  <section class="lesson-section" id="wraps">
+    <h2>Preserving identity with <code>functools.wraps</code></h2>
+    <p>Our wrapper has a problem: after decoration, <code>greet.__name__</code> is <code>"wrapper"</code> and its
+      docstring is gone. That breaks <code>help()</code>, makes tracebacks and logs confusing, and confuses tools such as
+      pytest and documentation generators that rely on a function's metadata.</p>
+    <p><code>functools.wraps(func)</code> is itself a decorator (with an argument!) that you apply to the wrapper. It
+      copies <code>__name__</code>, <code>__qualname__</code>, <code>__doc__</code>, <code>__module__</code>,
+      <code>__annotations__</code>, and <code>__dict__</code> from the original, and sets
+      <code>wrapper.__wrapped__ = func</code> so tools such as <code>inspect.signature</code> can find the real
+      signature.</p>
+    <div class="runnable" data-title="Before and after wraps">
+<textarea>
+import functools
+import inspect
+
+def plain(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def proper(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@plain
+def area(width: float, height: float = 1.0) -> float:
+    """Return the area of a rectangle."""
+    return width * height
+
+@proper
+def volume(width: float, height: float, depth: float) -> float:
+    """Return the volume of a box."""
+    return width * height * depth
+
+print(area.__name__, "|", area.__doc__, "|", inspect.signature(area))
+print(volume.__name__, "|", volume.__doc__, "|", inspect.signature(volume))
+print("original reachable:", volume.__wrapped__(1, 2, 3))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Use <code>@functools.wraps(func)</code> on <em>every</em> wrapper you write. It costs
+      one line and saves hours of confused debugging. Code reviewers flag its absence.</p></aside>
+    <p><strong>Remember:</strong> always decorate the wrapper with <code>@functools.wraps(func)</code>; the original is
+      then available as <code>__wrapped__</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="decorator-arguments">
+    <h2>Decorators with arguments: three layers</h2>
+    <p>How would you write <code>@repeat(3)</code>? Read the desugaring carefully:
+      <code>@repeat(3)</code> means <code>greet = repeat(3)(greet)</code>. So <code>repeat(3)</code> is called first and
+      must <em>return a decorator</em>. That gives three nested functions, each with one job:</p>
+    <ol>
+      <li><strong>The factory</strong> <code>repeat(times)</code> receives the configuration and returns a decorator.</li>
+      <li><strong>The decorator</strong> <code>decorate(func)</code> receives the function and returns a wrapper.</li>
+      <li><strong>The wrapper</strong> <code>wrapper(*args, **kwargs)</code> runs on every call. It closes over both
+        <code>times</code> and <code>func</code>.</li>
+    </ol>
+    <div class="runnable" data-title="A decorator factory">
+<textarea>
+import functools
+
+def repeat(times):                     # layer 1: configuration
+    def decorate(func):                # layer 2: the actual decorator
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):  # layer 3: runs per call
+            results = []
+            for _ in range(times):
+                results.append(func(*args, **kwargs))
+            return results
+        return wrapper
+    return decorate
+
+@repeat(3)
+def roll(sides):
+    return f"rolled a d{sides}"
+
+print(roll(6))
+print(roll.__name__)
+
+# The same thing without @:
+def ping():
+    return "ping"
+ping = repeat(2)(ping)
+print(ping())
+</textarea>
+    </div>
+    <h3>Optional arguments: <code>@timed</code> and <code>@timed(unit="ms")</code></h3>
+    <p>Sometimes you want a decorator to work both bare and with arguments. The idiom: make the function the first
+      parameter with a default of <code>None</code>, and make every option keyword-only. If Python passed a function, you
+      were used bare; otherwise you were called with options and must return a decorator.</p>
+    <pre><code class="language-python">def timed(func=None, *, unit="s"):
+    def decorate(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return f(*args, **kwargs)
+            finally:
+                elapsed = time.perf_counter() - start
+                wrapper.last_elapsed = elapsed * (1000 if unit == "ms" else 1)
+        return wrapper
+    return decorate(func) if func is not None else decorate</code></pre>
+    <aside class="callout think"><p>Why must <code>unit</code> be keyword-only (after the <code>*</code>)? Consider what
+      <code>@timed("ms")</code> would do if it were not.</p></aside>
+    <p><strong>Remember:</strong> <code>@factory(args)</code> means <code>f = factory(args)(f)</code>: three layers,
+      factory → decorator → wrapper.</p>
+  </section>
+
+  <section class="lesson-section" id="stacking-and-classes">
+    <h2>Stacking, class decorators, and classes as decorators</h2>
+    <h3>Stacking order</h3>
+    <p>You can stack several decorators. They are <em>applied</em> bottom-up (the one nearest the <code>def</code>
+      wraps first) and therefore <em>run</em> top-down on each call, like layers of an onion:</p>
+    <pre><code class="language-python">@bold
+@italic
+def hi(): ...
+# means: hi = bold(italic(hi))</code></pre>
+    <div class="runnable" data-title="Predict: stacking order" data-predict>
+<textarea>
+def bold(f):
+    print("bold applied")
+    return lambda: "<b>" + f() + "</b>"
+
+def italic(f):
+    print("italic applied")
+    return lambda: "<i>" + f() + "</i>"
+
+@bold
+@italic
+def hi():
+    return "hi"
+
+print(hi())
+</textarea>
+    </div>
+    <p>Order matters in practice. If you stack <code>@cache</code> above <code>@authorize</code>, a cached result can
+      be returned to a user who would have failed the authorization check, because the cache answers before the check runs.
+      Put checks <em>outside</em> (above) caches.</p>
+    <h3>Class decorators</h3>
+    <p>A decorator can also be applied to a class: <code>@deco class C: ...</code> means <code>C = deco(C)</code>. You
+      have used one already: <code>@dataclass</code> inspects the class's annotations and adds <code>__init__</code>,
+      <code>__repr__</code>, and <code>__eq__</code>. Class decorators usually modify the class and return the same
+      object, or register it somewhere.</p>
+    <h3>Classes as decorators</h3>
+    <p>Anything callable can be a decorator, including an instance of a class that defines <code>__call__</code>. This
+      is handy when the decorator needs visible state.</p>
+    <div class="runnable" data-title="A class decorator and a decorator class">
+<textarea>
+import functools
+
+# A class decorator: adds a readable __repr__ based on the instance's attributes
+def auto_repr(cls):
+    def __repr__(self):
+        fields = ", ".join(f"{k}={v!r}" for k, v in vars(self).items())
+        return f"{cls.__name__}({fields})"
+    cls.__repr__ = __repr__
+    return cls
+
+@auto_repr
+class Point:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+print(Point(1, 2))
+
+# A class used as a decorator: instances are callable and keep state
+class CountCalls:
+    def __init__(self, func):
+        functools.update_wrapper(self, func)   # the class form of wraps
+        self.func = func
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return self.func(*args, **kwargs)
+
+@CountCalls
+def square(n):
+    return n * n
+
+square(3); square(4)
+print(square.__name__, "called", square.calls, "times")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> stacked decorators apply bottom-up and run top-down. Classes can be decorated, and
+      callable objects can be decorators.</p>
+  </section>
+
+  <section class="lesson-section" id="real-uses">
+    <h2>Real-world decorators</h2>
+    <p>Decorators shine for <strong>cross-cutting concerns</strong>: behavior that many unrelated functions need but that
+      is not part of what any of them is <em>about</em>. Here are the five you will meet most often.</p>
+    <div class="tabs">
+      <div class="tab" data-label="Timing">
+        <pre><code class="language-python">def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()        # monotonic, high resolution
+        try:
+            return func(*args, **kwargs)
+        finally:                           # record even if func raises
+            wrapper.last_seconds = time.perf_counter() - start
+    wrapper.last_seconds = 0.0
+    return wrapper</code></pre>
+        <p>Use <code>time.perf_counter()</code>, not <code>time.time()</code>: the wall clock can jump when the system
+          clock is adjusted.</p>
+      </div>
+      <div class="tab" data-label="Retry">
+        <pre><code class="language-python">def retry(times=3, exceptions=(Exception,), delay=0.1, sleep=time.sleep):
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions:
+                    if attempt == times:
+                        raise                       # give up: re-raise the last error
+                    sleep(delay * 2 ** (attempt - 1))  # exponential backoff
+        return wrapper
+    return decorate</code></pre>
+        <p>Only retry errors that might succeed next time (timeouts, connection resets), never bugs like
+          <code>TypeError</code>. Injecting <code>sleep</code> lets tests run instantly.</p>
+      </div>
+      <div class="tab" data-label="Caching">
+        <pre><code class="language-python">def memoize(func):
+    cache = {}
+    @functools.wraps(func)
+    def wrapper(*args):
+        if args not in cache:
+            cache[args] = func(*args)
+        return cache[args]
+    return wrapper
+
+# In real code, use the standard library:
+@functools.cache          # unbounded; @functools.lru_cache(maxsize=128) is bounded
+def fib(n): return n if n &lt; 2 else fib(n - 1) + fib(n - 2)</code></pre>
+        <p>Caching is only correct for <strong>pure</strong> functions whose arguments are hashable (M18 goes deeper).</p>
+      </div>
+      <div class="tab" data-label="Registration">
+        <pre><code class="language-python">COMMANDS = {}
+
+def command(name):
+    def decorate(func):
+        COMMANDS[name] = func
+        return func          # return the original unchanged
+    return decorate
+
+@command("greet")
+def greet(who): return f"hello {who}"
+
+COMMANDS["greet"]("Ada")</code></pre>
+        <p>Web frameworks (<code>@app.get("/")</code>), CLI libraries, pytest fixtures, and plugin systems all register
+          functions this way. No wrapper needed.</p>
+      </div>
+      <div class="tab" data-label="Authorization">
+        <pre><code class="language-python">def require_role(role):
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapper(user, *args, **kwargs):
+            if role not in user.roles:
+                raise PermissionError(f"{user.name} needs role {role!r}")
+            return func(user, *args, **kwargs)
+        return wrapper
+    return decorate
+
+@require_role("admin")
+def delete_account(user, account_id): ...</code></pre>
+        <p>The check lives in one place instead of being copy-pasted (and eventually forgotten) at the top of every
+          sensitive function.</p>
+      </div>
+    </div>
+    <p>Run them together. The retry demo uses a fake <code>sleep</code> that just records delays, so it runs instantly
+      and deterministically:</p>
+    <div class="runnable" data-title="Retry and authorization in action">
+<textarea>
+import functools
+
+def retry(times=3, exceptions=(Exception,), delay=0.1, sleep=None):
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as exc:
+                    print(f"  attempt {attempt} failed: {exc}")
+                    if attempt == times:
+                        raise
+                    if sleep:
+                        sleep(delay * 2 ** (attempt - 1))
+        return wrapper
+    return decorate
+
+waits = []
+attempts = {"n": 0}
+
+@retry(times=4, exceptions=(ConnectionError,), sleep=waits.append)
+def fetch():
+    attempts["n"] += 1
+    if attempts["n"] < 3:
+        raise ConnectionError("server busy")
+    return "data!"
+
+print(fetch(), "after waits", waits)
+
+def require_role(role):
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapper(user, *args, **kwargs):
+            if role not in user["roles"]:
+                raise PermissionError(f"{user['name']} needs role {role!r}")
+            return func(user, *args, **kwargs)
+        return wrapper
+    return decorate
+
+@require_role("admin")
+def delete_account(user, account_id):
+    return f"{user['name']} deleted {account_id}"
+
+print(delete_account({"name": "root", "roles": {"admin"}}, 42))
+try:
+    delete_account({"name": "guest", "roles": set()}, 42)
+except PermissionError as e:
+    print("PermissionError:", e)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> a decorator is the right tool when the same before/after behavior would otherwise be
+      copy-pasted into many functions.</p>
+  </section>
+
+  <section class="lesson-section" id="context-managers">
+    <h2>Context managers: guaranteed cleanup</h2>
+    <p>Many resources must be released no matter what: files closed, locks released, database transactions committed or
+      rolled back, temporary settings restored. You met <code>with open(...) as f:</code> in M09. A <strong>context
+      manager</strong> is any object that implements two methods, and the <code>with</code> statement guarantees the
+      second runs even when the block raises.</p>
+    <pre><code class="language-python">with manager as value:
+    body
+
+# is roughly equivalent to:
+value = manager.__enter__()
+try:
+    body
+except BaseException as exc:
+    if not manager.__exit__(type(exc), exc, exc.__traceback__):
+        raise                         # __exit__ returned falsy: propagate
+else:
+    manager.__exit__(None, None, None)</code></pre>
+    <ul>
+      <li><code>__enter__(self)</code> does the setup. Whatever it returns is bound to the name after <code>as</code>
+        (often <code>self</code>, sometimes another object such as the file).</li>
+      <li><code>__exit__(self, exc_type, exc_value, traceback)</code> does the cleanup. If the block finished normally
+        all three are <code>None</code>. If it raised, they describe the exception.</li>
+      <li>If <code>__exit__</code> returns a <strong>truthy</strong> value, the exception is <strong>suppressed</strong>
+        and execution continues after the <code>with</code> block. Return <code>None</code> (the default) or
+        <code>False</code> to let it propagate. Suppressing should be rare and deliberate.</li>
+    </ul>
+    <div class="runnable" data-title="A context manager class">
+<textarea>
+class Indented:
+    """Print a brace-delimited block; nested blocks indent further."""
+    level = 0
+
+    def __enter__(self):
+        Indented.level += 1
+        print("  " * (Indented.level - 1) + "{")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        print("  " * (Indented.level - 1) + "}" + (f"  # left because of {exc_type.__name__}" if exc_type else ""))
+        Indented.level -= 1
+        return False          # never swallow errors
+
+    def say(self, text):
+        print("  " * Indented.level + text)
+
+with Indented() as outer:
+    outer.say("outer line")
+    with Indented() as inner:
+        inner.say("inner line")
+    outer.say("back in outer")
+
+try:
+    with Indented() as block:
+        block.say("about to fail")
+        1 / 0
+except ZeroDivisionError:
+    print("the error still propagated, but the block was closed first")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: suppressing an exception" data-predict>
+<textarea>
+class Ignore:
+    def __init__(self, *types):
+        self.types = types
+    def __enter__(self):
+        print("enter")
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        print("exit", exc_type.__name__ if exc_type else None)
+        return exc_type is not None and issubclass(exc_type, self.types)
+
+with Ignore(ZeroDivisionError):
+    print(1 / 0)
+    print("never printed")
+print("after the block")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>__enter__</code> sets up and returns the <code>as</code> value;
+      <code>__exit__</code> always runs and suppresses the exception only if it returns something truthy.</p>
+  </section>
+
+  <section class="lesson-section" id="contextlib">
+    <h2><code>contextlib</code>: context managers the easy way</h2>
+    <h3><code>@contextmanager</code></h3>
+    <p>Writing a class for every context manager is verbose. <code>contextlib.contextmanager</code> turns a
+      <strong>generator function</strong> (M14) into a context manager: code before <code>yield</code> is the setup, the
+      yielded value is the <code>as</code> value, and code after <code>yield</code> is the cleanup. If the block raises,
+      the exception is re-raised <em>at the <code>yield</code></em>, so wrap it in <code>try/finally</code> to make
+      cleanup unconditional.</p>
+    <div class="runnable" data-title="Generator-based context managers">
+<textarea>
+from contextlib import contextmanager
+
+settings = {"debug": False}
+
+@contextmanager
+def override(mapping, key, value):
+    old = mapping[key]
+    mapping[key] = value          # setup
+    try:
+        yield mapping             # the with-block runs here
+    finally:
+        mapping[key] = old        # cleanup, even on error
+
+with override(settings, "debug", True) as s:
+    print("inside:", s)
+print("after:", settings)
+
+try:
+    with override(settings, "debug", True):
+        raise RuntimeError("boom")
+except RuntimeError:
+    pass
+print("restored after error:", settings)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Forgetting <code>try/finally</code> around <code>yield</code> is the number one
+      <code>@contextmanager</code> bug: an exception in the block skips your cleanup entirely. To suppress an exception
+      instead, catch it with <code>except</code> around the <code>yield</code> and do not re-raise.</p></aside>
+    <h3><code>suppress</code>, <code>redirect_stdout</code>, and friends</h3>
+    <ul>
+      <li><code>contextlib.suppress(*exceptions)</code>: ignore specific exceptions. Clearer than
+        <code>try/except: pass</code> for the rare cases where ignoring really is correct, such as deleting a file that may
+        not exist.</li>
+      <li><code>contextlib.redirect_stdout(file)</code> / <code>redirect_stderr</code>: temporarily send
+        <code>print</code> output somewhere else, such as an <code>io.StringIO</code>. This is how this course's exercise
+        checker captures your output.</li>
+      <li><code>contextlib.chdir(path)</code>: temporarily change the working directory.</li>
+      <li><code>contextlib.nullcontext(value)</code>: a do-nothing context manager for "maybe use a lock" code paths.</li>
+    </ul>
+    <div class="runnable" data-title="suppress and redirect_stdout">
+<textarea>
+import io
+from contextlib import redirect_stdout, suppress
+
+cache = {"a": 1}
+with suppress(KeyError):
+    del cache["missing"]          # would raise KeyError; silently ignored
+print("still running, cache =", cache)
+
+buffer = io.StringIO()
+with redirect_stdout(buffer):
+    print("this goes into the buffer")
+    print("so does this")
+print("captured:", buffer.getvalue().splitlines())
+</textarea>
+    </div>
+    <h3><code>ExitStack</code>: a dynamic number of context managers</h3>
+    <p>What if you need to open a list of files whose length you only know at run time? You cannot write a variable
+      number of nested <code>with</code> statements. <code>ExitStack</code> is a context manager that collects others:
+      <code>stack.enter_context(cm)</code> enters one and schedules its exit. When the stack closes, it exits them all in
+      reverse order, even if one of the later setups fails. <code>stack.callback(fn, *args)</code> schedules any cleanup
+      function.</p>
+    <div class="runnable" data-title="ExitStack unwinds in reverse order">
+<textarea>
+from contextlib import ExitStack, contextmanager
+
+@contextmanager
+def resource(name):
+    print(f"open {name}")
+    try:
+        yield name.upper()
+    finally:
+        print(f"close {name}")
+
+names = ["db", "cache", "queue"]
+with ExitStack() as stack:
+    handles = [stack.enter_context(resource(n)) for n in names]
+    stack.callback(print, "callback: flushed metrics")
+    print("working with", handles)
+print("all released")
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> prefer <code>@contextmanager</code> with <code>try/finally</code> around a single
+      <code>yield</code>; reach for <code>ExitStack</code> when the number of resources is dynamic.</p>
+  </section>
+
+  <section class="lesson-section" id="async-preview">
+    <h2>Preview: async context managers</h2>
+    <p>Asynchronous code (Part 7) needs setup and cleanup that can themselves <em>wait</em>, for example opening a
+      network connection. The protocol is the same idea with coroutine methods <code>__aenter__</code> and
+      <code>__aexit__</code>, used with <code>async with</code>. <code>contextlib.asynccontextmanager</code> is the async
+      twin of <code>@contextmanager</code>.</p>
+    <div class="runnable" data-title="async with (top-level await works in the browser)">
+<textarea>
+import asyncio
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def connection(host):
+    print(f"connecting to {host}...")
+    await asyncio.sleep(0.05)          # pretend network setup
+    try:
+        yield f"<conn {host}>"
+    finally:
+        await asyncio.sleep(0.01)      # pretend graceful close
+        print(f"closed {host}")
+
+async def main():
+    async with connection("db.local") as conn:
+        print("using", conn)
+
+await main()   # in a script: asyncio.run(main())
+</textarea>
+    </div>
+    <aside class="callout note"><p>The browser runs cells inside an event loop, so the cell uses top-level
+      <code>await main()</code>. In a local script you write <code>asyncio.run(main())</code> and run it with
+      <code>pixi run python script.py</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m15-e1" data-title="A counter closure">
+      <div class="exercise-prompt">
+        <p>Write <code>make_counter(start=0, step=1)</code> that returns a function. Each call to the returned function
+          advances the count by <code>step</code> and returns the new value. Counters made by separate calls must be
+          independent. Use a closure and <code>nonlocal</code> (no globals, no classes).</p>
+      </div>
+<textarea class="starter">
+def make_counter(start=0, step=1):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_counts_up():
+    c = make_counter()
+    assert [c(), c(), c()] == [1, 2, 3], "default counter should return 1, 2, 3"
+
+def test_start_and_step():
+    c = make_counter(10, 5)
+    assert [c(), c()] == [15, 20], "make_counter(10, 5) should return 15 then 20"
+
+def test_independent():
+    a, b = make_counter(), make_counter()
+    a(); a()
+    assert b() == 1, "each counter needs its own cell"
+
+def test_is_a_closure():
+    c = make_counter()
+    assert c.__closure__ is not None, "the returned function should close over a variable"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Store the running total in a local of <code>make_counter</code>,
+        declare it <code>nonlocal</code> in the inner function, add <code>step</code>, and return it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def make_counter(start=0, step=1):
+    count = start
+
+    def counter():
+        nonlocal count
+        count += step
+        return count
+
+    return counter</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m15-e2" data-title="A call-logging decorator">
+      <div class="exercise-prompt">
+        <p>Write a decorator <code>log_calls</code>. The wrapper must call the original function, return its result, and
+          append a tuple <code>(func_name, args, kwargs, result)</code> to a list stored on the wrapper as
+          <code>wrapper.calls</code>. Use <code>functools.wraps</code> so the decorated function keeps its name and
+          docstring.</p>
+      </div>
+<textarea class="starter">
+import functools
+
+def log_calls(func):
+    ...
+
+@log_calls
+def add(a, b=0):
+    """Add two numbers."""
+    return a + b
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_result_is_returned():
+    assert add(2, b=3) == 5, "the wrapper must return the original result"
+
+def test_calls_are_logged():
+    @log_calls
+    def mul(x, y):
+        return x * y
+    mul(2, 3)
+    mul(4, y=5)
+    assert mul.calls == [("mul", (2, 3), {}, 6), ("mul", (4,), {"y": 5}, 20)], f"unexpected log {mul.calls!r}"
+
+def test_metadata_preserved():
+    assert add.__name__ == "add", "use functools.wraps to keep __name__"
+    assert add.__doc__ == "Add two numbers.", "use functools.wraps to keep __doc__"
+    assert hasattr(add, "__wrapped__"), "functools.wraps sets __wrapped__"
+
+def test_separate_logs():
+    @log_calls
+    def one():
+        return 1
+    one()
+    @log_calls
+    def two():
+        return 2
+    assert two.calls == [], "each decorated function needs its own list"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Create the list inside <code>log_calls</code> (once per decorated
+        function) and attach it with <code>wrapper.calls = []</code> before returning <code>wrapper</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import functools
+
+def log_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        wrapper.calls.append((func.__name__, args, kwargs, result))
+        return result
+
+    wrapper.calls = []
+    return wrapper
+
+@log_calls
+def add(a, b=0):
+    """Add two numbers."""
+    return a + b</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m15-e3" data-title="retry with arguments">
+      <div class="exercise-prompt">
+        <p>Write a decorator factory <code>retry(times, exceptions=(Exception,), sleep=None, delay=1.0)</code>. The
+          decorated function is called up to <code>times</code> times. If it raises one of <code>exceptions</code>, try
+          again; between attempts call <code>sleep(delay * 2 ** (attempt - 1))</code> if <code>sleep</code> is not
+          <code>None</code> (attempt counts from 1). After the last failed attempt, re-raise the exception. Exceptions not
+          in <code>exceptions</code> must propagate immediately. Preserve metadata with <code>functools.wraps</code>.</p>
+      </div>
+<textarea class="starter">
+import functools
+
+def retry(times, exceptions=(Exception,), sleep=None, delay=1.0):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def make_flaky(failures, exc=ConnectionError):
+    state = {"calls": 0}
+    def flaky():
+        state["calls"] += 1
+        if state["calls"] <= failures:
+            raise exc("try again")
+        return "ok"
+    return flaky, state
+
+def test_succeeds_after_failures():
+    waits = []
+    flaky, state = make_flaky(2)
+    wrapped = retry(3, (ConnectionError,), sleep=waits.append, delay=0.5)(flaky)
+    assert wrapped() == "ok", "should succeed on the third attempt"
+    assert state["calls"] == 3, f"expected 3 calls, got {state['calls']}"
+    assert waits == [0.5, 1.0], f"expected backoff [0.5, 1.0], got {waits}"
+
+def test_gives_up_and_reraises():
+    flaky, state = make_flaky(10)
+    wrapped = retry(3, (ConnectionError,))(flaky)
+    try:
+        wrapped()
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("the last ConnectionError should be re-raised")
+    assert state["calls"] == 3, "should stop after `times` attempts"
+
+def test_other_errors_propagate_immediately():
+    flaky, state = make_flaky(1, exc=ValueError)
+    wrapped = retry(5, (ConnectionError,))(flaky)
+    try:
+        wrapped()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ValueError is not retryable and should propagate")
+    assert state["calls"] == 1, "non-retryable errors must not be retried"
+
+def test_metadata_and_arguments():
+    @retry(2)
+    def greet(name, punctuation="!"):
+        """Say hi."""
+        return f"hi {name}{punctuation}"
+    assert greet("Ada", punctuation="?") == "hi Ada?", "arguments must be forwarded"
+    assert greet.__name__ == "greet" and greet.__doc__ == "Say hi.", "use functools.wraps"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Three layers: <code>retry</code> returns <code>decorate</code>,
+        which returns <code>wrapper</code>. In the wrapper, loop <code>for attempt in range(1, times + 1)</code>, return
+        on success, and in <code>except exceptions:</code> re-raise with a bare <code>raise</code> when
+        <code>attempt == times</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import functools
+
+def retry(times, exceptions=(Exception,), sleep=None, delay=1.0):
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions:
+                    if attempt == times:
+                        raise
+                    if sleep is not None:
+                        sleep(delay * 2 ** (attempt - 1))
+        return wrapper
+    return decorate</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m15-e4" data-title="A registry decorator">
+      <div class="exercise-prompt">
+        <p>Build a tiny command dispatcher. Write <code>command(name)</code>, a decorator factory that stores the
+          decorated function in the global dict <code>COMMANDS</code> under <code>name</code> and returns the function
+          <em>unchanged</em>. Registering a name twice must raise <code>ValueError</code>. Then write
+          <code>dispatch(line)</code> that splits <code>line</code> on whitespace, looks up the first word, and calls the
+          command with the remaining words as positional arguments. Unknown commands return
+          <code>"unknown command: &lt;word&gt;"</code>.</p>
+      </div>
+<textarea class="starter">
+COMMANDS = {}
+
+def command(name):
+    ...
+
+def dispatch(line):
+    ...
+
+@command("add")
+def add(a, b):
+    return int(a) + int(b)
+
+@command("echo")
+def echo(*words):
+    return " ".join(words)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_registered():
+    assert COMMANDS["add"] is add, "command() must return the original function unchanged"
+    assert set(COMMANDS) >= {"add", "echo"}, "both commands should be registered"
+
+def test_dispatch():
+    assert dispatch("add 2 3") == 5, "dispatch('add 2 3') should return 5"
+    assert dispatch("echo hello big world") == "hello big world"
+
+def test_unknown():
+    assert dispatch("fly away") == "unknown command: fly", "unknown commands return a message"
+
+def test_duplicate_rejected():
+    try:
+        @command("add")
+        def other(a, b):
+            return 0
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("registering 'add' twice should raise ValueError")
+    assert COMMANDS["add"] is add, "the original registration must survive"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>command(name)</code> returns <code>decorate(func)</code>,
+        which checks <code>name in COMMANDS</code>, stores the function, and returns <code>func</code>. In
+        <code>dispatch</code>, use <code>word, *args = line.split()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">COMMANDS = {}
+
+def command(name):
+    def decorate(func):
+        if name in COMMANDS:
+            raise ValueError(f"command {name!r} already registered")
+        COMMANDS[name] = func
+        return func
+    return decorate
+
+def dispatch(line):
+    word, *args = line.split()
+    func = COMMANDS.get(word)
+    if func is None:
+        return f"unknown command: {word}"
+    return func(*args)
+
+@command("add")
+def add(a, b):
+    return int(a) + int(b)
+
+@command("echo")
+def echo(*words):
+    return " ".join(words)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m15-e5" data-title="Context managers two ways">
+      <div class="exercise-prompt">
+        <p>Write two context managers.</p>
+        <ol>
+          <li>A class <code>Ignoring(*exc_types)</code> that suppresses the given exception types (and subclasses) and
+            records the suppressed exception object in <code>self.caught</code> (otherwise <code>None</code>). Other
+            exceptions must propagate.</li>
+          <li>A generator-based <code>temporary_attr(obj, name, value)</code> using <code>@contextmanager</code> that sets
+            <code>obj.name = value</code> for the duration of the block, yields <code>obj</code>, and restores the
+            original value afterwards, even if the block raises.</li>
+        </ol>
+      </div>
+<textarea class="starter">
+from contextlib import contextmanager
+
+class Ignoring:
+    ...
+
+@contextmanager
+def temporary_attr(obj, name, value):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+class Box:
+    def __init__(self):
+        self.size = 1
+
+def test_ignoring_suppresses():
+    with Ignoring(KeyError, ZeroDivisionError) as ign:
+        {}["missing"]
+    assert isinstance(ign.caught, KeyError), "the suppressed exception should be recorded in .caught"
+
+def test_ignoring_no_error():
+    with Ignoring(KeyError) as ign:
+        pass
+    assert ign.caught is None, ".caught should be None when nothing was raised"
+
+def test_ignoring_other_errors_propagate():
+    try:
+        with Ignoring(KeyError):
+            raise ValueError("bad")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ValueError is not in the list and must propagate")
+
+def test_ignoring_subclasses():
+    with Ignoring(LookupError) as ign:
+        [][1]
+    assert isinstance(ign.caught, IndexError), "subclasses of the given types are suppressed too"
+
+def test_temporary_attr():
+    box = Box()
+    with temporary_attr(box, "size", 99) as b:
+        assert b is box, "temporary_attr should yield the object"
+        assert box.size == 99, "the attribute should be changed inside the block"
+    assert box.size == 1, "the attribute should be restored afterwards"
+
+def test_temporary_attr_restores_on_error():
+    box = Box()
+    try:
+        with temporary_attr(box, "size", 5):
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert box.size == 1, "restore even when the block raises (use try/finally)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>In <code>__exit__</code>, return
+        <code>exc_type is not None and issubclass(exc_type, self.exc_types)</code> (store the value first). In the
+        generator, save <code>getattr(obj, name)</code>, set the new value, then <code>try: yield obj</code>
+        <code>finally: setattr(...)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from contextlib import contextmanager
+
+class Ignoring:
+    def __init__(self, *exc_types):
+        self.exc_types = exc_types
+        self.caught = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None and issubclass(exc_type, self.exc_types):
+            self.caught = exc
+            return True
+        return False
+
+@contextmanager
+def temporary_attr(obj, name, value):
+    old = getattr(obj, name)
+    setattr(obj, name, value)
+    try:
+        yield obj
+    finally:
+        setattr(obj, name, old)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a resilience toolkit</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">@retry and @timed, as a reusable package</span></div>
+      <div class="widget-body">
+        <p>Build <code>resilience</code>, a tiny library of decorators you could drop into any project. You will use it
+          again when you call flaky web APIs in Part 7.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init resilience &amp;&amp; cd resilience
+mkdir -p src/resilience tests
+pixi add pytest
+# then add your package as an editable install in pixi.toml (see M08):
+#   [pypi-dependencies]
+#   resilience = { path = ".", editable = true }
+pixi run pytest</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li><code>retry(times=3, exceptions=(Exception,), delay=0.1, backoff=2.0, sleep=time.sleep)</code>: retries with
+            exponential backoff, re-raises the last error, and records <code>wrapper.attempts</code> for the most recent
+            call.</li>
+          <li><code>timed</code> usable both as <code>@timed</code> and <code>@timed(unit="ms", clock=time.perf_counter)</code>:
+            stores <code>wrapper.last_elapsed</code> and appends to <code>wrapper.history</code>, even when the function
+            raises.</li>
+          <li><code>Timer</code>, a context manager (class) that measures a block: <code>with Timer() as t: ...</code>
+            then <code>t.elapsed</code>.</li>
+          <li>Every wrapper uses <code>functools.wraps</code>; the clock and sleep are injectable so tests never sleep.</li>
+        </ul>
+        <ul class="checklist" data-id="m15-mini">
+          <li><code>retry</code> succeeds after transient failures and re-raises after the last attempt</li>
+          <li><code>retry</code> calls the injected <code>sleep</code> with <code>delay, delay*backoff, …</code></li>
+          <li><code>timed</code> works bare and with arguments; <code>history</code> grows per call</li>
+          <li><code>Timer</code> records elapsed time even if the block raises, and does not suppress the error</li>
+          <li>Stacking <code>@timed</code> above <code>@retry</code> times all attempts; below, each attempt (write a test for both)</li>
+          <li>At least 8 pytest tests using a fake clock; <code>pixi run pytest</code> is green</li>
+        </ul>
+        <p><strong>Stretch:</strong> add jitter to the backoff (inject a random source), a <code>circuit_breaker</code>
+          decorator that refuses calls for a cooldown after N consecutive failures, and an async-aware version that
+          detects coroutine functions with <code>inspect.iscoroutinefunction</code> and awaits them.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m15-quiz">
+<script type="application/json">
+{"title": "Decorators and context managers", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What does <code>@deco</code> placed above <code>def f(): ...</code> mean?", "options": ["<code>f = deco()</code>", "<code>f = deco(f)</code>", "<code>deco = f(deco)</code>", "<code>f()</code> is called and its result passed to <code>deco</code>"], "answer": 1, "explanation": "<p>Decorator syntax is shorthand for rebinding the name to the decorator's return value: <code>f = deco(f)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "fs = [lambda: i for i in range(3)]\nprint([f() for f in fs])", "answer": "[2, 2, 2]", "explanation": "<p>Closures capture the variable, not its value. All three lambdas see <code>i</code> after the loop ends, when it is 2.</p>"},
+  {"type": "single", "prompt": "An inner function does <code>total += x</code> on a variable from its enclosing function and raises <code>UnboundLocalError</code>. What fixes it?", "options": ["<code>global total</code>", "<code>nonlocal total</code>", "Rename the variable", "Add <code>return total</code>"], "answer": 1, "explanation": "<p>Assignment makes a name local. <code>nonlocal</code> tells Python to rebind the variable in the nearest enclosing function scope instead.</p>"},
+  {"type": "multi", "prompt": "What does <code>functools.wraps(func)</code> do to the wrapper?", "options": ["Copies <code>__name__</code> and <code>__doc__</code>", "Sets <code>__wrapped__</code> to <code>func</code>", "Makes the wrapper faster", "Caches results"], "answer": [0, 1], "explanation": "<p><code>wraps</code> copies metadata (name, qualname, doc, module, annotations, dict) and records the original in <code>__wrapped__</code>. It does not change behavior or speed.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "def a(f):\n    return lambda: \"a\" + f()\ndef b(f):\n    return lambda: \"b\" + f()\n\n@a\n@b\ndef g():\n    return \"g\"\nprint(g())", "answer": "abg", "explanation": "<p><code>g = a(b(g))</code>. Calling runs <code>a</code>'s lambda first, which calls <code>b</code>'s, which calls the original.</p>"},
+  {"type": "single", "prompt": "How many nested functions does a typical decorator <em>with arguments</em>, such as <code>@retry(times=3)</code>, have (counting the outermost)?", "options": ["1", "2", "3", "4"], "answer": 2, "explanation": "<p>Factory (takes the arguments) → decorator (takes the function) → wrapper (runs per call).</p>"},
+  {"type": "single", "prompt": "When does the body of a decorator (not its wrapper) execute?", "options": ["Every time the decorated function is called", "Once, when the <code>def</code> statement runs", "Only when an exception occurs", "When the program exits"], "answer": 1, "explanation": "<p>The decorator is called once at definition time, typically at import. The wrapper it returns runs on every call.</p>"},
+  {"type": "single", "prompt": "What must <code>__exit__</code> return to suppress the exception raised in the <code>with</code> block?", "options": ["<code>None</code>", "A truthy value", "The exception object", "<code>self</code>"], "answer": 1, "explanation": "<p>A truthy return value tells Python the exception was handled. <code>None</code> or <code>False</code> lets it propagate.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "from contextlib import contextmanager\n\n@contextmanager\ndef tag(name):\n    print(f\"<{name}>\")\n    try:\n        yield\n    finally:\n        print(f\"</{name}>\")\n\nwith tag(\"p\"):\n    print(\"hi\")", "answer": "<p>\nhi\n</p>", "explanation": "<p>Code before <code>yield</code> runs on entry, the block runs at the <code>yield</code>, and the <code>finally</code> runs on exit.</p>"},
+  {"type": "single", "prompt": "In a <code>@contextmanager</code> generator without <code>try/finally</code>, what happens to the cleanup code after <code>yield</code> if the block raises?", "options": ["It runs normally", "It is skipped, because the exception is raised at the <code>yield</code>", "It runs twice", "The exception is suppressed"], "answer": 1, "explanation": "<p>The exception is thrown into the generator at the <code>yield</code>. Without <code>finally</code>, the remaining code never runs.</p>"},
+  {"type": "single", "prompt": "You must open a list of N files where N is known only at run time, and close them all reliably. What do you use?", "options": ["Nested <code>with</code> statements", "<code>contextlib.ExitStack</code>", "<code>contextlib.suppress</code>", "A decorator"], "answer": 1, "explanation": "<p><code>ExitStack.enter_context</code> enters each manager and guarantees they are all exited in reverse order.</p>"},
+  {"type": "text", "prompt": "Which <code>contextlib</code> helper temporarily sends <code>print</code> output to another file object such as an <code>io.StringIO</code>?", "answer": ["redirect_stdout", "contextlib.redirect_stdout"], "explanation": "<p><code>with redirect_stdout(buf):</code> swaps <code>sys.stdout</code> for the duration of the block and restores it afterwards.</p>"},
+  {"type": "single", "prompt": "Why should <code>@authorize</code> be placed <em>above</em> <code>@cache</code> rather than below it?", "options": ["Decorators below run first on each call", "So the permission check runs before a cached result can be returned", "Caches only work at the bottom", "It doesn't matter"], "answer": 1, "explanation": "<p>The top decorator's wrapper runs first. If the cache were outermost, it could return a stored result without the check ever running.</p>"},
+  {"type": "text", "prompt": "Which methods must a class define to be used with <code>async with</code>? Give the enter method's name.", "answer": ["__aenter__", "__aenter__ and __aexit__"], "explanation": "<p>Async context managers define coroutine methods <code>__aenter__</code> and <code>__aexit__</code>; <code>contextlib.asynccontextmanager</code> builds them from an async generator.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Functions are first-class objects: <code>fn</code> refers, <code>fn()</code> calls.</li>
+      <li>A closure is a function plus the cells of the enclosing variables it uses; <code>nonlocal</code> rebinds them;
+        closures see the current value (the late-binding trap).</li>
+      <li><code>@deco</code> means <code>f = deco(f)</code>; the decorator runs at definition time, the wrapper on each call.</li>
+      <li>Always use <code>@functools.wraps(func)</code>. Decorators with arguments need three layers.</li>
+      <li>Stacked decorators apply bottom-up and run top-down; order matters for checks and caches.</li>
+      <li>Context managers pair setup with guaranteed cleanup. <code>__exit__</code> suppresses only by returning truthy.</li>
+      <li><code>@contextmanager</code> + <code>try/finally</code> around one <code>yield</code>; <code>ExitStack</code> for
+        dynamic sets; <code>suppress</code> and <code>redirect_stdout</code> for common jobs; <code>async with</code> for
+        async setup.</li>
+    </ul>
+    <div class="flashcards" data-title="Decorators and context managers">
+<script type="application/json">
+[{"front": "What is a closure?", "back": "A function together with the cells holding the enclosing-scope variables it uses."},
+ {"front": "Free variable vs cell variable", "back": "The same variable seen from two sides: free in the inner function (<code>co_freevars</code>), cell in the outer (<code>co_cellvars</code>)."},
+ {"front": "<code>nonlocal x</code>", "back": "Rebind <code>x</code> in the nearest enclosing function scope instead of creating a local."},
+ {"front": "Desugar <code>@deco</code>", "back": "<code>f = deco(f)</code>"},
+ {"front": "Desugar <code>@deco(arg)</code>", "back": "<code>f = deco(arg)(f)</code>: factory, decorator, wrapper."},
+ {"front": "What does <code>functools.wraps</code> copy?", "back": "<code>__name__</code>, <code>__qualname__</code>, <code>__doc__</code>, <code>__module__</code>, <code>__annotations__</code>, <code>__dict__</code>; also sets <code>__wrapped__</code>."},
+ {"front": "Order of <code>@a @b def f</code>", "back": "<code>f = a(b(f))</code>: b applied first, a's wrapper runs first."},
+ {"front": "Context manager protocol", "back": "<code>__enter__()</code> returns the <code>as</code> value; <code>__exit__(type, value, tb)</code> always runs."},
+ {"front": "How does <code>__exit__</code> suppress an exception?", "back": "By returning a truthy value."},
+ {"front": "<code>@contextmanager</code> rule", "back": "Exactly one <code>yield</code>, wrapped in <code>try/finally</code> so cleanup always runs."},
+ {"front": "<code>ExitStack</code>", "back": "Enter a dynamic number of context managers; exits them in reverse order."},
+ {"front": "Async context manager methods", "back": "<code>__aenter__</code> and <code>__aexit__</code>, used with <code>async with</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/glossary.html#term-decorator">Glossary: decorator</a> and
+        <a href="https://docs.python.org/3/reference/compound_stmts.html#function-definitions">function definitions</a> in the language reference</li>
+      <li><a href="https://docs.python.org/3/library/functools.html#functools.wraps"><code>functools.wraps</code></a> and
+        <a href="https://docs.python.org/3/library/contextlib.html"><code>contextlib</code></a></li>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html#context-managers">Data model: with statement context managers</a></li>
+      <li><a href="https://peps.python.org/pep-0318/">PEP 318</a> (decorators) and <a href="https://peps.python.org/pep-0343/">PEP 343</a> (the <code>with</code> statement)</li>
+      <li>Next: <a href="m16-typing.html">M16 Type Hints &amp; Static Typing</a>, where you will learn to type decorators with <code>ParamSpec</code>.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M08 · Modules, Packages &amp; Pixi Projects · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m08">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 08</p>
+    <h1>Modules, Packages &amp; Pixi Projects</h1>
+    <p class="lede">A single file is fine for a script, but real programs are split across many files, reuse the
+      standard library, and depend on other people's packages. This module explains exactly what
+      <code>import</code> does, how to organize code into packages, and how to turn a folder of code into a proper,
+      reproducible Pixi project.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m07-exceptions.html">M07 Errors &amp; Exceptions</a>, <a href="m00-setup.html">M00 Setup</a></span></div>
+    <ul class="objectives">
+      <li>Explain what happens when Python executes an <code>import</code> statement, including caching in <code>sys.modules</code></li>
+      <li>Use every import form and know which to prefer</li>
+      <li>Describe the module search path and diagnose shadowing and <code>ModuleNotFoundError</code></li>
+      <li>Use <code>if __name__ == "__main__":</code> to make files both importable and runnable</li>
+      <li>Build packages with <code>__init__.py</code>, subpackages, and relative imports</li>
+      <li>Lay out a project with the src layout, <code>pyproject.toml</code>, and <code>pixi.toml</code>, including an editable install, entry points, and tasks</li>
+      <li>Add dependencies with <code>pixi add</code> (conda-forge first) and understand <code>pixi.lock</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="what-is-a-module">
+    <h2>What a module is, and what <code>import</code> does</h2>
+    <p>A <strong>module</strong> is simply a <code>.py</code> file. Its name is the file name without the extension:
+      <code>money.py</code> is the module <code>money</code>. Everything defined at the top level of the file
+      (functions, classes, variables) becomes an <strong>attribute</strong> of the module object.</p>
+    <p>When Python runs <code>import money</code> it does three things:</p>
+    <ol>
+      <li><strong>Check the cache.</strong> If <code>"money"</code> is already in the dict <code>sys.modules</code>,
+        use that module object and stop. This is why importing the same module twice is cheap and does not run its
+        code twice.</li>
+      <li><strong>Find and load.</strong> Otherwise, search the directories in <code>sys.path</code> for
+        <code>money.py</code> (or a package directory <code>money/</code>), create a new module object, store it in
+        <code>sys.modules</code>, and <em>execute the file's code from top to bottom</em> inside the module's own
+        namespace.</li>
+      <li><strong>Bind a name.</strong> Bind the name <code>money</code> in the importing namespace to that module
+        object.</li>
+    </ol>
+    <p>The browser runtime has an in-memory file system, so we can create a real module file and import it:</p>
+    <div class="runnable" data-title="Create and import a module">
+<textarea>
+import importlib, sys, tempfile
+from pathlib import Path
+
+workdir = Path(tempfile.mkdtemp())
+(workdir / "money.py").write_text('''
+print("  (money.py is executing)")
+RATE = 1.08
+
+def with_tax(amount):
+    """Return amount plus sales tax."""
+    return round(amount * RATE, 2)
+''')
+sys.path.insert(0, str(workdir))
+importlib.invalidate_caches()        # tell the import system a new file appeared
+
+import money
+import money                          # cached: does not print again
+print(money.with_tax(10), money.RATE)
+print(type(money).__name__, money.__name__, "money" in sys.modules)
+print(sorted(name for name in vars(money) if not name.startswith("__")))
+</textarea>
+    </div>
+    <aside class="callout note"><p>Because a module's code runs once on first import, top-level code should define
+      things, not <em>do</em> things. A module that prints, reads files, or connects to a database as a side effect
+      of being imported is surprising and hard to test.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> a module is a file and a namespace. The first import
+      executes it and caches it in <code>sys.modules</code>; later imports reuse the cached object.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="import-forms">
+    <h2>The forms of <code>import</code></h2>
+    <table class="rubric">
+      <thead><tr><th>Form</th><th>Binds</th><th>Use it when</th></tr></thead>
+      <tbody>
+        <tr><td><code>import math</code></td><td><code>math</code></td><td>The default. <code>math.sqrt</code> reads clearly and shows where names come from.</td></tr>
+        <tr><td><code>import numpy as np</code></td><td><code>np</code></td><td>Long names with a community-standard alias (<code>np</code>, <code>pd</code>, <code>plt</code>).</td></tr>
+        <tr><td><code>from math import sqrt, pi</code></td><td><code>sqrt</code>, <code>pi</code></td><td>You use a few names often and they are unambiguous.</td></tr>
+        <tr><td><code>from pathlib import Path as P</code></td><td><code>P</code></td><td>Avoiding a clash between two names.</td></tr>
+        <tr><td><code>from math import *</code></td><td>everything public</td><td>Almost never: you cannot tell where names come from, and it can silently overwrite your own names.</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Predict: what does each form bind?" data-predict>
+<textarea>
+import math
+from math import sqrt as root
+from statistics import mean, median
+
+print(math.floor(2.7), root(16), mean([1, 2, 6]), median([1, 2, 6]))
+print("sqrt" in dir(), "root" in dir(), "statistics" in dir())
+</textarea>
+    </div>
+    <p>A module can declare its public API with a list named <code>__all__</code>. It controls what
+      <code>from module import *</code> exports and documents intent for readers and tools.</p>
+    <aside class="callout pro"><p>PEP 8 import style: imports go at the top of the file, one per line, in three
+      groups separated by a blank line: standard library, third-party, then your own code. Ruff's
+      <code>I</code> rules (isort) sort them automatically.</p></aside>
+    <pre><code class="language-python">import json
+from pathlib import Path
+
+import numpy as np
+
+from ledger.models import Transaction</code></pre>
+    <aside class="callout tip"><p><strong>Remember:</strong> prefer <code>import module</code> or
+      <code>from module import name</code>; use <code>as</code> for standard aliases or clashes; avoid
+      <code>import *</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="search-path">
+    <h2>The module search path</h2>
+    <p>Where does Python look for <code>money.py</code>? In each directory of the list <code>sys.path</code>, in
+      order, and it takes the first match. A typical <code>sys.path</code> contains:</p>
+    <ol>
+      <li>the directory of the script you ran (or the current directory in the REPL, or with <code>-m</code>),</li>
+      <li>directories in the <code>PYTHONPATH</code> environment variable, if set,</li>
+      <li>the standard library directories,</li>
+      <li><code>site-packages</code>: where installed packages live. With Pixi this is inside your project's
+        <code>.pixi/envs/default/</code> folder.</li>
+    </ol>
+    <pre class="mermaid">
+flowchart LR
+  I["import money"] --> C{"in sys.modules?"}
+  C -->|yes| R[reuse cached module]
+  C -->|no| S1["script directory"]
+  S1 -->|not found| S2[PYTHONPATH]
+  S2 -->|not found| S3[standard library]
+  S3 -->|not found| S4["site-packages (.pixi env)"]
+  S4 -->|not found| E[ModuleNotFoundError]
+  S1 -->|found| L[execute and cache]
+  S2 -->|found| L
+  S3 -->|found| L
+  S4 -->|found| L
+    </pre>
+    <div class="runnable" data-title="Inspect the search path">
+<textarea>
+import sys, json
+for entry in sys.path[:6]:
+    print(repr(entry))
+print("json lives at:", json.__file__)
+print("built into the interpreter:", sorted(sys.builtin_module_names)[:6], "...")
+</textarea>
+    </div>
+    <h3>The shadowing trap</h3>
+    <p>Because the script's own directory comes first, a file you name <code>random.py</code>, <code>json.py</code>,
+      or <code>statistics.py</code> <em>hides</em> the standard-library module of the same name. Then
+      <code>import random</code> imports your file, and you get baffling errors like <code>AttributeError: module
+      'random' has no attribute 'randint'</code>.</p>
+    <div class="runnable" data-title="Predict: a file shadows the standard library" data-predict>
+<textarea>
+import importlib, sys, tempfile
+from pathlib import Path
+
+d = Path(tempfile.mkdtemp())
+(d / "statistics.py").write_text("print('my own statistics.py!')\n")
+sys.path.insert(0, str(d))
+sys.modules.pop("statistics", None)    # forget any cached copy
+importlib.invalidate_caches()
+
+import statistics
+print(hasattr(statistics, "mean"))
+sys.path.remove(str(d)); sys.modules.pop("statistics")   # tidy up
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Never name your files after standard-library or installed modules. If an import
+      behaves strangely, print <code>module.__file__</code> to see which file was actually loaded.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> Python searches <code>sys.path</code> in order and the
+      first match wins. <code>ModuleNotFoundError</code> means no directory had it: check the name, your current
+      directory, and whether the package is installed in the Pixi environment.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="main-guard">
+    <h2><code>__name__</code> and the main guard</h2>
+    <p>Every module has a <code>__name__</code> attribute. When a file is imported, <code>__name__</code> is the
+      module's name (<code>"money"</code>). When a file is <em>run directly</em> (<code>pixi run python
+      money.py</code> or <code>pixi run python -m money</code>), Python names it <code>"__main__"</code> instead.</p>
+    <p>That lets a file be both a reusable module and a runnable program:</p>
+    <pre><code class="language-python">"""Currency helpers."""
+
+def with_tax(amount: float, rate: float = 0.08) -&gt; float:
+    """Return amount plus tax."""
+    return round(amount * (1 + rate), 2)
+
+def main() -&gt; None:
+    amount = float(input("Amount? "))
+    print(with_tax(amount))
+
+if __name__ == "__main__":     # true only when run as a program
+    main()</code></pre>
+    <p>Importing <code>money</code> from a test now gives access to <code>with_tax</code> without triggering the
+      <code>input()</code> prompt. Without the guard, the prompt would appear on every import.</p>
+    <div class="runnable" data-title="Two ways to load the same file">
+<textarea>
+import importlib, runpy, sys, tempfile
+from pathlib import Path
+
+d = Path(tempfile.mkdtemp())
+(d / "tool.py").write_text('''
+def main():
+    print("  main() ran")
+
+print(f"  tool.py sees __name__ = {__name__!r}")
+if __name__ == "__main__":
+    main()
+''')
+sys.path.insert(0, str(d)); importlib.invalidate_caches()
+
+print("import tool:")
+import tool
+print("run as a script:")
+runpy.run_path(str(d / "tool.py"), run_name="__main__")
+</textarea>
+    </div>
+    <p>For packages, the file <code>__main__.py</code> plays the same role: <code>pixi run python -m ledger</code>
+      runs <code>ledger/__main__.py</code>. Project 1 uses exactly this.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>__name__ == "__main__"</code> only when the file
+      is the program being run. Put a <code>main()</code> function behind the guard.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="packages">
+    <h2>Packages and relative imports</h2>
+    <p>A <strong>package</strong> is a directory of modules, imported with dotted names. A directory containing an
+      <code>__init__.py</code> file is a <em>regular package</em>. <code>__init__.py</code> runs when the package is
+      first imported; it can be empty, or it can import the most useful names so users can write
+      <code>from shop import Cart</code> instead of <code>from shop.cart.models import Cart</code>.</p>
+    <pre><code class="language-ini">shop/
+    __init__.py          # makes "shop" a package
+    pricing.py           # module shop.pricing
+    cart/
+        __init__.py      # subpackage shop.cart
+        items.py         # module shop.cart.items</code></pre>
+    <p>Inside a package, modules can import each other with <strong>absolute imports</strong>
+      (<code>from shop.pricing import with_tax</code>) or <strong>relative imports</strong>, where leading dots mean
+      "this package" (<code>.</code>) and "the parent package" (<code>..</code>):</p>
+    <pre><code class="language-python"># inside shop/cart/items.py   (its package is "shop.cart")
+from . import helpers               # shop.cart.helpers
+from .helpers import slugify        # shop.cart.helpers.slugify
+from ..pricing import with_tax      # shop.pricing.with_tax</code></pre>
+    <div class="runnable" data-title="Build a package on disk and import it">
+<textarea>
+import importlib, sys, tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp())
+files = {
+    "shop/__init__.py": 'from shop.cart.items import line_total\n__all__ = ["line_total"]\n',
+    "shop/pricing.py": "def with_tax(amount):\n    return round(amount * 1.08, 2)\n",
+    "shop/cart/__init__.py": "",
+    "shop/cart/items.py": "from ..pricing import with_tax\n\ndef line_total(price, qty):\n    return with_tax(price * qty)\n",
+}
+for rel, text in files.items():
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+sys.path.insert(0, str(root)); importlib.invalidate_caches()
+import shop
+from shop.cart import items
+print(shop.line_total(2.50, 4))
+print(items.__name__, items.__package__)
+print(sorted(m for m in sys.modules if m.startswith("shop")))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Relative imports only work inside a package that was imported as a package. Running
+      <code>pixi run python shop/cart/items.py</code> directly fails with "attempted relative import with no known
+      parent package", because the file is then <code>__main__</code>, not <code>shop.cart.items</code>. Run it as
+      <code>pixi run python -m shop.cart.items</code> from the directory containing <code>shop/</code> instead.</p></aside>
+    <aside class="callout note"><p>A directory <em>without</em> <code>__init__.py</code> can still be imported as a
+      <em>namespace package</em> (PEP 420), which lets several directories contribute to one package name. It is a
+      specialized tool; for your own code always include <code>__init__.py</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> a package is a directory with <code>__init__.py</code>.
+      Dots in relative imports count package levels. Run package modules with <code>-m</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="stdlib">
+    <h2>A tour of the standard library</h2>
+    <p>Python ships "batteries included": hundreds of modules, already installed, documented, and tested. Before
+      writing something general-purpose, check whether the standard library already has it.</p>
+    <div class="card-grid">
+      <div class="card"><h4>Numbers</h4><p><code>math</code>, <code>statistics</code>, <code>random</code>, <code>decimal</code>, <code>fractions</code></p></div>
+      <div class="card"><h4>Text</h4><p><code>string</code>, <code>re</code>, <code>textwrap</code>, <code>difflib</code>, <code>string.templatelib</code> (3.14)</p></div>
+      <div class="card"><h4>Data</h4><p><code>collections</code>, <code>itertools</code>, <code>functools</code>, <code>heapq</code>, <code>bisect</code>, <code>dataclasses</code></p></div>
+      <div class="card"><h4>Time</h4><p><code>datetime</code>, <code>zoneinfo</code>, <code>time</code>, <code>calendar</code></p></div>
+      <div class="card"><h4>Files and formats</h4><p><code>pathlib</code>, <code>csv</code>, <code>json</code>, <code>tomllib</code>, <code>sqlite3</code>, <code>compression.zstd</code> (3.14)</p></div>
+      <div class="card"><h4>Programs</h4><p><code>sys</code>, <code>os</code>, <code>argparse</code>, <code>logging</code>, <code>subprocess</code>, <code>unittest</code></p></div>
+    </div>
+    <div class="runnable" data-title="Batteries included">
+<textarea>
+import math, random, statistics, uuid
+from collections import Counter
+from datetime import date, timedelta
+from itertools import combinations
+
+print(math.comb(5, 2), math.isclose(0.1 + 0.2, 0.3))
+random.seed(7)
+print(random.choice(["rock", "paper", "scissors"]), random.sample(range(10), 3))
+print(statistics.mean([2, 4, 9]), statistics.median([2, 4, 9]))
+print(date(2026, 1, 31) + timedelta(days=30))
+print(list(combinations("ABC", 2)))
+print(Counter("mississippi").most_common(2))
+print(uuid.uuid7())     # new in 3.14: time-ordered UUIDs
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> look in the standard library first. Use
+      <code>help(module)</code> in the REPL, or docs.python.org, to explore.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="project-layout">
+    <h2>Project layout: the src layout and <code>pyproject.toml</code></h2>
+    <p>Once code grows beyond a couple of files, professional Python projects use the <strong>src layout</strong>:
+      the importable package lives inside a <code>src/</code> directory, and tests live beside it.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 560 250" role="img" aria-label="src layout tree">
+        <g font-family="ui-monospace, monospace" font-size="14" fill="var(--fg)">
+          <text x="20" y="28">budget/</text>
+          <text x="40" y="52">pixi.toml</text><text x="250" y="52" fill="var(--fg-muted)">environment, dependencies, tasks</text>
+          <text x="40" y="74">pixi.lock</text><text x="250" y="74" fill="var(--fg-muted)">exact versions (commit it)</text>
+          <text x="40" y="96">pyproject.toml</text><text x="250" y="96" fill="var(--fg-muted)">package metadata, tool config</text>
+          <text x="40" y="118">src/</text>
+          <text x="60" y="140" fill="var(--viz-1)">budget/</text><text x="250" y="140" fill="var(--fg-muted)">the importable package</text>
+          <text x="80" y="162">__init__.py  cli.py  money.py</text>
+          <text x="40" y="184">tests/</text>
+          <text x="60" y="206">test_money.py</text><text x="250" y="206" fill="var(--fg-muted)">import budget, like a user would</text>
+          <text x="40" y="228">.pixi/</text><text x="250" y="228" fill="var(--fg-muted)">the environment (never commit)</text>
+        </g>
+      </svg>
+      <figcaption>The src layout keeps the package out of the project root, so it can only be imported once it is installed.</figcaption>
+    </figure>
+    <p>Why the extra folder? Without it, running tests from the project root can import your package straight from
+      the working directory (thanks to <code>sys.path[0]</code>), even if it is not installed correctly. Missing
+      files or broken packaging then go unnoticed until a user installs it. With <code>src/</code>, tests import the
+      <em>installed</em> package, exactly as users will.</p>
+    <p><code>pyproject.toml</code> is the standard file (PEP 621) that describes the package itself: its name,
+      version, required Python, entry points, and the <strong>build backend</strong> that turns the source tree into
+      an installable package. It is also where tools like pytest, ruff, and mypy keep their configuration.</p>
+    <pre><code class="language-toml">[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "budget"
+version = "0.1.0"
+description = "Split bills and track spending."
+requires-python = "&gt;=3.12"
+dependencies = []
+
+[project.scripts]
+budget = "budget.cli:main"      # an entry point: installs a `budget` command that calls budget.cli.main()
+
+[tool.ruff]
+line-length = 120</code></pre>
+    <p>An <strong>entry point</strong> (<code>[project.scripts]</code>) asks the installer to create a small
+      executable named <code>budget</code> that imports <code>budget.cli</code> and calls <code>main()</code>. Its
+      return value becomes the exit code.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> src layout = <code>src/&lt;package&gt;/</code> plus
+      <code>tests/</code>. <code>pyproject.toml</code> describes the package; entry points turn functions into
+      commands.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="pixi-projects">
+    <h2>Pixi projects: environments, editable installs, tasks</h2>
+    <p><code>pixi.toml</code> describes the <em>environment</em> your project runs in: which Python, which
+      packages, which platforms, and which commands (tasks) you run often. Create one with <code>pixi init</code>;
+      never write it by hand from memory.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi init budget
+cd budget
+pixi add python=3.14          # conda-forge package
+pixi add pytest ruff          # more conda-forge packages
+pixi add --pypi some-package  # only if it is NOT on conda-forge</code></pre>
+    <pre><code class="language-toml">[workspace]
+name = "budget"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "win-64"]
+version = "0.1.0"
+
+[dependencies]
+python = "3.14.*"
+pytest = "&gt;=8"
+ruff = "*"
+
+[pypi-dependencies]
+budget = { path = ".", editable = true }    # install our own package, editable
+
+[tasks]
+test = "pytest tests/"
+lint = "ruff check ."
+start = "budget"                            # runs the entry-point command</code></pre>
+    <h3>The pieces</h3>
+    <ul>
+      <li><strong><code>[workspace]</code></strong>: the project name, the <em>channels</em> to download from
+        (<code>conda-forge</code>, a huge community repository of pre-built packages), and the platforms the lock
+        file must support.</li>
+      <li><strong><code>[dependencies]</code></strong>: conda-forge packages. Prefer these: they are pre-compiled
+        and can include non-Python libraries.</li>
+      <li><strong><code>[pypi-dependencies]</code></strong>: packages from PyPI, for anything not on conda-forge.
+        The line <code>budget = { path = ".", editable = true }</code> installs <em>your own</em> project in
+        <strong>editable</strong> mode: the environment points at your <code>src/</code> folder, so edits take
+        effect immediately without reinstalling, while imports still behave like an installed package.</li>
+      <li><strong><code>[tasks]</code></strong>: named commands. <code>pixi run test</code> runs
+        <code>pytest tests/</code> inside the environment. Tasks can depend on others with
+        <code>depends-on</code>.</li>
+      <li><strong><code>pixi.lock</code></strong>: generated automatically. It records the exact version and hash
+        of every package for every platform, so a teammate (or CI) running <code>pixi install</code> gets an
+        identical environment. Commit it.</li>
+    </ul>
+    <pre data-label="Terminal"><code class="language-bash">pixi install                 # create or update .pixi/ from pixi.lock
+pixi run python -m budget    # run the package's __main__.py
+pixi run budget              # run the entry point installed by the editable install
+pixi run test                # run a task
+pixi shell                   # open a shell with the environment activated
+pixi exec --spec "python=3.15" python   # try another Python without touching the project</code></pre>
+    <aside class="callout pixi"><p>Dependency order of preference: <code>pixi add name</code> (conda-forge) first;
+      <code>pixi add --pypi name</code> only when conda-forge does not have it. Never mix in other installers: one
+      project, one environment, one lock file.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>pixi.toml</code> = environment and tasks;
+      <code>pyproject.toml</code> = package. An editable <code>[pypi-dependencies]</code> entry makes your own src
+      package importable. Commit <code>pixi.lock</code>, never <code>.pixi/</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="lazy-imports">
+    <h2>Preview: lazy imports in Python 3.15</h2>
+    <p>Importing a large module can take noticeable time, which slows down command-line tools that only need it
+      for one rarely used subcommand. Today, the workaround is to move the import inside the function that needs it.</p>
+    <aside class="callout py315"><p><strong>PEP 810 (Python 3.15): explicit lazy imports.</strong> Writing
+      <code>lazy import json</code> or <code>lazy from pathlib import Path</code> binds the name immediately but
+      postpones actually loading the module until the name is first <em>used</em>. Lazy imports are allowed only at
+      module scope (not inside functions or <code>try</code> blocks). Everything else about the import is
+      unchanged.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Lazy imports (Python 3.15)">
+<textarea>
+import sys
+lazy import json
+lazy from decimal import Decimal
+
+print("json loaded yet?", "json" in sys.modules)    # False: nothing has used it
+print(json.dumps({"ok": True}))                     # first use triggers the real import
+print("json loaded now?", "json" in sys.modules)    # True
+print(Decimal("0.1") + Decimal("0.2"))
+</textarea>
+    </div>
+    <p>In 3.14, get a similar effect by importing inside a function:</p>
+    <pre><code class="language-python">def export_report(data):
+    import json          # loaded only when this function first runs
+    return json.dumps(data)</code></pre>
+    <aside class="callout tip"><p><strong>Remember:</strong> 3.15's <code>lazy import</code> defers loading until
+      first use, at module scope only. Until then, a local import inside a function achieves the same thing.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m08-e1" data-title="Write and import a module">
+      <div class="exercise-prompt">
+        <p>Write <code>make_module(directory, name, source)</code>. It writes <code>source</code> to
+          <code>&lt;directory&gt;/&lt;name&gt;.py</code>, makes sure <code>directory</code> is on
+          <code>sys.path</code> (without adding duplicates), invalidates import caches, and returns the imported
+          module via <code>importlib.import_module(name)</code>. <code>directory</code> is a <code>Path</code>.</p>
+      </div>
+<textarea class="starter">
+import importlib
+import sys
+from pathlib import Path
+
+
+def make_module(directory, name, source):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+def test_imports_function():
+    d = _Path(_tempfile.mkdtemp())
+    mod = make_module(d, "m08_geometry", "def area(w, h):\n    return w * h\n")
+    assert mod.area(3, 4) == 12, "the returned module should expose area()"
+    assert mod.__name__ == "m08_geometry", "the module name should match"
+
+def test_file_written():
+    d = _Path(_tempfile.mkdtemp())
+    make_module(d, "m08_constants", "X = 1\n")
+    assert (d / "m08_constants.py").read_text() == "X = 1\n", "the source should be written to name.py"
+
+def test_no_duplicate_path():
+    d = _Path(_tempfile.mkdtemp())
+    make_module(d, "m08_a", "A = 1\n")
+    make_module(d, "m08_b", "B = 2\n")
+    assert sys.path.count(str(d)) == 1, "add the directory to sys.path only once"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>if str(directory) not in sys.path: sys.path.insert(0, str(directory))</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import importlib
+import sys
+from pathlib import Path
+
+
+def make_module(directory, name, source):
+    (directory / f"{name}.py").write_text(source)
+    if str(directory) not in sys.path:
+        sys.path.insert(0, str(directory))
+    importlib.invalidate_caches()
+    return importlib.import_module(name)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m08-e2" data-title="Resolve a relative import">
+      <div class="exercise-prompt">
+        <p>Write <code>resolve_relative(name, package)</code> that turns a relative module name into an absolute
+          one, the way Python does. <code>package</code> is the current package (for example
+          <code>"shop.cart"</code>). One leading dot means <code>package</code> itself, each extra dot goes up one
+          level, and the rest is appended. Raise <code>ImportError</code> when the dots go above the top-level package.
+          Names without leading dots are returned unchanged. Do not use <code>importlib.util.resolve_name</code>.</p>
+      </div>
+<textarea class="starter">
+def resolve_relative(name, package):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_same_package():
+    assert resolve_relative(".helpers", "shop.cart") == "shop.cart.helpers", ".helpers is in shop.cart"
+    assert resolve_relative(".", "shop.cart") == "shop.cart", "a lone dot is the package itself"
+
+def test_parent():
+    assert resolve_relative("..pricing", "shop.cart") == "shop.pricing", "..pricing is in shop"
+    assert resolve_relative("..utils.money", "shop.cart") == "shop.utils.money", "dotted remainder is appended"
+
+def test_absolute_unchanged():
+    assert resolve_relative("json", "shop.cart") == "json", "absolute names are unchanged"
+
+def test_too_far():
+    try:
+        resolve_relative("...x", "shop.cart")
+    except ImportError:
+        return
+    assert False, "going above the top-level package should raise ImportError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Count the dots with <code>len(name) - len(name.lstrip("."))</code>.
+        Split <code>package</code> on dots and drop <code>dots - 1</code> parts from the end.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def resolve_relative(name, package):
+    rest = name.lstrip(".")
+    dots = len(name) - len(rest)
+    if dots == 0:
+        return name
+    parts = package.split(".")
+    if dots - 1 &gt;= len(parts):
+        raise ImportError("attempted relative import beyond top-level package")
+    base = parts[: len(parts) - (dots - 1)]
+    return ".".join(base + ([rest] if rest else []))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m08-e3" data-title="File path to module name">
+      <div class="exercise-prompt">
+        <p>In a src-layout project, write <code>module_name(path)</code> that converts a path string such as
+          <code>"src/shop/cart/items.py"</code> into the dotted module name <code>"shop.cart.items"</code>. Drop the
+          leading <code>src/</code> if present, drop <code>.py</code>, and treat <code>__init__.py</code> as the
+          package itself (<code>"src/shop/__init__.py"</code> → <code>"shop"</code>). Use
+          <code>pathlib.PurePosixPath</code>.</p>
+      </div>
+<textarea class="starter">
+from pathlib import PurePosixPath
+
+
+def module_name(path):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_module():
+    assert module_name("src/shop/cart/items.py") == "shop.cart.items", "nested module"
+
+def test_init():
+    assert module_name("src/shop/__init__.py") == "shop", "__init__.py names its package"
+    assert module_name("src/shop/cart/__init__.py") == "shop.cart", "subpackage __init__"
+
+def test_without_src():
+    assert module_name("tools/report.py") == "tools.report", "paths without src/ work too"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>PurePosixPath(path).with_suffix("").parts</code> gives a
+        tuple of parts; drop a leading <code>"src"</code> and a trailing <code>"__init__"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from pathlib import PurePosixPath
+
+
+def module_name(path):
+    parts = list(PurePosixPath(path).with_suffix("").parts)
+    if parts and parts[0] == "src":
+        parts = parts[1:]
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m08-e4" data-title="Read Pixi tasks">
+      <div class="exercise-prompt">
+        <p>Write <code>pixi_tasks(toml_text)</code> that parses the text of a <code>pixi.toml</code> with
+          <code>tomllib.loads</code> and returns a dict of task name → command string. A task is either a plain
+          string or a table with a <code>cmd</code> key; tables without <code>cmd</code> (only
+          <code>depends-on</code>) map to <code>""</code>. A file without <code>[tasks]</code> returns
+          <code>{}</code>.</p>
+      </div>
+<textarea class="starter">
+import tomllib
+
+
+def pixi_tasks(toml_text):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+SAMPLE = '''
+[workspace]
+name = "budget"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+test = "pytest tests/"
+lint = { cmd = "ruff check .", cwd = "." }
+ci = { depends-on = ["lint", "test"] }
+'''
+
+def test_tasks():
+    assert pixi_tasks(SAMPLE) == {"test": "pytest tests/", "lint": "ruff check .", "ci": ""}, "string and table tasks"
+
+def test_no_tasks():
+    assert pixi_tasks('[workspace]\nname = "x"\n') == {}, "no [tasks] table gives {}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>isinstance(value, str)</code> tells the two forms apart;
+        for a dict use <code>value.get("cmd", "")</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import tomllib
+
+
+def pixi_tasks(toml_text):
+    tasks = tomllib.loads(toml_text).get("tasks", {})
+    return {
+        name: value if isinstance(value, str) else value.get("cmd", "")
+        for name, value in tasks.items()
+    }</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: package your earlier scripts</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">toolbox: a real Pixi project</span></div>
+      <div class="widget-body">
+        <p>Collect the bill splitter (M05), contact book (M06), and validator (M07) into one installable package
+          called <code>toolbox</code>, with tests, an entry point, and Pixi tasks.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init toolbox
+cd toolbox
+pixi add python=3.14 pytest ruff
+mkdir -p src/toolbox tests
+# move your modules into src/toolbox/, write pyproject.toml, then:
+# add toolbox = { path = ".", editable = true } under [pypi-dependencies] in pixi.toml, then:
+pixi install
+pixi run python -m toolbox --help</code></pre>
+        <pre><code class="language-ini">toolbox/
+    pixi.toml
+    pyproject.toml
+    src/toolbox/
+        __init__.py      # re-export the main functions; define __all__
+        __main__.py      # from toolbox.cli import main; raise SystemExit(main())
+        cli.py           # main(argv=None) -&gt; int, using argparse subcommands
+        splitter.py
+        contacts.py
+        validate.py
+    tests/
+        test_splitter.py</code></pre>
+        <ul class="checklist" data-id="m08-mini">
+          <li><code>pixi.toml</code> created with <code>pixi init</code>; dependencies added with <code>pixi add</code></li>
+          <li><code>[pypi-dependencies]</code> has <code>toolbox = { path = ".", editable = true }</code></li>
+          <li><code>pyproject.toml</code> has <code>[project]</code>, a hatchling <code>[build-system]</code>, and <code>[project.scripts] toolbox = "toolbox.cli:main"</code></li>
+          <li>Modules inside the package import each other with relative imports</li>
+          <li><code>pixi run python -m toolbox split 120 4</code> and <code>pixi run toolbox split 120 4</code> both work</li>
+          <li>Tasks <code>test</code> and <code>lint</code> exist; <code>pixi run test</code> passes with at least three tests</li>
+          <li>No module does work at import time; every script entry point is behind <code>if __name__ == "__main__":</code> or in <code>__main__.py</code></li>
+          <li><code>pixi.lock</code> is committed; <code>.pixi/</code> is in <code>.gitignore</code></li>
+        </ul>
+        <p><strong>Stretch goals:</strong> add a <code>ci</code> task with <code>depends-on = ["lint", "test"]</code>;
+          make <code>toolbox --version</code> print the version read with <code>importlib.metadata.version("toolbox")</code>;
+          try your package under 3.15 with <code>pixi exec --spec "python=3.15" python -c "print('hi')"</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m08-quiz">
+      <script type="application/json">
+      {"title": "Modules and packages quiz", "passScore": 0.7, "questions": [
+        {"type": "single", "prompt": "A module prints a message at top level. What happens with <code>import m</code> written twice?", "options": ["The message prints twice", "The message prints once; the second import uses <code>sys.modules</code>", "ImportError", "Nothing prints"], "answer": 1,
+         "explanation": "<p>Modules execute once per process; later imports find the cached object in <code>sys.modules</code>.</p>"},
+        {"type": "text", "prompt": "Which <code>sys</code> attribute lists the directories Python searches for modules?", "answer": ["sys.path", "path"],
+         "explanation": "<p><code>sys.path</code> is searched in order and the first match wins.</p>"},
+        {"type": "single", "prompt": "You create <code>random.py</code> in your project and <code>import random</code> elsewhere in the project. What happens?", "options": ["The standard library random is imported", "Your file is imported instead, shadowing the standard library", "Python raises a name-clash error", "Both are merged"], "answer": 1,
+         "explanation": "<p>The script's own directory is searched before the standard library. Never reuse standard module names.</p>"},
+        {"type": "output", "prompt": "File <code>tool.py</code> contains <code>print(__name__)</code>. What does <code>pixi run python tool.py</code> print?", "answer": "__main__",
+         "explanation": "<p>The file run as the program is named <code>__main__</code>; when imported it would print <code>tool</code>.</p>"},
+        {"type": "single", "prompt": "What makes a directory a regular package?", "options": ["A <code>setup.py</code>", "An <code>__init__.py</code> file", "A <code>pixi.toml</code>", "Its name ending in <code>_pkg</code>"], "answer": 1,
+         "explanation": "<p><code>__init__.py</code> marks a regular package and runs on first import.</p>"},
+        {"type": "output", "prompt": "Inside <code>shop/cart/items.py</code>, what absolute module does <code>from ..pricing import tax</code> import from?", "answer": "shop.pricing",
+         "explanation": "<p>The module's package is <code>shop.cart</code>; one dot is <code>shop.cart</code>, two dots is <code>shop</code>.</p>"},
+        {"type": "single", "prompt": "Why use the src layout?", "options": ["It is faster", "Tests import the installed package, catching packaging mistakes", "Pixi requires it", "It hides the code from users"], "answer": 1,
+         "explanation": "<p>With the package under <code>src/</code>, the project root is not accidentally importable, so tests see what users see.</p>"},
+        {"type": "multi", "prompt": "Which belong in <code>pixi.toml</code>?", "options": ["<code>[workspace]</code> with channels and platforms", "<code>[dependencies]</code>", "<code>[tasks]</code>", "<code>[build-system]</code>"], "answer": [0, 1, 2],
+         "explanation": "<p><code>[build-system]</code> belongs in <code>pyproject.toml</code>, which describes the package itself.</p>"},
+        {"type": "single", "prompt": "What does <code>budget = { path = \".\", editable = true }</code> under <code>[pypi-dependencies]</code> do?", "options": ["Downloads budget from PyPI", "Installs the local project so edits apply without reinstalling", "Creates a virtual environment", "Publishes the package"], "answer": 1,
+         "explanation": "<p>An editable install points the environment at your source folder.</p>"},
+        {"type": "single", "prompt": "A package exists on both conda-forge and PyPI. How should you add it?", "options": ["<code>pixi add name</code>", "<code>pixi add --pypi name</code>", "Copy the source into your project", "Either; it makes no difference"], "answer": 0,
+         "explanation": "<p>Prefer conda-forge; use <code>--pypi</code> only for packages missing from conda-forge.</p>"},
+        {"type": "single", "prompt": "What does <code>[project.scripts] budget = \"budget.cli:main\"</code> create?", "options": ["A pixi task", "A <code>budget</code> command that calls <code>budget.cli.main()</code>", "A test", "A module named scripts"], "answer": 1,
+         "explanation": "<p>It is an entry point: the installer generates a small executable that imports the module and calls the function.</p>"},
+        {"type": "multi", "prompt": "About PEP 810 lazy imports in Python 3.15, which are true?", "options": ["Loading is deferred until the name is first used", "They are allowed inside functions", "The syntax is <code>lazy import json</code>", "They are only allowed at module scope"], "answer": [0, 2, 3],
+         "explanation": "<p>Lazy imports are module-scope only; inside functions an ordinary import is already deferred until the function runs.</p>"},
+        {"type": "text", "prompt": "Which file should you commit so others get identical package versions: <code>pixi.lock</code> or <code>.pixi/</code>?", "answer": ["pixi.lock"],
+         "explanation": "<p><code>pixi.lock</code> records exact versions; <code>.pixi/</code> is the generated environment and is never committed.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A module is a file; the first import runs it and caches it in <code>sys.modules</code>.</li>
+      <li>Prefer <code>import m</code> and <code>from m import name</code>; avoid <code>import *</code>.</li>
+      <li><code>sys.path</code> is searched in order; beware shadowing standard-library names.</li>
+      <li><code>if __name__ == "__main__":</code> makes a file importable and runnable; packages use <code>__main__.py</code>.</li>
+      <li>Packages are directories with <code>__init__.py</code>; relative imports count package levels with dots.</li>
+      <li>Src layout + <code>pyproject.toml</code> for the package; <code>pixi.toml</code> + <code>pixi.lock</code> for the environment and tasks.</li>
+      <li><code>pixi add</code> (conda-forge) first, <code>pixi add --pypi</code> second; your own package is an editable PyPI dependency.</li>
+      <li>Python 3.15 adds <code>lazy import</code> for deferred loading.</li>
+    </ul>
+    <div class="flashcards" data-title="Modules and Pixi">
+      <script type="application/json">
+      [{"front": "Three steps of <code>import m</code>", "back": "Check <code>sys.modules</code>; otherwise find on <code>sys.path</code>, execute, and cache; bind the name."},
+       {"front": "<code>__name__</code> when run directly", "back": "<code>\"__main__\"</code>."},
+       {"front": "What makes a regular package?", "back": "A directory with <code>__init__.py</code>."},
+       {"front": "<code>from ..x import y</code>", "back": "Import y from module x in the parent package."},
+       {"front": "Shadowing", "back": "Your <code>random.py</code> hides the standard library's random, because the script directory is searched first."},
+       {"front": "src layout", "back": "Package under <code>src/&lt;name&gt;/</code>, so tests import the installed package."},
+       {"front": "pyproject.toml vs pixi.toml", "back": "pyproject: the package (metadata, build, entry points, tool config). pixi.toml: environment, dependencies, tasks."},
+       {"front": "Editable install in Pixi", "back": "<code>[pypi-dependencies] pkg = { path = \".\", editable = true }</code>"},
+       {"front": "Adding a dependency", "back": "<code>pixi add name</code> (conda-forge first), <code>pixi add --pypi name</code> if missing there."},
+       {"front": "Entry point", "back": "<code>[project.scripts] cmd = \"pkg.module:func\"</code> creates a command."},
+       {"front": "PEP 810 (3.15)", "back": "<code>lazy import m</code>: load on first use, module scope only."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/modules.html">Python tutorial: Modules</a></li>
+      <li><a href="https://docs.python.org/3.14/reference/import.html">Language reference: The import system</a></li>
+      <li><a href="https://docs.python.org/3.14/py-modindex.html">Python module index (the standard library)</a></li>
+      <li><a href="https://packaging.python.org/en/latest/guides/writing-pyproject-toml/">Python Packaging User Guide: Writing your pyproject.toml</a></li>
+      <li><a href="https://pixi.sh/latest/">Pixi documentation</a>: workspaces, tasks, and PyPI dependencies</li>
+      <li><a href="https://peps.python.org/pep-0810/">PEP 810: Explicit lazy imports</a></li>
+      <li>Next: <a href="m09-files-io.html">M09 Files &amp; Data Formats</a>; much later, <a href="m41-pixi-packaging.html">M41 Pixi &amp; Packaging</a> goes deeper.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

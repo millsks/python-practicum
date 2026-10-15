@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M05 · Functions · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m05">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 05</p>
+    <h1>Functions</h1>
+    <p class="lede">A function is a named, reusable piece of behaviour. Functions are how you stop repeating
+      yourself, how you give a name to an idea, and how you split a big problem into small ones you can test one at
+      a time. Almost every line of professional Python lives inside one.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m04-control-flow.html">M04 Control Flow</a></span></div>
+    <ul class="objectives">
+      <li>Define functions with <code>def</code>, return values, and explain what a call does step by step</li>
+      <li>Use positional, keyword, default, <code>*args</code>, <code>**kwargs</code>, keyword-only, and positional-only parameters</li>
+      <li>Explain the mutable-default trap and fix it with the <code>None</code> sentinel idiom</li>
+      <li>Predict which variable a name refers to using the LEGB rule, and use <code>global</code> and <code>nonlocal</code> correctly</li>
+      <li>Pass functions as values, write lambdas, and use <code>key=</code> functions with <code>sorted</code></li>
+      <li>Document functions with Google-style docstrings and type hints</li>
+      <li>Distinguish pure functions from side effects, and read a simple recursive function</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="defining">
+    <h2>Defining and calling a function</h2>
+    <p>You have already <em>called</em> many functions: <code>print()</code>, <code>len()</code>,
+      <code>input()</code>. Now you will write your own. A <strong>function definition</strong> starts with the
+      keyword <code>def</code>, a name, a pair of parentheses holding the <strong>parameters</strong>, and a colon.
+      The indented block underneath is the <strong>body</strong>.</p>
+    <pre><code class="language-python">def fahrenheit(celsius):
+    """Convert a Celsius temperature to Fahrenheit."""
+    return celsius * 9 / 5 + 32
+
+print(fahrenheit(100))   # 212.0
+print(fahrenheit(-40))   # -40.0</code></pre>
+    <p>Three things happen when Python runs this file:</p>
+    <ol>
+      <li><strong>The <code>def</code> statement runs once.</strong> It does <em>not</em> execute the body. It
+        creates a function object and binds the name <code>fahrenheit</code> to it, exactly like an assignment.</li>
+      <li><strong>A call <code>fahrenheit(100)</code></strong> creates a fresh <em>frame</em>: a private workspace
+        where the parameter <code>celsius</code> is bound to the argument <code>100</code>. The body runs inside it.</li>
+      <li><strong><code>return</code></strong> ends the call immediately and hands a value back to the caller. The
+        frame is thrown away, and the call expression <code>fahrenheit(100)</code> is replaced by that value.</li>
+    </ol>
+    <p>If a function reaches the end of its body without a <code>return</code>, or executes a bare
+      <code>return</code>, it returns <code>None</code>. This is a classic beginner surprise: printing is not
+      returning.</p>
+    <div class="runnable" data-title="Print versus return" data-predict>
+<textarea>
+def shout_print(word):
+    print(word.upper())
+
+def shout_return(word):
+    return word.upper()
+
+a = shout_print("hi")
+b = shout_return("hi")
+print(a, b)
+</textarea>
+    </div>
+    <p><code>shout_print</code> <em>displays</em> text as a side effect and returns <code>None</code>.
+      <code>shout_return</code> gives the value back so the caller can store it, combine it, or test it. Prefer
+      returning: the caller can always print a returned value, but it can never recover a value that was only
+      printed.</p>
+    <p>A function can return several values by returning a tuple; the caller unpacks it:</p>
+    <div class="runnable" data-title="Multiple return values and early return">
+<textarea>
+def min_max(numbers):
+    if not numbers:          # guard clause: handle the edge case first, then exit early
+        return None
+    return min(numbers), max(numbers)   # a tuple
+
+low, high = min_max([7, 2, 9, 4])
+print(low, high)
+print(min_max([]))
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>def</code> creates a function object and binds a
+      name. Calling it creates a new frame. <code>return</code> ends the call and supplies its value; no
+      <code>return</code> means <code>None</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="parameters">
+    <h2>Parameters, arguments, and defaults</h2>
+    <p>Two words that people often mix up:</p>
+    <ul>
+      <li>A <strong>parameter</strong> is the name in the definition: <code>def area(width, height)</code>.</li>
+      <li>An <strong>argument</strong> is the value supplied in a call: <code>area(3, 4)</code>.</li>
+    </ul>
+    <p>Arguments can be passed <strong>positionally</strong> (matched by order) or by <strong>keyword</strong>
+      (matched by name). Keyword arguments make calls self-explanatory and let you skip the order:</p>
+    <pre><code class="language-python">def area(width, height):
+    return width * height
+
+area(3, 4)                 # positional
+area(width=3, height=4)    # keyword
+area(3, height=4)          # mixed: positional ones must come first
+area(height=4, width=3)    # keyword order does not matter</code></pre>
+    <p>A <strong>default value</strong> makes a parameter optional. Parameters with defaults must come after those
+      without.</p>
+    <div class="runnable" data-title="Defaults and keyword arguments">
+<textarea>
+def format_price(amount, currency="USD", decimals=2):
+    return f"{amount:,.{decimals}f} {currency}"
+
+print(format_price(1234.5))
+print(format_price(1234.5, "EUR"))
+print(format_price(1234.5, decimals=0))
+print(format_price(currency="JPY", amount=980, decimals=0))
+</textarea>
+    </div>
+    <p>Python checks every call against the signature and raises <code>TypeError</code> for mismatches. Read
+      these messages: they say exactly what is wrong.</p>
+    <div class="runnable" data-title="Reading TypeError messages">
+<textarea>
+def area(width, height):
+    return width * height
+
+try:
+    area(3)
+except TypeError as e:
+    print("TypeError:", e)
+
+try:
+    area(3, 4, 5)
+except TypeError as e:
+    print("TypeError:", e)
+
+try:
+    area(3, width=4)
+except TypeError as e:
+    print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout note" data-title="How arguments are passed">
+      <p>Python passes <em>references to objects</em>, not copies. The parameter becomes a new name for the same
+        object the caller passed (M02's names-as-references model). If the function <em>mutates</em> that object
+        (say <code>items.append(x)</code>), the caller sees the change. If it merely <em>rebinds</em> the parameter
+        (<code>items = []</code>), the caller's name is unaffected. This is sometimes called
+        "pass by object reference" or "pass by assignment".</p>
+    </aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> parameters are names in the definition; arguments are
+      values in the call. Use keyword arguments when a call would otherwise be a mystery, like
+      <code>connect("db", 5, True)</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="mutable-defaults">
+    <h2>The mutable-default trap</h2>
+    <p>Here is the most famous Python gotcha. Predict the output before running it.</p>
+    <div class="runnable" data-title="Predict: a list as a default" data-predict>
+<textarea>
+def add_tag(tag, tags=[]):
+    tags.append(tag)
+    return tags
+
+print(add_tag("a"))
+print(add_tag("b"))
+</textarea>
+    </div>
+    <p>Most people expect <code>['a']</code> then <code>['b']</code>. The real answer is <code>['a']</code> then
+      <code>['a', 'b']</code>. Why? <strong>A default value is evaluated once, when the <code>def</code> statement
+      runs</strong>, and stored on the function object. Every call that omits <code>tags</code> gets that
+      <em>same</em> list object. Appending mutates the shared list, so changes leak between calls.</p>
+    <p>Step through it in the visualizer: watch both calls' <code>tags</code> point at a single list.</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "default-arg"}'></div>
+    <p>The idiomatic fix uses <code>None</code> as a <strong>sentinel</strong> (a special marker meaning "no value
+      given") and creates a new list inside the body, which runs on every call:</p>
+    <div class="runnable" data-title="The None-sentinel fix">
+<textarea>
+def add_tag(tag, tags=None):
+    if tags is None:
+        tags = []          # a brand-new list on every call
+    tags.append(tag)
+    return tags
+
+print(add_tag("a"))
+print(add_tag("b"))
+mine = ["x"]
+print(add_tag("y", mine), mine)   # passing a list on purpose still works
+print(add_tag.__defaults__)       # the stored defaults: (None,)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Never use a mutable object (<code>[]</code>, <code>{}</code>,
+      <code>set()</code>, or a custom object) as a default value unless you deliberately want shared state. Linters
+      such as ruff flag this as rule B006.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> defaults are evaluated once at definition time.
+      Immutable defaults (numbers, strings, <code>None</code>, tuples) are safe; for mutable ones use
+      <code>None</code> and build the object inside the function.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="flexible-signatures">
+    <h2>Flexible signatures: <code>*args</code>, <code>**kwargs</code>, <code>/</code>, and <code>*</code></h2>
+    <p>Sometimes you do not know how many arguments a caller will pass. <code>print</code> accepts any number;
+      so can your functions.</p>
+    <ul>
+      <li><code>*args</code> collects extra <em>positional</em> arguments into a <strong>tuple</strong>.</li>
+      <li><code>**kwargs</code> collects extra <em>keyword</em> arguments into a <strong>dict</strong>.</li>
+    </ul>
+    <p>The names <code>args</code> and <code>kwargs</code> are conventions; the stars do the work.</p>
+    <div class="runnable" data-title="Collecting arguments">
+<textarea>
+def report(title, *args, **kwargs):
+    print("title :", title)
+    print("args  :", args)
+    print("kwargs:", kwargs)
+
+report("Q1", 10, 20, 30, region="EU", final=True)
+print()
+report("Q2")
+</textarea>
+    </div>
+    <p>The stars also work in the other direction, at the <em>call site</em>: <code>*seq</code> spreads a sequence
+      into positional arguments, and <code>**mapping</code> spreads a dict into keyword arguments.</p>
+    <pre><code class="language-python">point = (3, 4)
+options = {"sep": " | ", "end": "!\n"}
+print(*point, **options)      # same as print(3, 4, sep=" | ", end="!\n")  →  3 | 4!</code></pre>
+    <h3>Keyword-only and positional-only parameters</h3>
+    <p>A bare <code>*</code> in a signature means "everything after this must be passed by keyword". A
+      <code>/</code> means "everything before this must be passed by position". Together they let you design calls
+      that are hard to misuse.</p>
+    <pre><code class="language-python">def transfer(amount, /, *, source, target, dry_run=False):
+    ...
+
+transfer(100, source="checking", target="savings")      # OK
+transfer(100, "checking", "savings")                    # TypeError: source and target are keyword-only
+transfer(amount=100, source="a", target="b")            # TypeError: amount is positional-only</code></pre>
+    <p>Why would you want this?</p>
+    <ul>
+      <li><strong>Keyword-only</strong> parameters stop callers from confusing similar arguments.
+        <code>transfer(100, "savings", "checking")</code> would silently move money the wrong way; forcing
+        <code>source=</code> and <code>target=</code> makes the call read like a sentence. Boolean flags such as
+        <code>dry_run</code> should almost always be keyword-only.</li>
+      <li><strong>Positional-only</strong> parameters let you rename a parameter later without breaking callers,
+        and are used when a name would be meaningless (<code>len(obj)</code>, not <code>len(obj=x)</code>). Many
+        built-ins are positional-only; <code>help(len)</code> shows <code>len(obj, /)</code>.</li>
+    </ul>
+    <p>The full order of a signature is:</p>
+    <pre><code class="language-python">def f(pos_only, /, normal, default=1, *args, kw_only, kw_default=2, **kwargs): ...</code></pre>
+    <div class="runnable" data-title="Try the signature rules">
+<textarea>
+import inspect
+
+def transfer(amount, /, *, source, target, dry_run=False):
+    action = "Would move" if dry_run else "Moved"
+    return f"{action} {amount} from {source} to {target}"
+
+print(transfer(100, source="checking", target="savings"))
+print(transfer(5, target="b", source="a", dry_run=True))
+print(inspect.signature(transfer))
+
+for bad in (lambda: transfer(100, "a", "b"), lambda: transfer(amount=1, source="a", target="b")):
+    try:
+        bad()
+    except TypeError as e:
+        print("TypeError:", e)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>*args</code> is a tuple and
+      <code>**kwargs</code> is a dict. In a signature, <code>/</code> ends the positional-only section and a bare
+      <code>*</code> starts the keyword-only section. Make flags keyword-only.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="scope">
+    <h2>Scope: where names live (LEGB)</h2>
+    <p>A <strong>scope</strong> is a region of code where a set of names is visible. Each function call gets its
+      own <strong>local</strong> scope, so a variable created inside a function does not exist outside it, and two
+      functions can both use a name like <code>total</code> without interfering.</p>
+    <p>When Python meets a name, it searches four scopes in order, called <strong>LEGB</strong>:</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 520 200" role="img" aria-label="Nested LEGB scopes">
+        <rect x="5" y="5" width="510" height="190" rx="10" fill="none" stroke="var(--viz-4)" stroke-width="2"/>
+        <text x="18" y="26" fill="var(--fg)" font-size="14">B · Built-in: print, len, range, ValueError …</text>
+        <rect x="25" y="38" width="470" height="148" rx="10" fill="none" stroke="var(--viz-3)" stroke-width="2"/>
+        <text x="38" y="58" fill="var(--fg)" font-size="14">G · Global: names at the top level of the module</text>
+        <rect x="45" y="70" width="430" height="106" rx="10" fill="none" stroke="var(--viz-2)" stroke-width="2"/>
+        <text x="58" y="90" fill="var(--fg)" font-size="14">E · Enclosing: an outer function's locals</text>
+        <rect x="65" y="102" width="390" height="64" rx="10" fill="none" stroke="var(--viz-1)" stroke-width="2"/>
+        <text x="78" y="124" fill="var(--fg)" font-size="14">L · Local: this call's parameters and variables</text>
+        <text x="78" y="148" fill="var(--fg-muted)" font-size="12">search starts here and moves outward →</text>
+      </svg>
+      <figcaption>Name lookup searches Local, then Enclosing, then Global, then Built-in, and stops at the first match.</figcaption>
+    </figure>
+    <p>Step through this program and watch the frames. Notice that the global <code>x</code> and each function's
+      <code>x</code> are different variables.</p>
+    <div class="tracer" data-title="LEGB, global, and nonlocal">
+<textarea>
+x = "global"
+count = 0
+
+def outer():
+    x = "enclosing"
+    hits = 0
+    def inner():
+        nonlocal hits
+        hits += 1
+        return x + " seen by inner"
+    first = inner()
+    second = inner()
+    return first, hits
+
+def bump():
+    global count
+    count += 1
+
+result = outer()
+bump()
+bump()
+</textarea>
+    </div>
+    <h3>Assignment makes a name local</h3>
+    <p>Reading a global inside a function is fine. <em>Assigning</em> to a name anywhere in a function makes that
+      name local for the <em>whole</em> function body, decided when the function is compiled. That produces this
+      confusing error:</p>
+    <div class="runnable" data-title="Predict: UnboundLocalError" data-predict>
+<textarea>
+total = 10
+
+def add(n):
+    try:
+        total = total + n     # total is local here, but not yet assigned
+    except UnboundLocalError as e:
+        return type(e).__name__
+    return total
+
+print(add(5))
+</textarea>
+    </div>
+    <p>To rebind a module-level name from inside a function, declare it <code>global</code>. To rebind a name from
+      an enclosing function, declare it <code>nonlocal</code>. Use both sparingly: a function that quietly changes
+      globals is hard to test and reason about. Usually it is better to take the value as a parameter and return
+      the new value.</p>
+    <div class="two-col">
+      <div><pre><code class="language-python"># Avoid: hidden shared state
+total = 0
+def add(n):
+    global total
+    total += n</code></pre></div>
+      <div><pre><code class="language-python"># Prefer: data in, data out
+def add(total, n):
+    return total + n
+
+total = add(0, 5)</code></pre></div>
+    </div>
+    <aside class="callout warn"><p>Shadowing a built-in is legal but painful: after <code>list = [1, 2]</code>, the
+      call <code>list("abc")</code> fails because the global <code>list</code> now hides the built-in one. Avoid
+      naming variables <code>list</code>, <code>dict</code>, <code>str</code>, <code>id</code>, <code>sum</code>, or
+      <code>input</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> lookup goes L → E → G → B. Assigning to a name makes it
+      local unless declared <code>global</code> or <code>nonlocal</code>. Prefer parameters and return values over
+      either declaration.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="first-class">
+    <h2>Functions are values: first-class functions and lambda</h2>
+    <p>In Python a function is an ordinary object, as real as an int or a list. You can bind it to another name,
+      store it in a list or dict, pass it to another function, and return it from a function. Languages with this
+      property are said to have <strong>first-class functions</strong>.</p>
+    <div class="runnable" data-title="Functions as data">
+<textarea>
+def double(n):
+    return n * 2
+
+def square(n):
+    return n * n
+
+twice = double                     # no parentheses: the function itself, not a call
+print(twice(21), twice is double)
+
+operations = {"double": double, "square": square}
+for name, fn in operations.items():
+    print(name, fn(7))
+
+def apply_all(fns, value):
+    return [fn(value) for fn in fns]
+
+print(apply_all([double, square, abs], -3))
+</textarea>
+    </div>
+    <h3>Functions that return functions (closures)</h3>
+    <p>An inner function remembers the enclosing variables it uses, even after the outer function has returned.
+      The combination is a <strong>closure</strong>. You will use this pattern for decorators in
+      <a href="m15-decorators.html">M15</a>.</p>
+    <div class="runnable" data-title="A function factory" data-predict>
+<textarea>
+def make_multiplier(factor):
+    def multiply(n):
+        return n * factor     # factor comes from the enclosing scope
+    return multiply
+
+triple = make_multiplier(3)
+half = make_multiplier(0.5)
+print(triple(10), half(10))
+</textarea>
+    </div>
+    <h3>lambda: tiny anonymous functions</h3>
+    <p><code>lambda params: expression</code> creates a function without a <code>def</code> or a name. The body
+      must be a single expression whose value is returned automatically. Lambdas shine as short, throwaway
+      arguments, especially the <code>key=</code> argument of <code>sorted</code>, <code>min</code>, and
+      <code>max</code>, which tells them what to compare.</p>
+    <div class="runnable" data-title="key functions with sorted, min, max">
+<textarea>
+people = [("Ada", 36), ("Grace", 45), ("Linus", 28), ("al", 70)]
+
+print(sorted(people))                                 # tuples compare by first item
+print(sorted(people, key=lambda p: p[1]))             # by age
+print(sorted(people, key=lambda p: p[1], reverse=True))
+print(sorted(people, key=lambda p: p[0].lower()))     # case-insensitive by name
+print(max(people, key=lambda p: p[1]))
+words = ["banana", "Kiwi", "apple", "fig"]
+print(sorted(words, key=len))                         # any one-argument function works as a key
+</textarea>
+    </div>
+    <aside class="callout pro"><p>If a lambda needs a name, write a <code>def</code>: <code>double = lambda n: n * 2</code>
+      is legal but discouraged (PEP 8, ruff rule E731) because the function's name in tracebacks becomes the
+      unhelpful <code>&lt;lambda&gt;</code>, and you cannot add a docstring.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>fn</code> is the function, <code>fn()</code> is a
+      call. Functions can be stored, passed, and returned. Use <code>lambda</code> only for short expressions passed
+      as arguments.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="docstrings-types">
+    <h2>Docstrings and type hints</h2>
+    <p>A <strong>docstring</strong> is a string literal that is the first statement of a function. Python stores it
+      as <code>fn.__doc__</code>, and tools such as <code>help()</code>, editors, and documentation generators
+      display it. This course uses the <strong>Google style</strong>: a one-line summary, a blank line, then
+      <code>Args:</code>, <code>Returns:</code>, and <code>Raises:</code> sections.</p>
+    <p><strong>Type hints</strong> (annotations) state what types a function expects and returns. Python does
+      <em>not</em> enforce them at run time; they are documentation that tools can check. A type checker such as
+      mypy (introduced in <a href="m16-typing.html">M16</a>) reads them and reports mistakes before you run the
+      code.</p>
+    <div class="runnable" data-title="A fully documented function">
+<textarea>
+def split_bill(total: float, people: int, tip_percent: float = 15.0) -> float:
+    """Return what each person owes, including tip.
+
+    Args:
+        total: Bill amount before tip.
+        people: Number of people sharing the bill.
+        tip_percent: Tip as a percentage of the total.
+
+    Returns:
+        Each person's share, rounded to cents.
+
+    Raises:
+        ValueError: If people is less than 1.
+    """
+    if people < 1:
+        raise ValueError("people must be at least 1")
+    return round(total * (1 + tip_percent / 100) / people, 2)
+
+print(split_bill(120, 4))
+print(split_bill.__doc__.splitlines()[0])
+print(split_bill.__annotations__)
+help(split_bill)
+</textarea>
+    </div>
+    <p>Common hint forms you will meet now: <code>int</code>, <code>float</code>, <code>str</code>,
+      <code>bool</code>, <code>None</code>, <code>list[int]</code>, <code>dict[str, float]</code>,
+      <code>tuple[int, int]</code>, and unions written with a bar: <code>int | None</code> ("an int or None").</p>
+    <aside class="callout py314"><p>Python 3.14 evaluates annotations <em>lazily</em> (PEP 649/749): they are
+      computed only when something asks for them, for example <code>annotationlib.get_annotations(fn)</code> or
+      <code>fn.__annotations__</code>. A hint can therefore mention a class defined later in the file without
+      quoting it. The <code>annotationlib</code> module offers formats such as <code>Format.STRING</code> to read
+      annotations without evaluating them.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> every public function deserves a docstring that says
+      what it does, its arguments, its return value, and the errors it raises. Hints are checked by tools, not by
+      Python itself.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="pure-functions">
+    <h2>Pure functions and side effects</h2>
+    <p>A <strong>pure function</strong> has two properties: its result depends only on its arguments, and it
+      changes nothing outside itself. <code>len</code>, <code>abs</code>, and <code>fahrenheit</code> are pure.
+      Anything else a function does besides computing its return value is a <strong>side effect</strong>: printing,
+      writing a file, mutating an argument, changing a global, reading the clock, or asking for input.</p>
+    <div class="two-col">
+      <div><pre><code class="language-python"># Impure: mutates its argument
+def add_bonus(scores):
+    for i in range(len(scores)):
+        scores[i] += 5
+    return scores</code></pre></div>
+      <div><pre><code class="language-python"># Pure: returns a new list
+def add_bonus(scores):
+    return [s + 5 for s in scores]</code></pre></div>
+    </div>
+    <p>Pure functions are easier to test (same input, same output, every time), easier to reuse, and safe to call
+      in any order. Programs need side effects, of course, or they would do nothing visible. The professional habit
+      is to <strong>push side effects to the edges</strong>: a small <code>main()</code> reads input and prints
+      output, and calls pure functions that do the real work.</p>
+    <div class="runnable" data-title="Predict: does the caller's list change?" data-predict>
+<textarea>
+def impure(scores):
+    scores.append(0)
+    return len(scores)
+
+def pure(scores):
+    return len(scores + [0])
+
+data = [90, 80]
+impure(data)
+pure(data)
+print(data)
+</textarea>
+    </div>
+    <aside class="callout think"><p>Is <code>random.randint(1, 6)</code> pure? Is a function that returns
+      <code>datetime.now()</code>? Neither is, because the same arguments can give different results. How would
+      you make a function that depends on today's date easy to test? (Hint: pass the date in as a parameter.)</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> pure = output depends only on input, and no side
+      effects. Keep the core of your program pure and do I/O at the edges.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="recursion">
+    <h2>A first look at recursion</h2>
+    <p>A function may call itself. This is <strong>recursion</strong>, and it fits problems that contain smaller
+      copies of themselves. Every recursive function needs two parts:</p>
+    <ul>
+      <li>a <strong>base case</strong> that answers directly without recursing, and</li>
+      <li>a <strong>recursive case</strong> that makes the problem smaller and calls itself.</li>
+    </ul>
+    <p>The factorial <code>n! = n × (n−1) × … × 1</code> is the classic example, because
+      <code>n! = n × (n−1)!</code> and <code>0! = 1</code>.</p>
+    <pre><code class="language-python">def factorial(n):
+    if n == 0:                      # base case
+        return 1
+    return n * factorial(n - 1)     # recursive case: a smaller problem</code></pre>
+    <p>Each call waits for the one below it. Expand the call tree to see the calls go down to the base case and the
+      results multiply back up.</p>
+    <div class="viz" data-viz="recursion-tree" data-config='{"fn": "factorial", "n": 4}'></div>
+    <p>Now step through the real code: the tracer shows a stack of frames, one per active call, each with its own
+      <code>n</code>.</p>
+    <div class="tracer" data-title="Frames stacking up and unwinding">
+<textarea>
+def factorial(n):
+    if n == 0:
+        return 1
+    return n * factorial(n - 1)
+
+answer = factorial(4)
+</textarea>
+    </div>
+    <p>Forget the base case, or fail to make progress towards it, and the calls never stop. Python protects itself
+      with a recursion limit (about 1000 frames by default) and raises <code>RecursionError</code>:</p>
+    <div class="runnable" data-title="When recursion never ends">
+<textarea>
+import sys
+
+def countdown(n):
+    return countdown(n - 1)     # no base case!
+
+try:
+    countdown(5)
+except RecursionError as e:
+    print("RecursionError:", e)
+print("limit:", sys.getrecursionlimit())
+</textarea>
+    </div>
+    <aside class="callout note"><p>Python does not optimize tail calls, so deep recursion is limited. Loops are often
+      the practical choice for simple repetition; recursion is the natural choice for nested structures like trees
+      and folders. Part 4 (<a href="m28-recursion.html">M28 Recursion</a>) goes much deeper.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> base case first, then a recursive case that shrinks the
+      problem. Each call has its own frame and its own local variables.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Exercises run in the browser and are graded instantly. Start with the first and work down.</p>
+
+    <div class="exercise" data-id="m05-e1" data-title="A greeting with a default">
+      <div class="exercise-prompt">
+        <p>Write <code>greet(name, greeting="Hello")</code> that <em>returns</em> (not prints) a string like
+          <code>"Hello, Ada!"</code>. Surrounding whitespace in <code>name</code> should be stripped.</p>
+      </div>
+<textarea class="starter">
+def greet(name, greeting="Hello"):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_default_greeting():
+    assert greet("Ada") == "Hello, Ada!", "greet('Ada') should return 'Hello, Ada!'"
+
+def test_custom_greeting_keyword():
+    assert greet("Grace", greeting="Hi") == "Hi, Grace!", "greeting='Hi' should be used"
+
+def test_strips_name():
+    assert greet("  Linus ") == "Hello, Linus!", "strip whitespace around the name"
+
+def test_returns_not_prints():
+    result, printed = capture_output(greet, "Ada")
+    assert printed == "", "greet should return the string, not print it"
+    assert isinstance(result, str), "greet should return a str"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use an f-string and <code>name.strip()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def greet(name, greeting="Hello"):
+    return f"{greeting}, {name.strip()}!"</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m05-e2" data-title="Fix the mutable default">
+      <div class="exercise-prompt">
+        <p>This function leaks state between calls. Fix it so each call without <code>items</code> starts from a new
+          empty list, while passing a list explicitly still appends to (and returns) that list.</p>
+      </div>
+<textarea class="starter">
+def add_item(item, items=[]):
+    items.append(item)
+    return items
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_independent_calls():
+    assert add_item("a") == ["a"], "first call should return ['a']"
+    assert add_item("b") == ["b"], "second call should return ['b'], not ['a', 'b']"
+
+def test_explicit_list_is_used():
+    mine = [1]
+    result = add_item(2, mine)
+    assert result is mine and mine == [1, 2], "an explicit list should be appended to and returned"
+
+def test_default_is_none():
+    assert add_item.__defaults__ == (None,), "use None as the default value"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Default to <code>None</code> and test <code>if items is None:</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def add_item(item, items=None):
+    if items is None:
+        items = []
+    items.append(item)
+    return items</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m05-e3" data-title="Summary statistics with *args">
+      <div class="exercise-prompt">
+        <p>Write <code>summarize(*numbers, decimals=2)</code> returning a tuple <code>(smallest, largest,
+          mean)</code>, with the mean rounded to <code>decimals</code>. With no numbers, return <code>None</code>.
+          <code>decimals</code> must be keyword-only (it is, automatically, because it follows <code>*numbers</code>).</p>
+      </div>
+<textarea class="starter">
+def summarize(*numbers, decimals=2):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    assert summarize(4, 1, 7) == (1, 7, 4.0), "summarize(4, 1, 7) should be (1, 7, 4.0)"
+
+def test_rounding():
+    assert summarize(1, 2, 2) == (1, 2, 1.67), "mean of 1, 2, 2 rounds to 1.67"
+    assert summarize(1, 2, 2, decimals=0) == (1, 2, 2.0), "decimals=0 rounds to a whole number"
+
+def test_empty():
+    assert summarize() is None, "no numbers should return None"
+
+def test_spread_list():
+    data = [10, 20]
+    assert summarize(*data) == (10, 20, 15.0), "callers can spread a list with *"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>numbers</code> is a tuple: use <code>min</code>,
+        <code>max</code>, <code>sum</code>, and <code>len</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def summarize(*numbers, decimals=2):
+    if not numbers:
+        return None
+    return min(numbers), max(numbers), round(sum(numbers) / len(numbers), decimals)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m05-e4" data-title="Safe signatures">
+      <div class="exercise-prompt">
+        <p>Write <code>apply_discount(price, /, *, percent)</code> that returns <code>price</code> reduced by
+          <code>percent</code> percent, rounded to 2 decimals. <code>price</code> must be positional-only and
+          <code>percent</code> keyword-only. Raise <code>ValueError</code> if <code>percent</code> is outside 0–100.</p>
+      </div>
+<textarea class="starter">
+def apply_discount(price, percent):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_value():
+    assert apply_discount(80, percent=25) == 60.0, "25% off 80 is 60.0"
+    assert apply_discount(19.99, percent=10) == 17.99, "10% off 19.99 rounds to 17.99"
+
+def test_percent_keyword_only():
+    try:
+        apply_discount(80, 25)
+    except TypeError:
+        return
+    assert False, "percent passed positionally should raise TypeError"
+
+def test_price_positional_only():
+    try:
+        apply_discount(price=80, percent=25)
+    except TypeError:
+        return
+    assert False, "price passed by keyword should raise TypeError"
+
+def test_range_check():
+    for bad in (-1, 101):
+        try:
+            apply_discount(10, percent=bad)
+        except ValueError:
+            continue
+        assert False, f"percent={bad} should raise ValueError"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The signature is <code>def apply_discount(price, /, *, percent):</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def apply_discount(price, /, *, percent):
+    if not 0 &lt;= percent &lt;= 100:
+        raise ValueError("percent must be between 0 and 100")
+    return round(price * (1 - percent / 100), 2)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m05-e5" data-title="A counter closure">
+      <div class="exercise-prompt">
+        <p>Write <code>make_counter(start=0, step=1)</code> that returns a function. Each call of the returned
+          function advances the count by <code>step</code> and returns the new value. Separate counters must be
+          independent. Do not use globals.</p>
+      </div>
+<textarea class="starter">
+def make_counter(start=0, step=1):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_counts_up():
+    c = make_counter()
+    assert [c(), c(), c()] == [1, 2, 3], "a default counter returns 1, 2, 3"
+
+def test_start_and_step():
+    c = make_counter(10, step=5)
+    assert [c(), c()] == [15, 20], "start=10, step=5 returns 15 then 20"
+
+def test_independent():
+    a, b = make_counter(), make_counter()
+    a(); a()
+    assert b() == 1, "two counters must not share state"
+
+def test_is_a_closure():
+    c = make_counter()
+    assert callable(c), "make_counter should return a function"
+    assert c.__closure__, "the returned function should remember its count in a closure, not a global"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Define an inner function that declares <code>nonlocal
+        count</code>, then return the inner function (without calling it).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def make_counter(start=0, step=1):
+    count = start
+
+    def counter():
+        nonlocal count
+        count += step
+        return count
+
+    return counter</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m05-e6" data-title="Recursive digit sum">
+      <div class="exercise-prompt">
+        <p>Write a <strong>recursive</strong> function <code>digit_sum(n)</code> that returns the sum of the decimal
+          digits of a non-negative integer, for example <code>digit_sum(4096) == 19</code>. Do not convert to a
+          string. Hint: the last digit is <code>n % 10</code> and the rest is <code>n // 10</code>.</p>
+      </div>
+<textarea class="starter">
+def digit_sum(n):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_values():
+    assert digit_sum(0) == 0, "digit_sum(0) is 0"
+    assert digit_sum(7) == 7, "a single digit is its own sum"
+    assert digit_sum(4096) == 19, "4 + 0 + 9 + 6 = 19"
+    assert digit_sum(999999) == 54, "six nines sum to 54"
+
+def test_is_recursive():
+    assert "digit_sum" in digit_sum.__code__.co_names, "digit_sum should call itself"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Base case: <code>n &lt; 10</code> returns <code>n</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def digit_sum(n):
+    if n &lt; 10:
+        return n
+    return n % 10 + digit_sum(n // 10)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a bill-splitting library</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">splitter.py: tips and shared bills</span></div>
+      <div class="widget-body">
+        <p>Build a small library of pure functions for splitting restaurant bills, plus a tiny
+          <code>main()</code> that is the only place anything is printed. This is the shape of most real programs:
+          a pure core and a thin layer of input and output.</p>
+        <pre data-label="Terminal"><code class="language-bash">mkdir splitter &amp;&amp; cd splitter
+pixi init
+pixi add python=3.14
+# write splitter.py, then:
+pixi run python splitter.py</code></pre>
+        <p><strong>Functions to write</strong> (each with a Google-style docstring and type hints):</p>
+        <ul>
+          <li><code>tip_amount(total: float, percent: float = 18.0) -&gt; float</code>, rounded to cents; raise
+            <code>ValueError</code> for negative inputs.</li>
+          <li><code>split_even(total: float, people: int, *, tip_percent: float = 18.0) -&gt; list[float]</code>:
+            shares that add up <em>exactly</em> to the total with tip, giving any leftover cents to the first people
+            (work in integer cents to avoid float drift).</li>
+          <li><code>split_by_items(items: dict[str, list[float]], *, tip_percent: float = 18.0, shared: float = 0.0) -&gt; dict[str, float]</code>:
+            each person pays for their own items plus an equal part of <code>shared</code>, with tip applied
+            proportionally.</li>
+          <li><code>main() -&gt; None</code>: asks for the total and number of people with <code>input()</code>
+            and prints each share.</li>
+        </ul>
+        <ul class="checklist" data-id="m05-mini">
+          <li>All library functions are pure: no <code>print</code>, no <code>input</code>, no globals</li>
+          <li><code>split_even(100, 3, tip_percent=0)</code> returns <code>[33.34, 33.33, 33.33]</code></li>
+          <li>The shares from <code>split_even</code> always sum to the total including tip</li>
+          <li><code>tip_percent</code> is keyword-only everywhere it appears</li>
+          <li>No mutable default arguments</li>
+          <li>Every public function has a Google-style docstring and type hints</li>
+          <li><code>main()</code> runs only under <code>if __name__ == "__main__":</code> (you will learn exactly why in M08)</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> accept tip as either a percent or a fixed amount (two keyword-only
+          parameters, exactly one allowed); add <code>round_up_to(amount, step)</code> so everyone pays a round
+          number; write a few <code>assert</code> checks at the bottom of the file to test your functions.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m05-quiz">
+      <script type="application/json">
+      {"title": "Functions quiz", "passScore": 0.7, "questions": [
+        {"type": "output", "prompt": "What does this print?", "code": "def f(x):\n    x * 2\n\nprint(f(4))", "answer": "None",
+         "explanation": "<p>The body computes <code>x * 2</code> but never returns it, so the call returns <code>None</code>.</p>"},
+        {"type": "single", "prompt": "In <code>def area(w, h): ...</code> and the call <code>area(3, 4)</code>, what are <code>3</code> and <code>4</code>?", "options": ["Parameters", "Arguments", "Defaults", "Annotations"], "answer": 1,
+         "explanation": "<p>Parameters are the names in the definition (<code>w</code>, <code>h</code>); arguments are the values passed in the call.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "def add(x, items=[]):\n    items.append(x)\n    return items\n\nadd(1)\nprint(add(2))", "answer": "[1, 2]",
+         "explanation": "<p>The default list is created once, when <code>def</code> runs, and shared by every call that omits <code>items</code>.</p>"},
+        {"type": "single", "prompt": "When is a default argument value evaluated?", "options": ["Every time the function is called", "Once, when the <code>def</code> statement executes", "When the module is imported for the second time", "Only if the argument is omitted"], "answer": 1,
+         "explanation": "<p>Defaults are evaluated at definition time and stored in <code>fn.__defaults__</code>.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "def f(*args, **kwargs):\n    print(len(args), sorted(kwargs))\n\nf(1, 2, 3, b=2, a=1)", "answer": "3 ['a', 'b']",
+         "explanation": "<p><code>args</code> is the tuple <code>(1, 2, 3)</code> and <code>kwargs</code> is <code>{'b': 2, 'a': 1}</code>; sorting a dict gives its keys.</p>"},
+        {"type": "multi", "prompt": "Given <code>def f(a, /, b, *, c): ...</code>, which calls are valid?", "options": ["<code>f(1, 2, c=3)</code>", "<code>f(1, b=2, c=3)</code>", "<code>f(a=1, b=2, c=3)</code>", "<code>f(1, 2, 3)</code>"], "answer": [0, 1],
+         "explanation": "<p><code>a</code> is positional-only, <code>b</code> can be either, and <code>c</code> is keyword-only.</p>"},
+        {"type": "single", "prompt": "In what order does Python search scopes for a name?", "options": ["Global, Local, Built-in, Enclosing", "Local, Enclosing, Global, Built-in", "Built-in, Global, Enclosing, Local", "Local, Global, Enclosing, Built-in"], "answer": 1,
+         "explanation": "<p>LEGB: Local, Enclosing, Global, Built-in. The first match wins.</p>"},
+        {"type": "single", "prompt": "What happens here?", "code": "n = 1\ndef inc():\n    n += 1\ninc()", "options": ["n becomes 2", "UnboundLocalError", "NameError", "Nothing"], "answer": 1,
+         "explanation": "<p>Assigning to <code>n</code> makes it local to <code>inc</code>; reading it before assignment raises <code>UnboundLocalError</code>. Declare <code>global n</code> or, better, pass and return the value.</p>"},
+        {"type": "text", "prompt": "Which keyword lets an inner function rebind a variable of its enclosing function?", "answer": ["nonlocal"],
+         "explanation": "<p><code>nonlocal</code> refers to the nearest enclosing function scope; <code>global</code> refers to module scope.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "def make(k):\n    return lambda x: x + k\n\nadd5 = make(5)\nprint(add5(10))", "answer": "15",
+         "explanation": "<p>The lambda is a closure that remembers <code>k = 5</code> from the call that created it.</p>"},
+        {"type": "output", "prompt": "What does this print?", "code": "words = ['bb', 'a', 'ccc']\nprint(sorted(words, key=len, reverse=True))", "answer": "['ccc', 'bb', 'a']",
+         "explanation": "<p><code>key=len</code> compares lengths, and <code>reverse=True</code> puts the longest first.</p>"},
+        {"type": "multi", "prompt": "Which functions are pure?", "options": ["<code>def f(x): return x * x</code>", "<code>def f(xs): xs.sort(); return xs</code>", "<code>def f(x): print(x); return x</code>", "<code>def f(a, b): return max(a, b)</code>"], "answer": [0, 3],
+         "explanation": "<p>Sorting the argument in place mutates it and printing is a side effect; the other two depend only on their inputs and change nothing.</p>"},
+        {"type": "single", "prompt": "Does Python enforce type hints when the function is called?", "options": ["Yes, it raises TypeError on mismatch", "No; hints are metadata that tools such as mypy check", "Only for built-in types", "Only with <code>from __future__ import annotations</code>"], "answer": 1,
+         "explanation": "<p>Annotations are stored (lazily, in 3.14) but not enforced at run time. Static checkers use them.</p>"},
+        {"type": "single", "prompt": "What must every recursive function have to terminate?", "options": ["A loop", "A global counter", "A base case reached by shrinking the problem", "A lambda"], "answer": 2,
+         "explanation": "<p>Without a base case that each call moves towards, recursion continues until <code>RecursionError</code>.</p>"}
+      ]}
+      </script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li><code>def</code> binds a name to a function object; each call gets a new frame; <code>return</code> supplies the value (default <code>None</code>).</li>
+      <li>Arguments match parameters by position or by keyword; defaults make parameters optional.</li>
+      <li>Defaults are evaluated once. Use <code>None</code> as the default for anything mutable.</li>
+      <li><code>*args</code> is a tuple of extra positionals, <code>**kwargs</code> a dict of extra keywords; <code>/</code> and <code>*</code> mark positional-only and keyword-only sections.</li>
+      <li>Names resolve L → E → G → B. Assignment makes a name local unless declared <code>global</code>/<code>nonlocal</code>.</li>
+      <li>Functions are values: store them, pass them (<code>key=</code>), return them (closures). <code>lambda</code> is for short expressions.</li>
+      <li>Document with Google-style docstrings and type hints; prefer pure functions and push side effects to the edges.</li>
+      <li>Recursion = base case + smaller recursive case.</li>
+    </ul>
+    <div class="flashcards" data-title="Functions">
+      <script type="application/json">
+      [{"front": "What does a function return if it has no <code>return</code>?", "back": "<code>None</code>."},
+       {"front": "Parameter vs argument", "back": "Parameter: the name in the definition. Argument: the value in the call."},
+       {"front": "When are default values evaluated?", "back": "Once, when the <code>def</code> statement runs."},
+       {"front": "The fix for a mutable default", "back": "<code>def f(x=None): if x is None: x = []</code>"},
+       {"front": "<code>*args</code> and <code>**kwargs</code> types", "back": "A tuple and a dict."},
+       {"front": "What do <code>/</code> and a bare <code>*</code> mean in a signature?", "back": "Before <code>/</code>: positional-only. After <code>*</code>: keyword-only."},
+       {"front": "LEGB", "back": "Local, Enclosing, Global, Built-in: the order Python looks up names."},
+       {"front": "<code>global</code> vs <code>nonlocal</code>", "back": "<code>global</code> rebinds a module-level name; <code>nonlocal</code> rebinds a name in the nearest enclosing function."},
+       {"front": "What is a closure?", "back": "An inner function that remembers variables from the scope where it was created."},
+       {"front": "Pure function", "back": "Result depends only on arguments, and it has no side effects."},
+       {"front": "Two parts of a recursive function", "back": "A base case and a recursive case that shrinks the problem."}]
+      </script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/controlflow.html#defining-functions">Python tutorial: Defining functions</a> and <a href="https://docs.python.org/3.14/tutorial/controlflow.html#more-on-defining-functions">More on defining functions</a></li>
+      <li><a href="https://docs.python.org/3.14/reference/executionmodel.html#resolution-of-names">Language reference: Resolution of names</a></li>
+      <li><a href="https://peps.python.org/pep-0570/">PEP 570: Positional-only parameters</a> and <a href="https://peps.python.org/pep-3102/">PEP 3102: Keyword-only arguments</a></li>
+      <li><a href="https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings">Google Python Style Guide: docstrings</a></li>
+      <li><a href="https://peps.python.org/pep-0649/">PEP 649: Deferred evaluation of annotations</a></li>
+      <li>Next: <a href="m06-collections.html">M06 Collections</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

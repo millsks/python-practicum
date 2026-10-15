@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M16 · Type Hints &amp; Static Typing · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m16">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 2 · Intermediate Python · Module 16</p>
+    <h1>Type Hints &amp; Static Typing</h1>
+    <p class="lede">Type hints let you write down what kind of values your code expects and returns, and let a static
+      checker such as mypy find bugs before the code ever runs. In a large code base they are documentation that cannot
+      go stale, autocomplete that actually works, and a safety net for every refactor.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m12-inheritance.html">M12 Inheritance &amp; Protocols</a>, <a href="m13-dataclasses.html">M13 Dataclasses</a></span></div>
+    <ul class="objectives">
+      <li>Annotate variables and functions with built-in generics, unions, <code>Callable</code>, and abstract collection types</li>
+      <li>Write generic functions, classes, and aliases with the modern PEP 695 syntax (<code>def first[T]</code>, <code>class Box[T]</code>, <code>type</code>)</li>
+      <li>Model structure with <code>Protocol</code>, <code>TypedDict</code>, <code>Literal</code>, <code>Final</code>, <code>NewType</code>, <code>@overload</code>, <code>Self</code>, and <code>ParamSpec</code></li>
+      <li>Explain Python 3.14's deferred evaluation of annotations and read them with <code>annotationlib</code></li>
+      <li>Set up mypy in strict mode with Pixi and read its error messages fluently</li>
+      <li>Recognize the Python 3.15 typing previews: closed <code>TypedDict</code>s and <code>TypeForm</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-types">
+    <h2>Why types?</h2>
+    <p>Python is <strong>dynamically typed</strong>: a name can refer to any kind of object, and type errors appear only
+      when the offending line runs. That is wonderful for quick scripts and painful for large programs, where the line
+      that passes a <code>str</code> to a function expecting an <code>int</code> might run once a month, in production.</p>
+    <p><strong>Type hints</strong> (also called <strong>annotations</strong>) are optional labels such as
+      <code>def area(width: float, height: float) -&gt; float</code>. They do three jobs:</p>
+    <ol>
+      <li><strong>Static checking.</strong> A <strong>type checker</strong> (mypy, pyright, and others) reads your code
+        without running it and reports places where the types cannot fit together.</li>
+      <li><strong>Tooling.</strong> Editors use hints for autocomplete, go-to-definition, and safe renames.</li>
+      <li><strong>Documentation.</strong> A signature like <code>def load(path: Path) -&gt; list[Order]</code> tells the
+        reader more than a paragraph of prose, and the checker keeps it honest.</li>
+    </ol>
+    <p>The crucial fact: <strong>the interpreter does not enforce hints</strong>. They are metadata attached to your
+      functions and classes. Python remains dynamically typed; hints add an optional static layer on top. This approach
+      is called <strong>gradual typing</strong>: you can add hints one function at a time, and unannotated code is
+      treated leniently.</p>
+    <div class="runnable" data-title="Hints are not enforced at run time">
+<textarea>
+def double(n: int) -> int:
+    return n * 2
+
+print(double(21))        # as intended
+print(double("ha"))      # runs fine! str * 2 is "haha"; only a type checker would object
+count: int = "seven"     # also runs; the annotation is just a label
+print(count)
+</textarea>
+    </div>
+    <aside class="callout think"><p>If hints are not enforced, why bother? Because the checker runs on <em>every
+      line</em> of your program in seconds, including the error-handling branches your tests never reach. A checker that
+      rejects <code>double("ha")</code> catches the bug at your desk, not at 3 a.m.</p></aside>
+    <p><strong>Remember:</strong> hints are for tools and readers. Runtime behavior does not change.</p>
+  </section>
+
+  <section class="lesson-section" id="annotations">
+    <h2>Annotating variables and functions</h2>
+    <p>The syntax is a colon after a name and <code>-&gt;</code> before a function's return type:</p>
+    <pre><code class="language-python">name: str = "Ada"                 # variable annotation
+retries: int                      # annotation without a value (declares the type)
+
+def greet(name: str, excited: bool = False) -&gt; str:
+    return f"Hi {name}{'!' if excited else '.'}"
+
+def log(message: str) -&gt; None:   # returns nothing: annotate None explicitly
+    print(message)</code></pre>
+    <h3>Built-in generics</h3>
+    <p>Containers take <strong>type parameters</strong> in square brackets describing what they hold. Since Python 3.9
+      you use the built-in types directly; the old <code>typing.List</code> and <code>typing.Dict</code> are deprecated
+      aliases you will only see in older code.</p>
+    <table>
+      <thead><tr><th>Annotation</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>list[int]</code></td><td>a list whose items are all ints</td></tr>
+        <tr><td><code>dict[str, float]</code></td><td>keys are str, values are float</td></tr>
+        <tr><td><code>set[str]</code>, <code>frozenset[str]</code></td><td>a set of strings</td></tr>
+        <tr><td><code>tuple[int, str]</code></td><td>exactly two items: an int, then a str</td></tr>
+        <tr><td><code>tuple[int, ...]</code></td><td>any number of ints (a tuple used as an immutable list)</td></tr>
+        <tr><td><code>dict[str, list[int]]</code></td><td>nesting works as you would expect</td></tr>
+      </tbody>
+    </table>
+    <h3>Unions and optional values</h3>
+    <p><code>int | str</code> means "an int or a str". The most common union is <code>X | None</code>, for a value that
+      may be missing. Older code writes <code>Optional[X]</code> or <code>Union[X, None]</code>; prefer the
+      <code>|</code> spelling.</p>
+    <pre><code class="language-python">def find_index(items: list[str], target: str) -&gt; int | None:
+    for i, item in enumerate(items):
+        if item == target:
+            return i
+    return None
+
+idx = find_index(["a", "b"], "b")
+idx + 1            # mypy: Unsupported operand types for + ("None" and "int")
+if idx is not None:
+    idx + 1        # fine: inside this branch mypy has *narrowed* idx to int</code></pre>
+    <p>That last idea is called <strong>narrowing</strong>: after <code>if x is not None</code>,
+      <code>isinstance(x, str)</code>, or an early <code>return</code>, the checker knows a more precise type for the rest
+      of the block. Most "Optional" errors are fixed by narrowing, not by casting.</p>
+    <p>Annotations are stored on the object, and <code>typing.get_type_hints</code> returns them as real objects:</p>
+    <div class="runnable" data-title="Where annotations live" data-predict>
+<textarea>
+from typing import get_type_hints, get_origin, get_args
+
+def merge(a: dict[str, int], b: dict[str, int] | None = None) -> dict[str, int]:
+    return {**a, **(b or {})}
+
+hints = get_type_hints(merge)
+print(hints["return"])
+print(get_origin(hints["a"]), get_args(hints["a"]))
+print(get_args(hints["b"]))
+</textarea>
+    </div>
+    <aside class="callout py314"><p>In Python 3.14, <code>int | None</code> and <code>typing.Union[int, None]</code>
+      create the same kind of object: <code>types.UnionType</code> is now an alias of <code>typing.Union</code>, so both
+      spellings compare equal and print the same way.</p></aside>
+    <p><strong>Remember:</strong> annotate every parameter and the return of public functions; use
+      <code>list[int]</code>-style generics and <code>X | None</code>; narrow before use.</p>
+  </section>
+
+  <section class="lesson-section" id="abstract-types">
+    <h2>Callables and abstract collections</h2>
+    <h3><code>Callable</code></h3>
+    <p>Functions are values (M15), so they need types too. <code>Callable[[int, str], bool]</code> is "a callable that
+      takes an int and a str and returns a bool". <code>Callable[..., T]</code> accepts any arguments.</p>
+    <pre><code class="language-python">from collections.abc import Callable
+
+def apply(fn: Callable[[float], float], values: list[float]) -&gt; list[float]:
+    return [fn(v) for v in values]</code></pre>
+    <h3>Accept abstract, return concrete</h3>
+    <p><code>collections.abc</code> defines abstract types for capabilities rather than specific classes:</p>
+    <ul>
+      <li><code>Iterable[T]</code>: anything you can loop over once (lists, tuples, sets, generators, files, dict keys).</li>
+      <li><code>Sequence[T]</code>: indexable and sized, read-only (lists, tuples, strings, ranges).</li>
+      <li><code>Mapping[K, V]</code>: read-only dict-like; <code>MutableMapping</code> if you modify it.</li>
+      <li><code>Collection[T]</code>: sized, iterable, supports <code>in</code>.</li>
+    </ul>
+    <p>The professional rule of thumb is <strong>accept the most general type you can use, return the most specific
+      type you produce</strong>. If your function only loops over its input, annotate it <code>Iterable[float]</code>:
+      callers can then pass a list, a tuple, a set, or a generator. If you annotated <code>list[float]</code>, mypy would
+      reject a tuple even though your code would work. Conversely, return <code>list[float]</code> rather than
+      <code>Iterable[float]</code> so callers can index and append without a cast.</p>
+    <div class="runnable" data-title="One function, many argument types">
+<textarea>
+from collections.abc import Callable, Iterable, Mapping, Sequence
+
+def mean(values: Iterable[float]) -> float:
+    total = count = 0
+    for v in values:
+        total += v
+        count += 1
+    return total / count
+
+def middle[T](items: Sequence[T]) -> T:
+    return items[len(items) // 2]
+
+def describe(prices: Mapping[str, float], fmt: Callable[[float], str]) -> list[str]:
+    return [f"{name}: {fmt(price)}" for name, price in prices.items()]
+
+print(mean([1, 2, 3]), mean((4.0, 5.0)), mean(x * 1.5 for x in range(4)))
+print(middle([10, 20, 30]), middle("abcde"), middle(range(100)))
+print(describe({"tea": 2.5, "cake": 4}, lambda p: f"${p:.2f}"))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Mutable containers are <strong>invariant</strong>: a <code>list[int]</code> is
+      <em>not</em> a <code>list[float]</code> in mypy's eyes, because a function that accepted <code>list[float]</code>
+      could append <code>3.5</code> to your list of ints. Read-only types such as <code>Sequence</code> are
+      <strong>covariant</strong>, so a <code>list[int]</code> <em>is</em> acceptable where a <code>Sequence[float]</code>
+      is expected. This is another reason to accept abstract types.</p></aside>
+    <p><strong>Remember:</strong> parameters: <code>Iterable</code>, <code>Sequence</code>, <code>Mapping</code>,
+      <code>Callable</code>. Return values: concrete <code>list</code>, <code>dict</code>, etc.</p>
+  </section>
+
+  <section class="lesson-section" id="generics">
+    <h2>Generics: PEP 695 syntax and the <code>type</code> statement</h2>
+    <p>What is the return type of a function that returns the first element of a list? It depends on the list: for a
+      <code>list[int]</code> it is <code>int</code>; for a <code>list[str]</code>, <code>str</code>. A <strong>type
+      variable</strong> expresses "the same type, whatever it is". Functions and classes that use type variables are
+      called <strong>generic</strong>.</p>
+    <div class="tabs">
+      <div class="tab" data-label="Modern (3.12+)">
+        <pre><code class="language-python">def first[T](xs: list[T]) -&gt; T:
+    return xs[0]
+
+class Box[T]:
+    def __init__(self, item: T) -&gt; None:
+        self.item = item
+
+    def get(self) -&gt; T:
+        return self.item
+
+type Pair[T] = tuple[T, T]          # a generic type alias
+type JSON = dict[str, JSON] | list[JSON] | str | int | float | bool | None</code></pre>
+      </div>
+      <div class="tab" data-label="Legacy TypeVar">
+        <pre><code class="language-python">from typing import Generic, TypeVar, TypeAlias
+
+T = TypeVar("T")
+
+def first(xs: list[T]) -&gt; T:
+    return xs[0]
+
+class Box(Generic[T]):
+    def __init__(self, item: T) -&gt; None:
+        self.item = item
+
+Pair: TypeAlias = tuple[T, T]</code></pre>
+      </div>
+    </div>
+    <p>The square brackets after the name (<a href="https://peps.python.org/pep-0695/">PEP 695</a>, Python 3.12) declare
+      type parameters right where they are used, so there is no module-level <code>TypeVar</code> to define and no
+      <code>Generic</code> base class. You will still read the legacy form in older libraries; the two mean the same
+      thing.</p>
+    <ul>
+      <li><strong>Bounds:</strong> <code>def biggest[T: Comparable](xs: list[T]) -&gt; T</code>: <code>T</code> must be
+        a subtype of the bound.</li>
+      <li><strong>Constraints:</strong> <code>def concat[S: (str, bytes)](a: S, b: S) -&gt; S</code>: <code>S</code> is
+        exactly one of the listed types, the same one for both arguments.</li>
+      <li><strong>The <code>type</code> statement</strong> creates a lazily evaluated alias, so it can refer to itself
+        (as <code>JSON</code> does) or to names defined later.</li>
+    </ul>
+    <div class="runnable" data-title="Generics are real objects at run time">
+<textarea>
+from collections.abc import Sequence
+
+def first[T](xs: Sequence[T]) -> T:
+    return xs[0]
+
+class Box[T]:
+    def __init__(self, item: T) -> None:
+        self.item = item
+    def map[U](self, fn) -> "Box[U]":
+        return Box(fn(self.item))
+    def __repr__(self) -> str:
+        return f"Box({self.item!r})"
+
+type Pair[T] = tuple[T, T]
+
+def concat[S: (str, bytes)](a: S, b: S) -> S:
+    return a + b
+
+print(first([3, 1, 2]), first("xyz"))
+print(Box(20).map(str).map(len))
+print("type params:", first.__type_params__, Box.__type_params__)
+print("alias:", Pair, "=", Pair.__value__, "| specialized:", Pair[int])
+print("constraints:", concat.__type_params__[0].__constraints__)
+print(concat("ab", "cd"), concat(b"ab", b"cd"))
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Use a generic only when a type genuinely flows from input to output. If a parameter
+      appears just once in a signature, a plain type (or <code>object</code>) is clearer than <code>T</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>def f[T](...)</code>, <code>class C[T]</code>, and
+      <code>type Alias[T] = ...</code> are the modern spellings; a bound restricts <code>T</code> to subtypes.</p>
+  </section>
+
+  <section class="lesson-section" id="protocols">
+    <h2>Protocols: static duck typing</h2>
+    <p>Python's culture is <strong>duck typing</strong>: "if it has a <code>.read()</code> method, treat it like a file".
+      Inheritance-based types fight this: annotating a parameter as <code>io.TextIOBase</code> rejects your own perfectly
+      good reader class. A <strong><code>Protocol</code></strong> (introduced in M12) describes the methods and
+      attributes an object must have; any class that has them matches, with no inheritance. This is <strong>structural
+      typing</strong>, as opposed to <strong>nominal typing</strong> (matching by declared class).</p>
+    <pre><code class="language-python">from typing import Protocol
+
+class SupportsClose(Protocol):
+    def close(self) -&gt; None: ...
+
+def shutdown(resources: list[SupportsClose]) -&gt; None:
+    for r in resources:
+        r.close()
+
+shutdown([open("a.txt"), socket_obj, MyPool()])   # all fine if each has close()</code></pre>
+    <p>By default a Protocol exists only for the type checker. Add <code>@runtime_checkable</code> to allow
+      <code>isinstance</code> checks too, with a caveat: at run time Python only checks that the methods <em>exist</em>,
+      not their signatures.</p>
+    <div class="runnable" data-title="Structural matching" data-predict>
+<textarea>
+import io
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class SupportsClose(Protocol):
+    def close(self) -> None: ...
+
+class Pool:
+    def close(self) -> None:
+        print("pool closed")
+
+class Liar:
+    close = 42            # an attribute named close, not even callable
+
+print(isinstance(Pool(), SupportsClose))
+print(isinstance(io.StringIO(), SupportsClose))
+print(isinstance(3, SupportsClose))
+print(isinstance(Liar(), SupportsClose))
+print(issubclass(Pool, SupportsClose), SupportsClose in Pool.__mro__)
+</textarea>
+    </div>
+    <p>Protocols are how you write the <em>interfaces</em> of a system: the Library in <a href="../projects/p02-library-system.html">Project 2</a>
+      depends on a <code>Clock</code> protocol and a <code>Notifier</code> protocol, so tests can pass fakes.</p>
+    <p><strong>Remember:</strong> a Protocol says "anything with these members". Prefer it over a concrete base class
+      for parameters.</p>
+  </section>
+
+  <section class="lesson-section" id="special-forms">
+    <h2>The typing toolbox</h2>
+    <p>The <code>typing</code> module has a construct for most patterns you will meet. Here are the ones professionals
+      use weekly, each with the problem it solves.</p>
+    <div class="tabs">
+      <div class="tab" data-label="TypedDict">
+        <p>JSON-shaped dicts with known keys. The value is a plain <code>dict</code> at run time; the checker tracks
+          each key's type and flags typos.</p>
+        <pre><code class="language-python">from typing import NotRequired, TypedDict
+
+class Movie(TypedDict):
+    title: str
+    year: int
+    rating: NotRequired[float]     # may be absent
+
+m: Movie = {"title": "Alien", "year": 1979}
+m["yaer"]        # mypy: TypedDict "Movie" has no key "yaer"</code></pre>
+      </div>
+      <div class="tab" data-label="Literal">
+        <p>A parameter that accepts only specific values: a lightweight enum.</p>
+        <pre><code class="language-python">from typing import Literal
+
+type Mode = Literal["r", "w", "a"]
+
+def open_log(mode: Mode) -&gt; None: ...
+open_log("x")    # mypy: incompatible type "Literal['x']"; expected "Literal['r', 'w', 'a']"</code></pre>
+      </div>
+      <div class="tab" data-label="Final">
+        <p>A name that must never be reassigned (a constant), or a method that subclasses must not override
+          (<code>@final</code>).</p>
+        <pre><code class="language-python">from typing import Final
+
+MAX_RETRIES: Final = 3
+MAX_RETRIES = 4  # mypy: Cannot assign to final name "MAX_RETRIES"</code></pre>
+      </div>
+      <div class="tab" data-label="@overload">
+        <p>When the return type depends on the argument type. Write the typed stubs with <code>@overload</code>, then
+          one real implementation.</p>
+        <pre><code class="language-python">from typing import overload
+
+@overload
+def parse(raw: str) -&gt; int: ...
+@overload
+def parse(raw: bytes) -&gt; str: ...
+def parse(raw: str | bytes) -&gt; int | str:
+    return int(raw) if isinstance(raw, str) else raw.decode()
+
+reveal_type(parse("1"))    # mypy note: Revealed type is "int"
+reveal_type(parse(b"x"))   # mypy note: Revealed type is "str"</code></pre>
+      </div>
+      <div class="tab" data-label="Self">
+        <p>Methods that return their own instance, such as fluent builders and alternative constructors. With
+          <code>Self</code>, a subclass's method returns the subclass type automatically.</p>
+        <pre><code class="language-python">from typing import Self
+
+class Query:
+    def where(self, clause: str) -&gt; Self:
+        self.clauses.append(clause)
+        return self
+
+    @classmethod
+    def from_file(cls, path: str) -&gt; Self: ...</code></pre>
+      </div>
+      <div class="tab" data-label="ParamSpec">
+        <p>Typing decorators (M15) so the decorated function keeps its exact signature. <code>**P</code> captures the
+          parameters; <code>R</code> the return type.</p>
+        <pre><code class="language-python">import functools
+from collections.abc import Callable
+
+def logged[**P, R](func: Callable[P, R]) -&gt; Callable[P, R]:
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -&gt; R:
+        return func(*args, **kwargs)
+    return wrapper
+
+@logged
+def add(a: int, b: int) -&gt; int: return a + b
+add(1, "2")   # mypy: Argument 2 to "add" has incompatible type "str"; expected "int"</code></pre>
+      </div>
+      <div class="tab" data-label="NewType / cast">
+        <p><code>NewType</code> makes a distinct type for the checker with zero run-time cost, so you cannot pass a
+          <code>UserId</code> where an <code>OrderId</code> is expected even though both are ints. <code>cast</code>
+          tells the checker "trust me"; it does nothing at run time, so use it sparingly.</p>
+        <pre><code class="language-python">from typing import NewType, cast
+
+UserId = NewType("UserId", int)
+OrderId = NewType("OrderId", int)
+def cancel(order: OrderId) -&gt; None: ...
+cancel(UserId(7))      # mypy error: expected "OrderId"
+
+data = cast(dict[str, int], json.loads(text))   # unchecked promise</code></pre>
+      </div>
+      <div class="tab" data-label="TYPE_CHECKING">
+        <p><code>typing.TYPE_CHECKING</code> is <code>False</code> at run time and treated as <code>True</code> by
+          checkers. Put imports needed only for annotations under it to avoid import cycles or slow imports.</p>
+        <pre><code class="language-python">from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from shop.models import Order    # never imported at run time
+
+def total(order: Order) -&gt; float:    # fine in 3.14: annotations are evaluated lazily
+    ...</code></pre>
+      </div>
+    </div>
+    <p>Two more you need to know: <code>Any</code> switches checking off for a value (it is compatible with
+      everything, in both directions), while <code>object</code> accepts everything but lets you do almost nothing with
+      the value until you narrow it. Prefer <code>object</code> when you mean "anything"; <code>Any</code> is an escape
+      hatch.</p>
+    <div class="runnable" data-title="What the toolbox looks like at run time">
+<textarea>
+from typing import Literal, NewType, NotRequired, TypedDict, get_args, get_type_hints
+
+class Order(TypedDict):
+    id: int
+    status: Literal["new", "paid", "shipped"]
+    note: NotRequired[str]
+
+order: Order = {"id": 1, "status": "new"}
+print(type(order), order)                       # just a dict
+print("required:", sorted(Order.__required_keys__), "optional:", sorted(Order.__optional_keys__))
+print("allowed statuses:", get_args(get_type_hints(Order)["status"]))
+
+UserId = NewType("UserId", int)
+uid = UserId(42)
+print(uid, type(uid), uid + 1)                   # an ordinary int at run time
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> <code>TypedDict</code> for dict records, <code>Literal</code> for fixed choices,
+      <code>Final</code> for constants, <code>@overload</code> for type-dependent returns, <code>Self</code> for fluent
+      methods, <code>ParamSpec</code> for decorators, <code>NewType</code> for distinct ids.</p>
+  </section>
+
+  <section class="lesson-section" id="deferred-annotations">
+    <h2>Python 3.14: deferred evaluation of annotations</h2>
+    <p>Until Python 3.13, annotations were evaluated <em>eagerly</em>, at the moment the <code>def</code> or
+      <code>class</code> statement ran. That caused two long-standing headaches:</p>
+    <ul>
+      <li><strong>Forward references.</strong> A class could not mention itself in its own method annotations
+        (<code>def merge(self, other: Node)</code> raised <code>NameError</code>, because <code>Node</code> does not exist
+        until the class body finishes). The workaround was quoting: <code>other: "Node"</code>.</li>
+      <li><strong>Cost.</strong> Every annotation expression was evaluated at import time even if nothing ever looked at
+        it.</li>
+    </ul>
+    <aside class="callout py314"><p><strong>PEP 649 and PEP 749</strong> (Python 3.14) make annotations
+      <strong>lazy</strong>. The compiler puts the annotation expressions in a hidden function,
+      <code>__annotate__</code>, which runs only when someone asks for the annotations. Forward references therefore just
+      work, with no quotes and no <code>from __future__ import annotations</code>.</p></aside>
+    <p>Step through this program: the <code>def</code> line succeeds even though <code>Ledger</code> does not exist yet,
+      because nothing evaluates the annotation.</p>
+    <div class="tracer" data-title="Annotations are not evaluated at def time">
+<textarea>
+def open_ledger(name: str) -> Ledger:
+    return Ledger(name)
+
+class Ledger:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def merge(self, other: Ledger) -> Ledger:
+        return Ledger(self.name + "+" + other.name)
+
+a = open_ledger("cash")
+b = a.merge(open_ledger("bank"))
+name = b.name
+</textarea>
+    </div>
+    <h3>Reading annotations with <code>annotationlib</code></h3>
+    <p>Since evaluation is now deferred, <em>how</em> you ask for annotations matters. The new standard-library module
+      <code>annotationlib</code> offers <code>get_annotations(obj, format=...)</code> with three main formats:</p>
+    <table>
+      <thead><tr><th>Format</th><th>Result</th><th>If a name is undefined</th></tr></thead>
+      <tbody>
+        <tr><td><code>Format.VALUE</code> (default)</td><td>real objects, like <code>&lt;class 'int'&gt;</code></td><td>raises <code>NameError</code></td></tr>
+        <tr><td><code>Format.FORWARDREF</code></td><td>real objects where possible</td><td>substitutes a <code>ForwardRef('Name')</code></td></tr>
+        <tr><td><code>Format.STRING</code></td><td>the source text, like <code>'list[Node]'</code></td><td>never fails</td></tr>
+      </tbody>
+    </table>
+    <div class="runnable" data-title="Three ways to read the same annotations">
+<textarea>
+from annotationlib import Format, get_annotations
+
+def connect(host: str, retries: int = 3) -> Connection:   # Connection is not defined (yet)
+    ...
+
+print("STRING:    ", get_annotations(connect, format=Format.STRING))
+print("FORWARDREF:", get_annotations(connect, format=Format.FORWARDREF))
+try:
+    get_annotations(connect, format=Format.VALUE)
+except NameError as e:
+    print("VALUE:      NameError:", e)
+
+class Connection:          # define it...
+    pass
+
+print("VALUE now: ", get_annotations(connect))   # ...and VALUE succeeds
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Library code that inspects annotations (serializers, dependency injectors, CLI
+      builders) should call <code>annotationlib.get_annotations</code> or <code>typing.get_type_hints</code> rather than
+      reading <code>obj.__annotations__</code> directly, and should choose <code>FORWARDREF</code> or
+      <code>STRING</code> when it must tolerate names that are not defined yet. Existing code that uses
+      <code>from __future__ import annotations</code> keeps working (it still turns annotations into strings), but new
+      3.14 code does not need it.</p></aside>
+    <p><strong>Remember:</strong> in 3.14, annotations are computed on demand. Forward references need no quotes. Use
+      <code>annotationlib.get_annotations(obj, format=...)</code> to read them.</p>
+  </section>
+
+  <section class="lesson-section" id="mypy">
+    <h2>mypy in strict mode with Pixi</h2>
+    <p><strong>mypy</strong> is the original Python type checker. It is a development tool, not a runtime dependency,
+      so add it to your Pixi workspace (conda-forge has it) and configure it in <code>pyproject.toml</code>:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi add mypy                 # or: pixi add --feature dev mypy
+pixi run mypy src/            # check your package
+pixi run mypy --strict src/   # strict mode from the command line</code></pre>
+    <pre data-label="pyproject.toml"><code class="language-toml">[tool.mypy]
+python_version = "3.12"   # the oldest Python you support
+strict = true             # turn on every optional check
+warn_unreachable = true
+files = ["src"]</code></pre>
+    <pre data-label="pixi.toml"><code class="language-toml">[tasks]
+check = "mypy src/"</code></pre>
+    <p><code>strict = true</code> enables, among others: every function must be annotated
+      (<code>disallow_untyped_defs</code>), no implicit <code>Any</code> from missing generics (<code>list</code> must be
+      <code>list[int]</code>), warnings for returning <code>Any</code>, and errors for unused <code>type: ignore</code>
+      comments. Strict mode is the standard for new professional code; adding it to an old code base is usually done
+      one module at a time with per-module overrides.</p>
+    <h3>Reading mypy errors</h3>
+    <p>Take this untyped, slightly buggy module:</p>
+    <pre data-label="src/shop/inventory.py"><code class="language-python">def total_price(items, tax_rate=0.08):
+    return sum(item.price * item.qty for item in items) * (1 + tax_rate)
+
+
+def find(names: list[str], target: str) -&gt; int:
+    for i, name in enumerate(names):
+        if name == target:
+            return i
+    return None
+
+
+def label(count: int) -&gt; str:
+    return "items: " + count</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">$ pixi run mypy --strict src/
+src/shop/inventory.py:1: error: Function is missing a type annotation  [no-untyped-def]
+src/shop/inventory.py:9: error: Incompatible return value type (got "None", expected "int")  [return-value]
+src/shop/inventory.py:13: error: Returning Any from function declared to return "str"  [no-any-return]
+src/shop/inventory.py:13: error: Unsupported operand types for + ("str" and "int")  [operator]
+Found 4 errors in 1 file (checked 1 source file)</code></pre>
+    <p>Every line has the same anatomy: <strong>file:line</strong>, severity, a message that usually says
+      <em>got X, expected Y</em>, and an <strong>error code</strong> in brackets. Read them top to bottom and fix the
+      <em>first</em> error in each function first, since later ones are often consequences (here, the
+      <code>no-any-return</code> on line 13 disappears once the <code>operator</code> error is fixed).</p>
+    <ul>
+      <li><code>no-untyped-def</code>: add annotations. For <code>items</code>, a Protocol with <code>price</code> and
+        <code>qty</code> attributes is ideal.</li>
+      <li><code>return-value</code>: the signature lies. The function can return <code>None</code>, so the honest type is
+        <code>int | None</code>.</li>
+      <li><code>operator</code>: a real bug that would raise <code>TypeError</code> at run time. Use an f-string.</li>
+    </ul>
+    <details class="reveal"><summary>The fixed module (passes <code>mypy --strict</code>)</summary>
+      <pre><code class="language-python">from collections.abc import Iterable
+from typing import Protocol
+
+
+class Priced(Protocol):
+    price: float
+    qty: int
+
+
+def total_price(items: Iterable[Priced], tax_rate: float = 0.08) -&gt; float:
+    return sum(item.price * item.qty for item in items) * (1 + tax_rate)
+
+
+def find(names: list[str], target: str) -&gt; int | None:
+    for i, name in enumerate(names):
+        if name == target:
+            return i
+    return None
+
+
+def label(count: int) -&gt; str:
+    return f"items: {count}"</code></pre>
+    </details>
+    <h3>Tools of the trade</h3>
+    <ul>
+      <li><code>reveal_type(expr)</code>: mypy prints the type it inferred. (It exists at run time too, in
+        <code>typing</code>, and prints the runtime type.) Remove it when done.</li>
+      <li><code># type: ignore[code]</code>: silence one specific error on one line. Always include the code, and leave a
+        comment explaining why; strict mode reports ignores that are no longer needed.</li>
+      <li>Third-party libraries without hints need <strong>stubs</strong> (<code>pixi add types-requests</code> style
+        packages) or an override <code>ignore_missing_imports = true</code> for that module only.</li>
+    </ul>
+    <div class="runnable" data-local="mypy runs as a separate program on your files; install it with pixi add mypy." data-title="Try mypy locally">
+<textarea>
+# save as src/demo/typed.py, then: pixi run mypy --strict src/
+from typing import reveal_type
+
+def first[T](xs: list[T]) -> T:
+    return xs[0]
+
+reveal_type(first([1, 2, 3]))      # note: Revealed type is "int"
+reveal_type(first(["a", "b"]))     # note: Revealed type is "str"
+first(42)                          # error: Argument 1 to "first" has incompatible type "int"; expected "list[Never]"
+</textarea>
+    </div>
+    <aside class="callout pixi"><p>This course's own repository runs <code>mypy</code> in strict mode as part of
+      <code>pixi run ci</code>. Because mypy is pinned in <code>pixi.lock</code>, every contributor and CI machine sees
+      exactly the same errors.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="py315">
+    <h2>Preview: typing in Python 3.15</h2>
+    <aside class="callout py315"><p><strong>PEP 728: closed TypedDicts and <code>extra_items</code>.</strong> Today a
+      <code>TypedDict</code> is "open": a value may carry extra keys the type does not mention. In 3.15 you can declare
+      <code>closed=True</code> (no other keys allowed) or <code>extra_items=T</code> (any other keys must have values of
+      type <code>T</code>). <strong>PEP 747: <code>TypeForm</code>.</strong> A way to annotate a parameter that receives
+      a <em>type expression</em> itself, such as <code>int | None</code>, so functions like validators and
+      <code>cast</code>-like helpers can be typed precisely.</p></aside>
+    <div class="runnable" data-python="3.15" data-title="Closed TypedDicts and TypeForm (3.15)">
+<textarea>
+from typing import TypedDict, TypeForm
+
+class Point(TypedDict, closed=True):
+    x: int
+    y: int
+
+class Headers(TypedDict, extra_items=str):
+    content_type: str          # any other key is allowed, but must map to a str
+
+p: Point = {"x": 1, "y": 2}
+h: Headers = {"content_type": "text/html", "x-trace": "abc"}
+
+def validate[T](form: TypeForm[T], value: object) -> T:
+    # a real validator would check value against form here
+    return value  # type: ignore[return-value]
+
+n = validate(int | None, 5)    # a checker infers n: int | None
+print(p, h, n)
+</textarea>
+    </div>
+    <p>Run 3.15 code locally with <code>pixi exec --spec "python=3.15" python file.py</code>. Checkers add support for
+      new typing features on their own schedule, so check your mypy version's release notes before relying on them.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>The browser cannot run mypy, so these exercises check your annotations by inspecting them at run time with the
+      same functions libraries use (<code>get_type_hints</code>, <code>annotationlib</code>), plus behavior tests.</p>
+
+    <div class="exercise" data-id="m16-e1" data-title="Annotate a function">
+      <div class="exercise-prompt">
+        <p>Add type hints to <code>word_lengths</code>: it takes a <code>list</code> of <code>str</code> and an optional
+          minimum length (an <code>int</code>, default <code>0</code>) and returns a <code>dict</code> mapping each word
+          (<code>str</code>) to its length (<code>int</code>). Use built-in generics. Also annotate
+          <code>longest</code>, which takes the same kind of list and returns a <code>str</code> or <code>None</code>
+          when the list is empty. Implement <code>longest</code>.</p>
+      </div>
+<textarea class="starter">
+def word_lengths(words, min_length=0):
+    return {w: len(w) for w in words if len(w) >= min_length}
+
+def longest(words):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from typing import get_type_hints
+
+def test_word_lengths_hints():
+    hints = get_type_hints(word_lengths)
+    assert hints.get("words") == list[str], f"words should be list[str], got {hints.get('words')}"
+    assert hints.get("min_length") is int, "min_length should be int"
+    assert hints.get("return") == dict[str, int], "return should be dict[str, int]"
+
+def test_longest_hints():
+    hints = get_type_hints(longest)
+    assert hints.get("words") == list[str], "words should be list[str]"
+    assert hints.get("return") == (str | None), f"return should be str | None, got {hints.get('return')}"
+
+def test_behavior():
+    assert word_lengths(["a", "abc"], 2) == {"abc": 3}
+    assert longest(["hi", "hello", "hey"]) == "hello", "longest should return the longest word"
+    assert longest([]) is None, "longest([]) should return None"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>def longest(words: list[str]) -&gt; str | None:</code>
+        then <code>return max(words, key=len) if words else None</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def word_lengths(words: list[str], min_length: int = 0) -&gt; dict[str, int]:
+    return {w: len(w) for w in words if len(w) &gt;= min_length}
+
+def longest(words: list[str]) -&gt; str | None:
+    return max(words, key=len) if words else None</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m16-e2" data-title="A generic Stack[T]">
+      <div class="exercise-prompt">
+        <p>Using PEP 695 syntax, write a generic class <code>Stack[T]</code> with <code>push(item: T) -&gt; None</code>,
+          <code>pop() -&gt; T</code> (raise <code>IndexError</code> with the message <code>"pop from empty stack"</code>
+          when empty), <code>peek() -&gt; T | None</code>, and <code>__len__</code>. Then write a generic function
+          <code>last[T](items: Sequence[T]) -&gt; T</code>, and a type alias <code>type Grid = list[list[int]]</code>.</p>
+      </div>
+<textarea class="starter">
+from collections.abc import Sequence
+
+class Stack:
+    ...
+
+def last(items):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from typing import TypeAliasType, get_type_hints
+
+def test_is_generic_class():
+    assert len(Stack.__type_params__) == 1, "declare one type parameter: class Stack[T]"
+    Stack[int]
+
+def test_stack_behavior():
+    s = Stack()
+    s.push(1); s.push(2)
+    assert len(s) == 2 and s.peek() == 2, "peek returns the top without removing it"
+    assert s.pop() == 2 and s.pop() == 1, "pop returns items last-in, first-out"
+    assert s.peek() is None, "peek on an empty stack returns None"
+    try:
+        s.pop()
+    except IndexError as e:
+        assert str(e) == "pop from empty stack", "use the exact error message"
+    else:
+        raise AssertionError("pop on an empty stack should raise IndexError")
+
+def test_method_hints_use_type_param():
+    T = Stack.__type_params__[0]
+    assert get_type_hints(Stack.pop).get("return") is T, "pop should return T"
+    assert get_type_hints(Stack.push).get("item") is T, "push should take item: T"
+
+def test_last():
+    assert len(last.__type_params__) == 1, "last should be generic: def last[T](...)"
+    assert last([1, 2, 3]) == 3 and last("xyz") == "z"
+
+def test_alias():
+    assert isinstance(Grid, TypeAliasType), "use the type statement: type Grid = ..."
+    assert Grid.__value__ == list[list[int]], "Grid should alias list[list[int]]"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Start with <code>class Stack[T]:</code> and store items in
+        <code>self._items: list[T] = []</code>. Inside the class body, <code>T</code> is in scope for every method's
+        annotations.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections.abc import Sequence
+
+class Stack[T]:
+    def __init__(self) -&gt; None:
+        self._items: list[T] = []
+
+    def push(self, item: T) -&gt; None:
+        self._items.append(item)
+
+    def pop(self) -&gt; T:
+        if not self._items:
+            raise IndexError("pop from empty stack")
+        return self._items.pop()
+
+    def peek(self) -&gt; T | None:
+        return self._items[-1] if self._items else None
+
+    def __len__(self) -&gt; int:
+        return len(self._items)
+
+def last[T](items: Sequence[T]) -&gt; T:
+    return items[-1]
+
+type Grid = list[list[int]]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m16-e3" data-title="A Protocol for shapes">
+      <div class="exercise-prompt">
+        <p>Define a runtime-checkable Protocol <code>HasArea</code> with a method <code>area(self) -&gt; float</code>.
+          Write two classes, <code>Square(side)</code> and <code>Circle(radius)</code>, that do <em>not</em> inherit from
+          it but match it structurally (use <code>math.pi</code>). Finally, write
+          <code>total_area(shapes: Iterable[HasArea]) -&gt; float</code>.</p>
+      </div>
+<textarea class="starter">
+import math
+from collections.abc import Iterable
+from typing import Protocol, runtime_checkable
+
+class HasArea(Protocol):
+    ...
+
+class Square:
+    ...
+
+class Circle:
+    ...
+
+def total_area(shapes):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+from typing import get_type_hints, Protocol
+
+def test_protocol_is_runtime_checkable():
+    assert Protocol in HasArea.__mro__ or getattr(HasArea, "_is_protocol", False), "HasArea must be a Protocol"
+    assert isinstance(Square(2), HasArea), "Square should match HasArea (did you add @runtime_checkable?)"
+    assert isinstance(Circle(1), HasArea), "Circle should match HasArea"
+    assert not isinstance("text", HasArea), "a str has no area() method"
+
+def test_no_inheritance():
+    assert HasArea not in Square.__mro__ and HasArea not in Circle.__mro__, "match structurally; don't inherit"
+
+def test_areas():
+    assert Square(3).area() == 9
+    assert math.isclose(Circle(2).area(), math.pi * 4), "circle area is pi * r**2"
+    assert math.isclose(total_area([Square(1), Circle(1), Square(2)]), 5 + math.pi)
+    assert total_area(s for s in [Square(2)]) == 4, "total_area should accept any iterable, even a generator"
+
+def test_hints():
+    hints = get_type_hints(total_area)
+    assert hints.get("return") is float, "total_area should return float"
+    assert "shapes" in hints, "annotate the shapes parameter"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Decorate the Protocol with <code>@runtime_checkable</code>; its
+        method body is just <code>...</code>. Then <code>return sum(s.area() for s in shapes)</code> (convert to
+        <code>float</code> so an empty input gives <code>0.0</code>).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+from collections.abc import Iterable
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class HasArea(Protocol):
+    def area(self) -&gt; float: ...
+
+class Square:
+    def __init__(self, side: float) -&gt; None:
+        self.side = side
+
+    def area(self) -&gt; float:
+        return self.side ** 2
+
+class Circle:
+    def __init__(self, radius: float) -&gt; None:
+        self.radius = radius
+
+    def area(self) -&gt; float:
+        return math.pi * self.radius ** 2
+
+def total_area(shapes: Iterable[HasArea]) -&gt; float:
+    return float(sum(s.area() for s in shapes))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m16-e4" data-title="TypedDict and Literal">
+      <div class="exercise-prompt">
+        <p>Define <code>class Order(TypedDict)</code> with required keys <code>id: int</code> and
+          <code>status: Status</code>, plus an optional key <code>note: str</code> (use <code>NotRequired</code>). Define
+          <code>Status</code> with the <code>type</code> statement as <code>Literal["new", "paid", "shipped"]</code>.
+          Then write <code>advance(order: Order) -&gt; Order</code> that returns a <em>new</em> dict with the next status
+          (new → paid → shipped) and raises <code>ValueError</code> for an order that is already shipped. Do not modify
+          the input.</p>
+      </div>
+<textarea class="starter">
+from typing import Literal, NotRequired, TypedDict
+
+class Order(TypedDict):
+    ...
+
+def advance(order):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+from typing import get_args, get_type_hints
+
+def test_keys():
+    assert Order.__required_keys__ == frozenset({"id", "status"}), "id and status are required"
+    assert Order.__optional_keys__ == frozenset({"note"}), "note is optional (NotRequired)"
+
+def test_status_literal():
+    assert Status.__value__ is not None, "define Status with the type statement"
+    assert set(get_args(Status.__value__)) == {"new", "paid", "shipped"}, "Status is a Literal of three values"
+
+def test_advance():
+    o = {"id": 1, "status": "new"}
+    p = advance(o)
+    assert p == {"id": 1, "status": "paid"}, "new -> paid"
+    assert o["status"] == "new", "advance must not modify its input"
+    assert advance(p)["status"] == "shipped", "paid -> shipped"
+    assert advance({"id": 2, "status": "paid", "note": "gift"})["note"] == "gift", "keep other keys"
+
+def test_shipped_raises():
+    try:
+        advance({"id": 3, "status": "shipped"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("advancing a shipped order should raise ValueError")
+
+def test_hints():
+    hints = get_type_hints(advance)
+    assert hints.get("order") is Order and hints.get("return") is Order, "annotate order: Order and -> Order"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Put <code>type Status = Literal["new", "paid", "shipped"]</code>
+        <em>after</em> the class if you like: the alias and the class annotations are both evaluated lazily. Use a dict
+        <code>{"new": "paid", "paid": "shipped"}</code> for the transitions and <code>{**order, "status": nxt}</code> to
+        copy.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from typing import Literal, NotRequired, TypedDict
+
+type Status = Literal["new", "paid", "shipped"]
+
+class Order(TypedDict):
+    id: int
+    status: Status
+    note: NotRequired[str]
+
+_NEXT = {"new": "paid", "paid": "shipped"}
+
+def advance(order: Order) -&gt; Order:
+    nxt = _NEXT.get(order["status"])
+    if nxt is None:
+        raise ValueError(f"order {order['id']} is already shipped")
+    return {**order, "status": nxt}</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m16-e5" data-title="Read annotations safely">
+      <div class="exercise-prompt">
+        <p>Write <code>describe(func)</code> that returns a list of strings, one per parameter, formatted
+          <code>"name: annotation"</code>, followed by <code>"return: annotation"</code> if there is one, using each
+          annotation's <em>source text</em>. It must work even when an annotation names a class that does not exist. Use
+          <code>annotationlib.get_annotations</code> with the right <code>Format</code>. Unannotated parameters are
+          skipped.</p>
+      </div>
+<textarea class="starter">
+from annotationlib import Format, get_annotations
+
+def describe(func):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_basic():
+    def f(a: int, b: list[str]) -> bool:
+        return True
+    assert describe(f) == ["a: int", "b: list[str]", "return: bool"], f"got {describe(f)}"
+
+def test_undefined_names():
+    def g(x: Spaceship, y: dict[str, Planet] | None = None) -> Galaxy:
+        ...
+    assert describe(g) == ["x: Spaceship", "y: dict[str, Planet] | None", "return: Galaxy"], (
+        "use Format.STRING so undefined names do not raise NameError")
+
+def test_skips_unannotated_and_no_return():
+    def h(a, b: float):
+        pass
+    assert describe(h) == ["b: float"], "skip unannotated params; no return line if there is no return annotation"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>get_annotations(func, format=Format.STRING)</code> returns a
+        dict in parameter order with <code>"return"</code> last. Format each item as
+        <code>f"{name}: {text}"</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from annotationlib import Format, get_annotations
+
+def describe(func):
+    annotations = get_annotations(func, format=Format.STRING)
+    return [f"{name}: {text}" for name, text in annotations.items()]</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: type an untyped module to strict</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">From zero hints to <code>mypy --strict</code></span></div>
+      <div class="widget-body">
+        <p>Take an untyped module (your Project 1 ledger, an old script, or the one below) and add types until
+          <code>pixi run mypy --strict src/</code> reports <code>Success</code>, without a single blanket
+          <code># type: ignore</code>.</p>
+        <pre data-label="src/grades/report.py (starting point)"><code class="language-python">import json
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+def average(scores):
+    return sum(scores) / len(scores) if scores else None
+
+def by_student(records):
+    out = {}
+    for r in records:
+        out.setdefault(r["student"], []).append(r["score"])
+    return out
+
+def report(records, fmt=lambda x: f"{x:.1f}"):
+    lines = []
+    for student, scores in sorted(by_student(records).items()):
+        avg = average(scores)
+        lines.append(f"{student}: {fmt(avg)}")
+    return "\n".join(lines)</code></pre>
+        <pre data-label="Terminal"><code class="language-bash">pixi init grades &amp;&amp; cd grades
+pixi add mypy pytest
+pixi run mypy --strict src/      # read every error, fix one function at a time</code></pre>
+        <ul class="checklist" data-id="m16-mini">
+          <li>Run mypy strict on the untouched module and save the error list</li>
+          <li>Model a record with a <code>TypedDict</code> and use it everywhere instead of <code>dict</code></li>
+          <li>Parameters use abstract types (<code>Iterable</code>, <code>Mapping</code>, <code>Callable</code>); returns are concrete</li>
+          <li>Handle the <code>float | None</code> from <code>average</code> by narrowing, and find the real bug mypy reveals in <code>report</code></li>
+          <li>Validate <code>json.load</code>'s <code>Any</code> at the boundary instead of trusting it with <code>cast</code></li>
+          <li>Add <code>[tool.mypy] strict = true</code> to <code>pyproject.toml</code> and a <code>check</code> Pixi task; it passes</li>
+        </ul>
+        <p><strong>Stretch:</strong> add a generic helper <code>group_by[K, V](items: Iterable[V], key: Callable[[V], K]) -&gt; dict[K, list[V]]</code>
+          and use it in <code>by_student</code>; type a decorator from M15 with <code>ParamSpec</code>; run pyright too
+          (<code>pixi add pyright</code>) and compare the messages.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m16-quiz">
+<script type="application/json">
+{"title": "Type hints and static typing", "passScore": 0.7, "questions": [
+  {"type": "output", "prompt": "What does this print?", "code": "def double(n: int) -> int:\n    return n * 2\n\nprint(double(\"ab\"))", "answer": "abab", "explanation": "<p>The interpreter does not enforce annotations. <code>\"ab\" * 2</code> is <code>\"abab\"</code>; only a type checker would complain.</p>"},
+  {"type": "single", "prompt": "Which annotation means \"a tuple of any number of ints\"?", "options": ["<code>tuple[int]</code>", "<code>tuple[int, ...]</code>", "<code>list[int]</code>", "<code>tuple[*int]</code>"], "answer": 1, "explanation": "<p><code>tuple[int]</code> is a tuple of exactly one int. The ellipsis form means variable length.</p>"},
+  {"type": "single", "prompt": "A function only loops over its argument once. What is the best parameter annotation?", "options": ["<code>list[float]</code>", "<code>Iterable[float]</code>", "<code>Any</code>", "<code>Sequence[float]</code>"], "answer": 1, "explanation": "<p>Accept the most general type you can use. <code>Iterable</code> admits lists, tuples, sets, and generators.</p>"},
+  {"type": "single", "prompt": "Why does mypy reject passing a <code>list[int]</code> where <code>list[float]</code> is expected?", "options": ["ints are not numbers", "Mutable lists are invariant: the callee could append a float to your list of ints", "mypy has a bug", "Because of PEP 649"], "answer": 1, "explanation": "<p>Invariance protects the caller. Read-only <code>Sequence[float]</code> is covariant and would accept it.</p>"},
+  {"type": "multi", "prompt": "Which are valid PEP 695 generic declarations?", "options": ["<code>def first[T](xs: list[T]) -> T: ...</code>", "<code>class Box[T]: ...</code>", "<code>type Pair[T] = tuple[T, T]</code>", "<code>def first&lt;T&gt;(xs): ...</code>"], "answer": [0, 1, 2], "explanation": "<p>Type parameters go in square brackets after the name, for functions, classes, and <code>type</code> aliases.</p>"},
+  {"type": "single", "prompt": "A class has a <code>close()</code> method but does not inherit from anything. Does it match <code>class SupportsClose(Protocol): def close(self) -> None: ...</code>?", "options": ["No, it must subclass the Protocol", "Yes, Protocols match structurally", "Only at run time", "Only if decorated with <code>@runtime_checkable</code>"], "answer": 1, "explanation": "<p>Structural typing: having the right members is enough for the checker. <code>@runtime_checkable</code> only adds <code>isinstance</code> support.</p>"},
+  {"type": "single", "prompt": "What is a <code>TypedDict</code> value at run time?", "options": ["A special frozen mapping", "A plain <code>dict</code>", "A dataclass instance", "A <code>NamedTuple</code>"], "answer": 1, "explanation": "<p>TypedDict only informs the checker. At run time you have an ordinary dict.</p>"},
+  {"type": "single", "prompt": "Which construct lets a decorator keep the decorated function's exact parameter types?", "options": ["<code>TypeVar</code> alone", "<code>ParamSpec</code> (<code>**P</code>)", "<code>Final</code>", "<code>cast</code>"], "answer": 1, "explanation": "<p><code>def deco[**P, R](f: Callable[P, R]) -> Callable[P, R]</code> carries the parameter specification through.</p>"},
+  {"type": "single", "prompt": "In Python 3.14, what happens when a <code>def</code> line's annotation names a class that is defined later in the module?", "options": ["NameError at definition time", "Nothing: annotations are evaluated lazily, only when requested", "A SyntaxWarning", "The annotation is silently dropped"], "answer": 1, "explanation": "<p>PEP 649/749 defer evaluation to an <code>__annotate__</code> function, so forward references need no quotes.</p>"},
+  {"type": "single", "prompt": "Which <code>annotationlib.Format</code> never raises, returning the annotations' source text?", "options": ["<code>Format.VALUE</code>", "<code>Format.FORWARDREF</code>", "<code>Format.STRING</code>", "<code>Format.SOURCE</code>"], "answer": 2, "explanation": "<p><code>STRING</code> returns text such as <code>'list[Node]'</code>. <code>FORWARDREF</code> substitutes <code>ForwardRef</code> objects; <code>VALUE</code> raises <code>NameError</code> for undefined names.</p>"},
+  {"type": "text", "prompt": "Which <code>typing</code> constant is <code>False</code> at run time but treated as true by type checkers, for annotation-only imports?", "answer": ["TYPE_CHECKING", "typing.TYPE_CHECKING"], "explanation": "<p><code>if TYPE_CHECKING:</code> imports exist for the checker only, avoiding import cycles and import cost.</p>"},
+  {"type": "single", "prompt": "mypy reports <code>Incompatible return value type (got \"None\", expected \"int\")  [return-value]</code>. What is usually the right fix?", "options": ["Add <code># type: ignore</code>", "Change the return annotation to <code>int | None</code> if None is a real outcome, or stop returning None", "Use <code>cast(int, None)</code>", "Disable strict mode"], "answer": 1, "explanation": "<p>The signature is lying. Make the type honest, then narrow at the call sites.</p>"},
+  {"type": "text", "prompt": "What one-line <code>pyproject.toml</code> setting, under <code>[tool.mypy]</code>, turns on all of mypy's optional strictness checks?", "answer": ["strict = true", "strict=true"], "explanation": "<p><code>strict = true</code> enables untyped-def checks, disallows implicit Any generics, warns on returning Any, and more.</p>"},
+  {"type": "single", "prompt": "Python 3.15 preview: what does <code>class Point(TypedDict, closed=True)</code> add?", "options": ["Makes the dict immutable", "Forbids keys other than those declared", "Makes all keys optional", "Allows extra keys of any type"], "answer": 1, "explanation": "<p>PEP 728 closed TypedDicts reject undeclared keys; <code>extra_items=T</code> instead allows extra keys whose values are of type <code>T</code>.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Hints are optional metadata for checkers, editors, and readers; the interpreter does not enforce them.</li>
+      <li>Use built-in generics (<code>list[int]</code>, <code>dict[str, X]</code>) and <code>X | None</code>; narrow before use.</li>
+      <li>Accept abstract (<code>Iterable</code>, <code>Sequence</code>, <code>Mapping</code>, <code>Callable</code>), return concrete.</li>
+      <li>Generics: <code>def f[T]</code>, <code>class C[T]</code>, <code>type Alias = ...</code>; bounds and constraints restrict <code>T</code>.</li>
+      <li>Protocols give static duck typing. TypedDict, Literal, Final, overload, Self, ParamSpec, NewType, cast, and TYPE_CHECKING cover the common patterns.</li>
+      <li>Python 3.14 evaluates annotations lazily; read them with <code>annotationlib.get_annotations</code> and the right <code>Format</code>.</li>
+      <li>Run <code>mypy</code> in strict mode through Pixi; read errors as file:line, got/expected, [code].</li>
+    </ul>
+    <div class="flashcards" data-title="Typing">
+<script type="application/json">
+[{"front": "Are type hints enforced at run time?", "back": "No. They are metadata for type checkers, editors, and libraries that choose to read them."},
+ {"front": "Modern spelling of <code>Optional[int]</code>", "back": "<code>int | None</code>"},
+ {"front": "Accept abstract, return concrete", "back": "Parameters: <code>Iterable</code>, <code>Sequence</code>, <code>Mapping</code>. Returns: <code>list</code>, <code>dict</code>."},
+ {"front": "PEP 695 generic function", "back": "<code>def first[T](xs: list[T]) -> T: ...</code>"},
+ {"front": "The <code>type</code> statement", "back": "<code>type Pair[T] = tuple[T, T]</code>: a lazily evaluated (possibly generic, possibly recursive) alias."},
+ {"front": "Protocol", "back": "A structural interface: any class with the listed members matches, no inheritance needed."},
+ {"front": "TypedDict at run time", "back": "A plain dict; the checker tracks key names and value types."},
+ {"front": "<code>@overload</code>", "back": "Several typed signatures for one implementation, when the return type depends on the argument types."},
+ {"front": "<code>ParamSpec</code>", "back": "Captures a callable's parameters so decorators preserve signatures: <code>def deco[**P, R](f: Callable[P, R]) -> Callable[P, R]</code>."},
+ {"front": "PEP 649/749 (3.14)", "back": "Annotations are evaluated lazily via <code>__annotate__</code>; forward references need no quotes."},
+ {"front": "<code>annotationlib</code> formats", "back": "<code>VALUE</code> (objects, may raise), <code>FORWARDREF</code> (ForwardRef for unknown names), <code>STRING</code> (source text)."},
+ {"front": "Enable strict mypy", "back": "<code>[tool.mypy] strict = true</code>, then <code>pixi run mypy src/</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/typing.html"><code>typing</code></a> and
+        <a href="https://docs.python.org/3/library/annotationlib.html"><code>annotationlib</code></a> documentation</li>
+      <li><a href="https://typing.python.org/en/latest/">The Python typing specification and guides</a></li>
+      <li><a href="https://mypy.readthedocs.io/en/stable/">mypy documentation</a>, especially "Common issues" and the error code list</li>
+      <li><a href="https://peps.python.org/pep-0695/">PEP 695</a>, <a href="https://peps.python.org/pep-0649/">PEP 649</a>,
+        <a href="https://peps.python.org/pep-0749/">PEP 749</a>, <a href="https://peps.python.org/pep-0728/">PEP 728</a>,
+        <a href="https://peps.python.org/pep-0747/">PEP 747</a></li>
+      <li>Next: <a href="m17-testing.html">M17 Testing with pytest</a>. Types and tests catch different bugs; professionals use both.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

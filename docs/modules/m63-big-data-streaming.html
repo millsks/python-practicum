@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M63 · Streaming &amp; Big Data · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m63">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 9 · Data Engineering · Module 63</p>
+    <h1>Streaming &amp; Big Data</h1>
+    <p class="lede">Some data arrives too fast to wait for tonight's batch, and some is too big for one machine. This module
+      covers both: how event streams work (Kafka's topics, partitions, offsets, and consumer groups), how to aggregate
+      unbounded data with windows and watermarks, how distributed engines split work with map, shuffle, and reduce, and
+      just as important, how to tell when you <em>don't</em> need any of it.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m62-pipelines.html">M62 · Pipelines, Orchestration &amp; Data Quality</a>, <a href="m14-iterators.html">M14 · Iterators &amp; Generators</a></span></div>
+    <ul class="objectives">
+      <li>Decide when data is genuinely "big", and when one machine with DuckDB or Polars is enough</li>
+      <li>Explain events, producers, consumers, topics, partitions, offsets, and consumer groups</li>
+      <li>Implement tumbling, sliding, and session windows with generators, and handle late data with watermarks</li>
+      <li>Explain backpressure and the trade-offs of exactly-once processing</li>
+      <li>Implement MapReduce word count and explain shuffles, lazy evaluation, and skew in Dask and Spark</li>
+      <li>Describe object storage (S3) and how it shapes big-data layouts</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why-big">
+    <h2>Why "big" data, and when it isn't</h2>
+    <p>Data is "big" when a single machine can't store it, can't process it fast enough, or can't keep up with its arrival
+      rate. Then you <strong>scale out</strong>: split the data into partitions and process them on many machines in
+      parallel. Distributed systems pay real costs for that: network transfer, serialization, coordination, partial
+      failures, and much harder debugging.</p>
+    <p>Meanwhile, single machines have grown enormous. A laptop has 8–16 cores, 16–64 GB of RAM, and an NVMe SSD reading
+      several GB/s; a cloud VM can have hundreds of cores and terabytes of RAM. Columnar, vectorized, multi-threaded engines
+      (DuckDB, Polars) stream data from disk and spill to disk when memory runs out, so they comfortably process hundreds of
+      gigabytes on one node.</p>
+    <div class="runnable" data-title="Back-of-the-envelope sizing">
+<textarea>
+def human(n):
+    for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        if n < 1024:
+            return f"{n:,.1f} {unit}"
+        n /= 1024
+
+events_per_day = 50_000_000          # a busy app's clickstream
+bytes_per_event_raw = 400            # JSON
+compression = 8                      # Parquet + zstd on JSON-like events
+days = 365
+
+raw = events_per_day * bytes_per_event_raw * days
+print("raw JSON per year:      ", human(raw))
+print("as Parquet per year:    ", human(raw / compression))
+print("one month as Parquet:   ", human(raw / compression / 12))
+scan_gbps = 2                        # one NVMe SSD, roughly
+print(f"scan a month at {scan_gbps} GB/s: {raw / compression / 12 / (scan_gbps * 1024**3):.1f} s")
+</textarea>
+    </div>
+    <p>A year of a busy clickstream, compressed in Parquet, is around 800 GB, and a typical query touches a month of it, a few
+      columns at a time. That is single-node territory. Reach for a cluster when the data is in the tens of terabytes and
+      queries touch most of it, when many teams share one platform, or when the arrival rate exceeds what one machine can
+      ingest.</p>
+    <div class="runnable" data-local="Polars is not available in the browser. Locally: pixi add polars" data-title="Out-of-core on one machine with Polars' lazy streaming engine">
+<textarea>
+import polars as pl
+
+# scan_* builds a lazy query plan; nothing is read yet
+q = (
+    pl.scan_parquet("events/year=2026/month=*/*.parquet", hive_partitioning=True)
+      .filter(pl.col("event") == "purchase")
+      .group_by("country")
+      .agg(pl.len().alias("purchases"), pl.col("amount").sum())
+      .sort("purchases", descending=True)
+)
+print(q.explain())                    # predicate and projection pushdown into the scan
+print(q.collect(engine="streaming"))  # processes in chunks, so the data can exceed RAM
+</textarea>
+    </div>
+    <aside class="callout pro"><p>"Start small, scale when measured" saves enormous cost. Many companies run their whole
+      analytics stack on DuckDB or Polars plus object storage. When you do need scale, the ideas below (partitions, shuffles,
+      skew) are the same in every engine.</p></aside>
+    <p><strong>Remember:</strong> estimate compressed size and the fraction a query touches before choosing a cluster.</p>
+  </section>
+
+  <section class="lesson-section" id="streams">
+    <h2>Streaming concepts and Kafka</h2>
+    <p>An <strong>event</strong> is an immutable fact about something that happened, with a timestamp: "user 42 viewed page
+      /pricing at 10:00:03". A <strong>stream</strong> is an unbounded, ordered sequence of events. <strong>Producers</strong>
+      append events; <strong>consumers</strong> read them. A <strong>broker</strong> such as Apache Kafka (or Redpanda,
+      Amazon Kinesis, Google Pub/Sub, Apache Pulsar) sits between them, durably storing events so producers and consumers are
+      decoupled in time and speed.</p>
+    <h3>Topics, partitions, and offsets</h3>
+    <p>Kafka organizes events into <strong>topics</strong> (for example <code>clicks</code>). Each topic is split into
+      <strong>partitions</strong>, and each partition is an append-only <strong>log</strong>: events get consecutive
+      <strong>offsets</strong> 0, 1, 2… Ordering is guaranteed <em>within</em> a partition, not across partitions. A producer
+      chooses the partition by hashing the event's <strong>key</strong>, so all events with the same key (the same user) land
+      in the same partition, in order. Events are retained for a configured time (say seven days) whether or not anyone has
+      read them, so consumers can replay.</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 660 230" role="img" aria-label="A Kafka topic with three partitions and a consumer group">
+        <g font-size="12" fill="var(--fg)">
+          <text x="10" y="20">Producers</text>
+          <rect x="10" y="35" width="90" height="30" rx="6" fill="var(--viz-1)" opacity="0.35" stroke="var(--fg-muted)"/><text x="22" y="55">web app</text>
+          <rect x="10" y="85" width="90" height="30" rx="6" fill="var(--viz-1)" opacity="0.35" stroke="var(--fg-muted)"/><text x="18" y="105">mobile app</text>
+          <text x="140" y="20">Topic "clicks" (key = user_id)</text>
+          <text x="140" y="52">P0</text><text x="140" y="102">P1</text><text x="140" y="152">P2</text>
+        </g>
+        <g font-size="11" fill="var(--fg)">
+          <rect x="165" y="35" width="250" height="28" fill="none" stroke="var(--fg-muted)"/>
+          <rect x="165" y="85" width="250" height="28" fill="none" stroke="var(--fg-muted)"/>
+          <rect x="165" y="135" width="250" height="28" fill="none" stroke="var(--fg-muted)"/>
+          <text x="172" y="54">0 | 1 | 2 | 3 | 4 | 5 →</text>
+          <text x="172" y="104">0 | 1 | 2 →</text>
+          <text x="172" y="154">0 | 1 | 2 | 3 →</text>
+        </g>
+        <g stroke="var(--fg-muted)" fill="none">
+          <path d="M100 50 L165 49"/><path d="M100 100 L165 99"/><path d="M100 100 L165 149"/>
+          <path d="M415 49 L500 70"/><path d="M415 99 L500 70"/><path d="M415 149 L500 160"/>
+        </g>
+        <g font-size="12" fill="var(--fg)">
+          <text x="490" y="20">Consumer group "dashboard"</text>
+          <rect x="500" y="55" width="140" height="30" rx="6" fill="var(--viz-2)" opacity="0.35" stroke="var(--fg-muted)"/><text x="510" y="75">consumer A: P0, P1</text>
+          <rect x="500" y="145" width="140" height="30" rx="6" fill="var(--viz-2)" opacity="0.35" stroke="var(--fg-muted)"/><text x="510" y="165">consumer B: P2</text>
+          <text x="140" y="200" fill="var(--fg-muted)" font-size="11">Each partition is an ordered log. Each partition is read by exactly one consumer in a group;</text>
+          <text x="140" y="216" fill="var(--fg-muted)" font-size="11">the group commits the offset it has processed per partition.</text>
+        </g>
+      </svg>
+      <figcaption>Producers hash keys to partitions; a consumer group splits the partitions among its members.</figcaption>
+    </figure>
+    <h3>Consumer groups and committed offsets</h3>
+    <p>A <strong>consumer group</strong> is a set of consumers sharing the work of reading a topic. Kafka assigns each
+      partition to exactly one consumer in the group, so the number of partitions caps the group's parallelism (four
+      partitions, six consumers: two sit idle). Each group tracks its own <strong>committed offset</strong> per partition, the
+      position it has processed up to, so different groups (a dashboard, a fraud detector, an archiver) read the same topic
+      independently. When a consumer joins or dies, the group <strong>rebalances</strong> and partitions move.</p>
+    <div class="runnable" data-title="A toy Kafka: partitioned logs, keys, offsets, and a consumer group">
+<textarea>
+import zlib
+
+class Topic:
+    def __init__(self, name, partitions):
+        self.name, self.logs = name, [[] for _ in range(partitions)]
+    def produce(self, key, value):
+        p = zlib.crc32(key.encode()) % len(self.logs)      # stable hash of the key -> partition
+        self.logs[p].append((key, value))
+        return p, len(self.logs[p]) - 1                    # (partition, offset)
+
+class ConsumerGroup:
+    def __init__(self, topic, members):
+        self.topic, self.committed = topic, {p: 0 for p in range(len(topic.logs))}
+        self.assignment = {m: [p for p in range(len(topic.logs)) if p % len(members) == i] for i, m in enumerate(members)}
+    def poll(self, member, max_records=10):
+        out = []
+        for p in self.assignment[member]:
+            log, start = self.topic.logs[p], self.committed[p]
+            out += [(p, off, *log[off]) for off in range(start, min(len(log), start + max_records))]
+        return out
+    def commit(self, records):
+        for p, off, *_ in records:
+            self.committed[p] = max(self.committed[p], off + 1)   # next offset to read
+
+clicks = Topic("clicks", partitions=3)
+for i, user in enumerate(["u1", "u2", "u3", "u1", "u4", "u2", "u1"]):
+    print("produced", user, "->", "partition %d offset %d" % clicks.produce(user, f"click{i}"))
+
+group = ConsumerGroup(clicks, ["A", "B"])
+print("assignment:", group.assignment)
+batch = group.poll("A")
+print("A polled:", batch)
+group.commit(batch)
+print("committed offsets:", group.committed)
+print("A polls again:", group.poll("A"), "(nothing new: offsets were committed)")
+</textarea>
+    </div>
+    <p>Watch records move through a streaming pipeline: each stage handles a record as soon as the previous stage passes it
+      on, so all stages work at once.</p>
+    <div class="viz" data-viz="pipeline" data-config='{"stages": ["Producer", "Topic", "Consumer", "Sink"], "mode": "streaming", "write": "upsert"}'></div>
+    <div class="runnable" data-local="Needs a running Kafka broker (for example docker run -p 9092:9092 apache/kafka) and the client: pixi add python-confluent-kafka" data-title="Real Kafka with confluent-kafka">
+<textarea>
+import json
+from confluent_kafka import Consumer, Producer
+
+producer = Producer({"bootstrap.servers": "localhost:9092", "enable.idempotence": True})
+for i in range(5):
+    event = {"user": f"u{i % 2}", "page": "/pricing", "ts": 1_772_000_000 + i}
+    producer.produce("clicks", key=event["user"], value=json.dumps(event))
+producer.flush()
+
+consumer = Consumer({
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "dashboard",
+    "auto.offset.reset": "earliest",
+    "enable.auto.commit": False,        # commit only after processing: at-least-once
+})
+consumer.subscribe(["clicks"])
+for _ in range(5):
+    msg = consumer.poll(5.0)
+    if msg is None or msg.error():
+        continue
+    print(msg.partition(), msg.offset(), msg.key(), json.loads(msg.value()))
+    consumer.commit(message=msg)
+consumer.close()
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> topics split into partitions; partitions are ordered logs with offsets; keys pick
+      partitions; a consumer group shares partitions and commits offsets.</p>
+  </section>
+
+  <section class="lesson-section" id="windows">
+    <h2>Windowing with generators</h2>
+    <p>You can't "sum all events" in an unbounded stream: it never ends. Instead, aggregate over
+      <strong>windows</strong>, finite slices of time:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Tumbling</h4><p>Fixed-size, non-overlapping, back-to-back: [0, 60), [60, 120)… Each event belongs
+        to exactly one window. "Clicks per minute."</p></div>
+      <div class="card"><h4>Sliding (hopping)</h4><p>Fixed size, advancing by a smaller step: size 60 s every 10 s. Windows
+        overlap and an event belongs to several. "Clicks in the last minute, updated every 10 s."</p></div>
+      <div class="card"><h4>Session</h4><p>Per key, a window that stays open while events keep arriving within a gap
+        (30 minutes of inactivity closes it). Size varies. "A user's visit."</p></div>
+    </div>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 640 170" role="img" aria-label="Tumbling, sliding, and session windows">
+        <g font-size="11" fill="var(--fg)">
+          <text x="10" y="30">tumbling</text><text x="10" y="80">sliding</text><text x="10" y="135">session</text>
+        </g>
+        <g fill="var(--viz-1)" opacity="0.35" stroke="var(--fg-muted)">
+          <rect x="90" y="15" width="130" height="24"/><rect x="220" y="15" width="130" height="24"/><rect x="350" y="15" width="130" height="24"/><rect x="480" y="15" width="130" height="24"/>
+        </g>
+        <g fill="var(--viz-2)" opacity="0.3" stroke="var(--fg-muted)">
+          <rect x="90" y="55" width="130" height="14"/><rect x="155" y="70" width="130" height="14"/><rect x="220" y="85" width="130" height="14"/><rect x="285" y="55" width="130" height="14"/>
+        </g>
+        <g fill="var(--viz-3)" opacity="0.35" stroke="var(--fg-muted)">
+          <rect x="100" y="122" width="110" height="24"/><rect x="330" y="122" width="60" height="24"/><rect x="470" y="122" width="130" height="24"/>
+        </g>
+        <g fill="var(--fg)">
+          <circle cx="110" cy="134" r="4"/><circle cx="150" cy="134" r="4"/><circle cx="200" cy="134" r="4"/>
+          <circle cx="340" cy="134" r="4"/><circle cx="380" cy="134" r="4"/><circle cx="480" cy="134" r="4"/><circle cx="540" cy="134" r="4"/><circle cx="590" cy="134" r="4"/>
+        </g>
+        <text x="90" y="164" font-size="11" fill="var(--fg-muted)">time →   (session windows close after a gap with no events)</text>
+      </svg>
+      <figcaption>Three ways to cut an unbounded stream into finite windows.</figcaption>
+    </figure>
+    <p>Generators are a natural fit: a stream is an iterator that may never end, and a windowing operator is a generator that
+      consumes events and <code>yield</code>s each window result as soon as the window closes, holding only the current
+      window's state in memory.</p>
+    <div class="runnable" data-title="Tumbling windows over an endless event generator">
+<textarea>
+import itertools, random
+
+def click_stream(seed=7):
+    """An endless, time-ordered stream of (timestamp_seconds, page) events."""
+    rng, t = random.Random(seed), 0.0
+    while True:
+        t += rng.expovariate(1 / 4)                    # about one event every 4 seconds
+        yield round(t, 1), rng.choice(["/", "/pricing", "/docs"])
+
+def tumbling(events, size):
+    """Yield (window_start, count, pages) whenever a window closes. Events must be time-ordered."""
+    current, count, pages = None, 0, {}
+    for ts, page in events:
+        start = int(ts // size) * size
+        if current is not None and start != current:
+            yield current, count, pages                # the window closed: emit it
+            count, pages = 0, {}
+        current = start
+        count += 1
+        pages[page] = pages.get(page, 0) + 1
+
+for start, count, pages in itertools.islice(tumbling(click_stream(), size=60), 5):
+    print(f"[{start:>3}, {start + 60:>3})  {count:>2} clicks  {pages}")
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: which tumbling windows are emitted?" data-predict>
+<textarea>
+def tumbling_starts(times, size):
+    current = None
+    for t in times:
+        start = t // size * size
+        if current is not None and start != current:
+            yield current
+        current = start
+    if current is not None:
+        yield current
+
+print(list(tumbling_starts([3, 9, 10, 31, 39], 10)))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Sliding and session windows">
+<textarea>
+from collections import deque
+
+def sliding_counts(events, size, step):
+    """Count events in windows [t, t+size) starting every `step` seconds. Events time-ordered."""
+    buf, next_start = deque(), None
+    for ts in events:
+        if next_start is None:
+            next_start = max(0, (ts // step) * step - size + step)   # first window containing ts
+        while ts >= next_start + size:                         # emit every window that has closed
+            while buf and buf[0] < next_start:
+                buf.popleft()
+            yield next_start, sum(1 for t in buf if t < next_start + size)
+            next_start += step
+        buf.append(ts)
+
+times = [1, 2, 3, 11, 12, 25, 26, 27, 28, 41]
+print("sliding (size 20, step 10):", list(sliding_counts(times, 20, 10)))   # [30, 50) never closes: the stream ended
+
+def sessions(events, gap):
+    """events: time-ordered (ts, user). Yield (user, start, end, n) when a user's session closes."""
+    open_ = {}
+    for ts, user in events:
+        for u, (s, e, n) in list(open_.items()):          # close sessions idle for longer than gap
+            if ts - e > gap:
+                yield u, s, e, n
+                del open_[u]
+        s, e, n = open_.get(user, (ts, ts, 0))
+        open_[user] = (s, ts, n + 1)
+    yield from ((u, s, e, n) for u, (s, e, n) in open_.items())   # end of stream flushes the rest
+
+clicks = [(0, "ana"), (5, "bo"), (12, "ana"), (50, "ana"), (55, "bo"), (58, "bo"), (200, "ana")]
+for s in sessions(clicks, gap=30):
+    print("session", s)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> tumbling = fixed and disjoint; sliding = fixed and overlapping; session = per key, closed
+      by inactivity. Emit a window when it closes, and keep only open windows in memory.</p>
+  </section>
+
+  <section class="lesson-section" id="late-data">
+    <h2>Event time, late data, and watermarks</h2>
+    <p>Every event has two times: <strong>event time</strong> (when it happened, stamped by the device) and
+      <strong>processing time</strong> (when your system sees it). They differ, sometimes by hours: a phone in airplane mode
+      uploads its clicks on landing; a network partition delays a whole data center. Windowing by processing time is easy
+      but wrong for most analytics ("sales between 10:00 and 10:01" means event time).</p>
+    <p>Windowing by event time raises a question: when can you close the 10:00 window, if a 10:00 event might still arrive?
+      A <strong>watermark</strong> is the system's estimate that "all events with event time ≤ W have probably arrived". A
+      common heuristic is <em>max event time seen minus an allowed lateness</em>. When the watermark passes a window's end, the
+      window is emitted. Events that arrive for an already-closed window are <strong>late</strong>: drop them, send them to a
+      side output for correction, or update the emitted result (which downstream must handle).</p>
+    <div class="runnable" data-title="Out-of-order events with a watermark">
+<textarea>
+def windows_with_watermark(events, size, lateness):
+    """events arrive in processing order as (event_time, value). Yields ("window", start, total) or ("late", ...)."""
+    open_windows, watermark = {}, float("-inf")
+    for event_time, value in events:
+        start = event_time // size * size
+        if start + size <= watermark:
+            yield ("late", event_time, value)                  # its window already closed
+            continue
+        open_windows[start] = open_windows.get(start, 0) + value
+        watermark = max(watermark, event_time - lateness)
+        for s in sorted(w for w in open_windows if w + size <= watermark):
+            yield ("window", s, open_windows.pop(s))
+    for s in sorted(open_windows):
+        yield ("window", s, open_windows[s])                   # end of stream: flush
+
+arrivals = [(1, 10), (3, 5), (12, 7), (8, 1), (14, 2), (25, 4), (9, 100), (31, 3), (22, 6), (45, 1)]
+for out in windows_with_watermark(arrivals, size=10, lateness=5):
+    print(out)
+</textarea>
+    </div>
+    <details class="reveal"><summary>Trace it</summary><p>The event at time 8 arrives after 12 but is still on time: the
+      watermark is only 12 − 5 = 7, so window [0, 10) is open. Event 14 moves the watermark to 9; event 25 moves it to 20,
+      which closes [0, 10) (total 16) and [10, 20) (total 9). The event at time 9 (value 100) then arrives for a closed
+      window, so it is late. Event 22 is on time: [20, 30) stays open until event 45 pushes the watermark to 40.</p></details>
+    <aside class="callout tip"><p>Allowed lateness is a dial between <em>completeness</em> and <em>latency</em>: a larger
+      value waits longer before emitting, so fewer events are late but results arrive later. Engines like Apache Flink, Spark
+      Structured Streaming (<code>withWatermark</code>), and Apache Beam make this explicit.</p></aside>
+    <p><strong>Remember:</strong> window by event time; the watermark decides when a window closes; late events need a policy.</p>
+  </section>
+
+  <section class="lesson-section" id="backpressure">
+    <h2>Backpressure and exactly-once</h2>
+    <p><strong>Backpressure</strong> is how a slow consumer tells a fast producer to slow down. Without it, the gap between
+      them accumulates in memory until the process crashes. The simplest mechanism is a <em>bounded buffer</em>: when it's
+      full, the producer blocks (or drops, or samples). Kafka consumers get backpressure for free because they <em>pull</em>:
+      a slow consumer simply falls behind, and its <strong>consumer lag</strong> (latest offset minus committed offset) grows,
+      which is the key metric to alert on.</p>
+    <div class="runnable" data-title="A bounded asyncio.Queue applies backpressure">
+<textarea>
+import asyncio, time
+
+async def producer(queue, n):
+    start = time.perf_counter()
+    for i in range(n):
+        await queue.put(i)                      # blocks while the queue is full
+        if i % 5 == 4:
+            print(f"produced {i + 1:>2} at {time.perf_counter() - start:.2f}s, queue size {queue.qsize()}")
+    await queue.put(None)
+
+async def consumer(queue):
+    while (item := await queue.get()) is not None:
+        await asyncio.sleep(0.02)               # slow sink, e.g. a database write
+
+async def main():
+    queue = asyncio.Queue(maxsize=5)           # try maxsize=0 (unbounded): the producer races ahead
+    await asyncio.gather(producer(queue, 20), consumer(queue))
+
+await main()          # in a local script: asyncio.run(main())
+</textarea>
+    </div>
+    <h3>Exactly-once, honestly</h3>
+    <p>"Exactly-once" in streaming means the <em>effects</em> of each event appear once, despite retries and crashes. It is
+      achieved with one of:</p>
+    <ul>
+      <li><strong>Idempotent sinks</strong>: at-least-once delivery plus upserts keyed by event id (the M62 approach; simplest
+        and most common).</li>
+      <li><strong>Transactions</strong>: Kafka's idempotent producer plus transactions let a consume-transform-produce loop
+        commit its output records and input offsets atomically (<code>isolation.level=read_committed</code> on readers).</li>
+      <li><strong>Checkpointed state</strong>: Flink and Spark snapshot operator state and source offsets together, and on
+        failure rewind both to the last checkpoint.</li>
+    </ul>
+    <p>Each guarantee covers only the systems inside the transaction or checkpoint. Sending an email or calling an external
+      API from a stream processor is at-least-once unless that API is idempotent (an idempotency key).</p>
+    <p><strong>Remember:</strong> bounded buffers and pull-based consumers give backpressure; watch consumer lag; exactly-once
+      is end-to-end engineering, usually via idempotent writes.</p>
+  </section>
+
+  <section class="lesson-section" id="mapreduce">
+    <h2>Distributed processing: MapReduce</h2>
+    <p><strong>MapReduce</strong> (Google, 2004; Hadoop) is the model under every distributed engine. A job has three phases:</p>
+    <ol>
+      <li><strong>Map</strong>: each worker reads one input split and emits <code>(key, value)</code> pairs, independently and
+        in parallel.</li>
+      <li><strong>Shuffle</strong>: pairs are routed by key (hash of the key mod the number of reducers) so all values for a
+        key meet at the same reducer. This is the expensive phase: data crosses the network and is sorted.</li>
+      <li><strong>Reduce</strong>: each reducer combines the values for each of its keys.</li>
+    </ol>
+    <pre class="mermaid">
+flowchart LR
+  S1[split 1] --> M1[map]
+  S2[split 2] --> M2[map]
+  S3[split 3] --> M3[map]
+  M1 --> SH{{shuffle by hash of key}}
+  M2 --> SH
+  M3 --> SH
+  SH --> R1[reduce: keys a-m]
+  SH --> R2[reduce: keys n-z]
+  R1 --> O[(output)]
+  R2 --> O
+    </pre>
+    <div class="runnable" data-title="Word count: map, combine, shuffle, reduce in pure Python">
+<textarea>
+import re, zlib
+from collections import Counter, defaultdict
+
+splits = [
+    "the quick brown fox jumps over the lazy dog",
+    "the dog barks and the fox runs",
+    "a quick brown dog and a lazy fox",
+]
+N_REDUCERS = 2
+
+def map_phase(text):
+    return [(word, 1) for word in re.findall(r"[a-z']+", text.lower())]
+
+def combine(pairs):                                   # local pre-aggregation: shrinks the shuffle
+    return list(Counter(k for k, _ in pairs).items())
+
+def shuffle(all_pairs, n):
+    buckets = [defaultdict(list) for _ in range(n)]
+    for key, value in all_pairs:
+        buckets[zlib.crc32(key.encode()) % n][key].append(value)
+    return buckets
+
+def reduce_phase(bucket):
+    return {key: sum(values) for key, values in bucket.items()}
+
+mapped = [map_phase(s) for s in splits]               # in a cluster: one task per split, in parallel
+combined = [combine(m) for m in mapped]
+print("pairs shuffled without combiner:", sum(map(len, mapped)), " with combiner:", sum(map(len, combined)))
+buckets = shuffle([p for c in combined for p in c], N_REDUCERS)
+results = {}
+for i, b in enumerate(buckets):                       # one reduce task per bucket, in parallel
+    part = reduce_phase(b)
+    print(f"reducer {i} got {len(part)} keys")
+    results.update(part)
+print(sorted(results.items(), key=lambda kv: (-kv[1], kv[0]))[:5])
+</textarea>
+    </div>
+    <div class="runnable" data-local="multiprocessing needs real OS processes, which the browser runtime doesn't have. Save as wordcount.py and run with pixi run python wordcount.py" data-title="The same job on all your cores">
+<textarea>
+import re
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from functools import reduce
+from pathlib import Path
+
+def count_file(path: Path) -> Counter:          # map + combine for one split
+    return Counter(re.findall(r"[a-z']+", path.read_text(encoding="utf-8").lower()))
+
+def merge(a: Counter, b: Counter) -> Counter:   # reduce
+    a.update(b)
+    return a
+
+if __name__ == "__main__":                       # required for process pools on macOS/Windows
+    files = sorted(Path("books").glob("*.txt"))
+    with ProcessPoolExecutor() as pool:
+        partials = pool.map(count_file, files, chunksize=4)
+        total = reduce(merge, partials, Counter())
+    print(total.most_common(10))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> map is embarrassingly parallel; the shuffle moves data by key and dominates cost; combiners
+      shrink it.</p>
+  </section>
+
+  <section class="lesson-section" id="dask-spark">
+    <h2>Dask and Spark</h2>
+    <p>Modern engines generalize MapReduce into a <strong>DAG of operations</strong> and add <strong>lazy
+      evaluation</strong>: transformations only build a plan; nothing runs until an <em>action</em> (<code>compute()</code>,
+      <code>collect()</code>, <code>count()</code>, a write) asks for a result. Laziness lets the optimizer fuse steps,
+      push filters down to the file scan, and prune unneeded columns, just like DuckDB and Polars lazy mode.</p>
+    <h3>Dask</h3>
+    <p><strong>Dask</strong> scales the Python APIs you know. A Dask DataFrame is many pandas DataFrames (partitions); Dask
+      Array is many NumPy chunks; <code>dask.delayed</code> turns arbitrary functions into a lazy task graph. It runs on a
+      laptop's cores or a cluster with the same code.</p>
+    <div class="runnable" data-local="Dask is not available in the browser. Locally: pixi add dask pyarrow" data-title="Dask DataFrames and delayed">
+<textarea>
+import dask
+import dask.dataframe as dd
+
+df = dd.read_parquet("events/year=2026/")               # lazy: one partition per file/row group
+print(df.npartitions, "partitions")
+revenue = (df[df.event == "purchase"]
+           .groupby("country")["amount"].sum()
+           .nlargest(5))
+print(revenue)                    # still lazy: shows the structure, not values
+print(revenue.compute())          # runs the task graph in parallel
+
+@dask.delayed
+def load(day):
+    return list(range(day))       # pretend: read one day's file
+
+@dask.delayed
+def total(parts):
+    return sum(map(len, parts))
+
+graph = total([load(d) for d in range(1, 31)])
+print(graph.compute())            # 30 loads run in parallel, then one total
+</textarea>
+    </div>
+    <h3>Apache Spark and PySpark</h3>
+    <p><strong>Spark</strong> is the most widely used distributed engine. A <em>driver</em> program builds a plan; a cluster
+      manager starts <em>executors</em> on many machines; the plan is split into <em>stages</em> at every shuffle boundary,
+      and each stage into one <em>task</em> per partition.</p>
+    <ul>
+      <li><strong>RDD</strong> (resilient distributed dataset): the original low-level API, a distributed collection of Python
+        objects transformed with functions (<code>map</code>, <code>reduceByKey</code>). Flexible but opaque to the optimizer,
+        and Python functions force serialization between the JVM and Python.</li>
+      <li><strong>DataFrame</strong>: a distributed table with a schema. Operations are declarative, so the Catalyst optimizer
+        rewrites the plan and the Tungsten engine executes it in the JVM, much faster. Use DataFrames (or Spark SQL) by
+        default.</li>
+      <li><strong>Narrow vs wide transformations</strong>: <code>filter</code>, <code>select</code>, <code>withColumn</code> are
+        narrow (each output partition depends on one input partition, no data movement). <code>groupBy</code>,
+        <code>join</code>, <code>distinct</code>, <code>orderBy</code> are wide: they need a <strong>shuffle</strong> and start
+        a new stage.</li>
+    </ul>
+    <div class="runnable" data-local="PySpark needs a Java runtime. Locally: pixi add pyspark openjdk, then pixi run python spark_demo.py" data-title="PySpark: RDD vs DataFrame, laziness, and a shuffle">
+<textarea>
+from pyspark.sql import SparkSession, functions as F
+
+spark = SparkSession.builder.master("local[*]").appName("demo").getOrCreate()
+lines = ["the quick brown fox", "the lazy dog", "the fox"]
+
+# RDD API: functional, low level
+counts = (spark.sparkContext.parallelize(lines)
+          .flatMap(str.split)
+          .map(lambda w: (w, 1))
+          .reduceByKey(lambda a, b: a + b))          # wide: shuffle
+print(counts.collect())                              # action: now it runs
+
+# DataFrame API: declarative, optimized
+df = spark.createDataFrame([(l,) for l in lines], ["line"])
+words = (df.select(F.explode(F.split("line", " ")).alias("word"))   # narrow
+           .groupBy("word").count()                                 # wide: shuffle
+           .orderBy(F.desc("count")))
+words.explain()             # physical plan: look for "Exchange hashpartitioning" = shuffle
+words.show()
+
+trips = spark.read.parquet("lake/trips/")            # hive partitions become columns
+(trips.filter(F.col("year") == 2026)                 # partition pruning
+      .groupBy("start_station").agg(F.count("*").alias("n"))
+      .write.mode("overwrite").partitionBy("start_station").parquet("out/station_counts"))
+spark.stop()
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>collect()</code> brings the whole result to the driver. On a big DataFrame that is an
+      out-of-memory error waiting to happen; aggregate first, or use <code>take(n)</code>/<code>show()</code>. Likewise
+      avoid Python UDFs where a built-in function in <code>pyspark.sql.functions</code> exists: they bypass the optimizer.</p></aside>
+    <p><strong>Remember:</strong> transformations are lazy, actions run; shuffles (wide transformations) define stages and cost
+      the most; prefer DataFrames to RDDs.</p>
+  </section>
+
+  <section class="lesson-section" id="skew">
+    <h2>Partitioning and skew</h2>
+    <p>Parallelism only helps if work is spread evenly. Engines assign rows to partitions by <strong>hash
+      partitioning</strong> (<code>hash(key) % n</code>, used by shuffles), <strong>range partitioning</strong> (sorted key
+      ranges, used for sorting), or the input file layout. <strong>Skew</strong> happens when a few keys hold most of the data
+      (one celebrity account, one giant customer, a <code>NULL</code> key): one task gets far more rows than the others, and
+      the whole stage waits for that straggler.</p>
+    <div class="runnable" data-title="See skew, then fix it with salting">
+<textarea>
+import random, zlib
+from collections import Counter
+
+rng = random.Random(0)
+users = ["celebrity"] * 6000 + [f"user{rng.randrange(2000)}" for _ in range(4000)]   # one hot key
+N = 8
+
+def partition_sizes(keys):
+    sizes = Counter(zlib.crc32(k.encode()) % N for k in keys)
+    return [sizes.get(p, 0) for p in range(N)]
+
+def report(label, sizes):
+    print(f"{label:12} {sizes}  max/mean = {max(sizes) / (sum(sizes) / N):.1f}x")
+
+report("hash by user", partition_sizes(users))
+
+# Salting: split the hot key into k sub-keys, aggregate per salted key, then combine
+SALTS = 8
+salted = [f"{u}#{rng.randrange(SALTS)}" if u == "celebrity" else u for u in users]
+report("salted", partition_sizes(salted))
+
+stage1 = Counter(salted)                                    # partial counts per salted key (parallel)
+stage2 = Counter()
+for key, n in stage1.items():
+    stage2[key.split("#")[0]] += n                          # small second aggregation removes the salt
+print("celebrity total still correct:", stage2["celebrity"] == 6000)
+</textarea>
+    </div>
+    <p>Other remedies: <strong>broadcast joins</strong> (send a small table to every worker instead of shuffling the big one;
+      Spark's <code>F.broadcast(df)</code>), Spark 3's <strong>adaptive query execution</strong> (AQE), which splits skewed
+      partitions automatically, and filtering or handling <code>NULL</code> keys separately. On disk, aim for partitions
+      (files) of roughly 100 MB–1 GB; thousands of tiny files are a form of skew in the other direction ("small files
+      problem"), fixed by compaction.</p>
+    <p><strong>Remember:</strong> look at the task-duration distribution; one straggler means skew; salt, broadcast, or let AQE
+      split it.</p>
+  </section>
+
+  <section class="lesson-section" id="object-storage">
+    <h2>Cloud object storage</h2>
+    <p>Big-data systems store their files in <strong>object storage</strong>: Amazon S3, Google Cloud Storage, Azure Blob
+      Storage, or S3-compatible systems (MinIO, Cloudflare R2). It is cheap, effectively unlimited, durable (S3 is designed
+      for eleven nines), and readable by every engine. But it is not a filesystem, and its differences shape data layouts:</p>
+    <ul>
+      <li><strong>Buckets and keys</strong>: a flat namespace of objects addressed by key, such as
+        <code>s3://spokes-lake/trips/year=2026/month=03/part-0.parquet</code>. "Folders" are just key <em>prefixes</em>;
+        listing a prefix is an API call that pages through keys.</li>
+      <li><strong>Immutable objects</strong>: you write a whole object or replace it; there's no append and no cheap rename
+        (a "rename" is copy plus delete). That is why table formats (Iceberg, Delta) commit by writing new files plus a new
+        metadata pointer instead of renaming.</li>
+      <li><strong>Request costs and latency</strong>: each GET/PUT/LIST costs money and tens of milliseconds, so many small
+        files are slow and expensive. Large files plus range reads (Parquet footers let readers fetch only needed column
+        chunks) work best.</li>
+      <li><strong>Consistency</strong>: S3 has offered strong read-after-write consistency since December 2020, so a
+        successful PUT is immediately visible to GET and LIST.</li>
+      <li><strong>Multipart uploads</strong> for large objects, <strong>storage classes</strong> (Standard, Infrequent Access,
+        Glacier) with lifecycle rules, and IAM policies for access control.</li>
+    </ul>
+    <div class="runnable" data-local="Needs cloud credentials and the libraries: pixi add boto3 s3fs duckdb" data-title="Reading and writing S3 from Python">
+<textarea>
+import boto3
+import duckdb
+
+s3 = boto3.client("s3")
+s3.upload_file("trips.parquet", "spokes-lake", "trips/year=2026/month=03/part-0.parquet")
+pages = s3.get_paginator("list_objects_v2").paginate(Bucket="spokes-lake", Prefix="trips/year=2026/")
+for page in pages:
+    for obj in page.get("Contents", []):
+        print(obj["Key"], obj["Size"])
+
+con = duckdb.connect()
+con.execute("INSTALL httpfs; LOAD httpfs;")
+con.execute("CREATE SECRET (TYPE s3, PROVIDER credential_chain)")      # reuse your AWS credentials
+print(con.sql("""
+    SELECT month, count(*) FROM read_parquet('s3://spokes-lake/trips/*/*/*.parquet', hive_partitioning = true)
+    GROUP BY month ORDER BY month"""))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> object storage is cheap, durable, and flat; write large immutable files under
+      partition-style prefixes; let a table format handle commits.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m63-e1" data-title="Tumbling window generator">
+      <div class="exercise-prompt">
+        <p>Write a generator <code>tumbling(events, size)</code>. <code>events</code> is an iterable (possibly endless) of
+          time-ordered <code>(timestamp, amount)</code> pairs with integer or float timestamps. Yield
+          <code>(window_start, count, total)</code> for each window <code>[start, start + size)</code> that contains at least
+          one event, as soon as the window closes (when an event for a later window arrives), and flush the last window when
+          the input ends. <code>window_start</code> is <code>int(ts // size) * size</code>.</p>
+      </div>
+<textarea class="starter">
+def tumbling(events, size):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import itertools
+
+def test_basic():
+    ev = [(1, 10), (5, 5), (12, 1), (13, 1), (31, 4)]
+    assert list(tumbling(ev, 10)) == [(0, 2, 15), (10, 2, 2), (30, 1, 4)], "empty window [20, 30) is skipped"
+
+def test_empty():
+    assert list(tumbling([], 10)) == []
+
+def test_is_lazy_on_endless_stream():
+    endless = ((t, 1) for t in itertools.count())
+    first = list(itertools.islice(tumbling(endless, 5), 3))
+    assert first == [(0, 5, 5), (5, 5, 5), (10, 5, 5)], "must work on an infinite generator"
+
+def test_is_generator():
+    import inspect
+    assert inspect.isgeneratorfunction(tumbling), "use yield"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Keep <code>current</code>, <code>count</code>, <code>total</code>. When
+        an event's window start differs from <code>current</code>, yield the old window and reset. After the loop, yield
+        the last window if <code>current</code> is not <code>None</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def tumbling(events, size):
+    current, count, total = None, 0, 0
+    for ts, amount in events:
+        start = int(ts // size) * size
+        if current is not None and start != current:
+            yield current, count, total
+            count, total = 0, 0
+        current = start
+        count += 1
+        total += amount
+    if current is not None:
+        yield current, count, total</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m63-e2" data-title="Session windows per user">
+      <div class="exercise-prompt">
+        <p>Write <code>sessionize(events, gap)</code>. <code>events</code> is a list of <code>(timestamp, user)</code> pairs,
+          not necessarily sorted. For each user, consecutive events (in time order) belong to the same session while the time
+          since that user's previous event is <code>&lt;= gap</code>. Return a list of <code>(user, start, end, n_events)</code>
+          sorted by <code>(user, start)</code>.</p>
+      </div>
+<textarea class="starter">
+def sessionize(events, gap):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_sessions():
+    ev = [(50, "ana"), (0, "ana"), (5, "bo"), (12, "ana"), (55, "bo"), (58, "bo"), (200, "ana"), (42, "ana")]
+    assert sessionize(ev, 30) == [
+        ("ana", 0, 50, 4), ("ana", 200, 200, 1), ("bo", 5, 5, 1), ("bo", 55, 58, 2)
+    ], f"got {sessionize(ev, 30)}"
+
+def test_gap_is_inclusive():
+    assert sessionize([(0, "x"), (30, "x")], 30) == [("x", 0, 30, 2)], "a gap equal to the limit continues the session"
+
+def test_empty():
+    assert sessionize([], 10) == []
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Group timestamps by user, sort each list, then walk it: start a new
+        session when <code>t - previous &gt; gap</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from collections import defaultdict
+
+def sessionize(events, gap):
+    by_user = defaultdict(list)
+    for ts, user in events:
+        by_user[user].append(ts)
+    out = []
+    for user, times in by_user.items():
+        times.sort()
+        start = prev = times[0]
+        n = 1
+        for t in times[1:]:
+            if t - prev &gt; gap:
+                out.append((user, start, prev, n))
+                start, n = t, 0
+            prev = t
+            n += 1
+        out.append((user, start, prev, n))
+    return sorted(out)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m63-e3" data-title="MapReduce word count">
+      <div class="exercise-prompt">
+        <p>Implement the three phases of MapReduce:</p>
+        <ul>
+          <li><code>map_phase(text)</code>: return a list of <code>(word, 1)</code> pairs for each lowercase word matched by
+            <code>re.findall(r"[a-z]+", text.lower())</code>.</li>
+          <li><code>shuffle(pairs, n)</code>: return a list of <code>n</code> dicts; put each pair's value into
+            <code>buckets[zlib.crc32(word.encode()) % n][word]</code> (a list of values).</li>
+          <li><code>reduce_phase(bucket)</code>: return <code>{word: sum(values)}</code>.</li>
+          <li><code>word_count(texts, n)</code>: run them all and return one merged dict of counts.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import re
+import zlib
+
+def map_phase(text):
+    ...
+
+def shuffle(pairs, n):
+    ...
+
+def reduce_phase(bucket):
+    ...
+
+def word_count(texts, n=3):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import zlib
+TEXTS = ["The fox and the dog", "the DOG sleeps", "a fox, a dog!"]
+
+def test_map():
+    assert map_phase("The fox, the dog!") == [("the", 1), ("fox", 1), ("the", 1), ("dog", 1)]
+
+def test_shuffle_routes_by_key():
+    buckets = shuffle([("a", 1), ("b", 1), ("a", 1)], 4)
+    assert len(buckets) == 4
+    assert buckets[zlib.crc32(b"a") % 4]["a"] == [1, 1], "all values for a key land in the same bucket"
+    assert sum(len(b) for b in buckets) == 2, "two distinct keys in total"
+
+def test_reduce():
+    assert reduce_phase({"x": [1, 1, 1], "y": [1]}) == {"x": 3, "y": 1}
+
+def test_word_count():
+    expected = {"the": 3, "fox": 2, "and": 1, "dog": 3, "sleeps": 1, "a": 2}
+    for n in (1, 2, 5):
+        assert word_count(TEXTS, n) == expected, f"wrong counts with {n} reducers"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use <code>collections.defaultdict(list)</code> for each bucket. In
+        <code>word_count</code>, flatten the mapped pairs, shuffle once, and <code>update</code> a result dict with each
+        reduced bucket.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import re
+import zlib
+from collections import defaultdict
+
+def map_phase(text):
+    return [(w, 1) for w in re.findall(r"[a-z]+", text.lower())]
+
+def shuffle(pairs, n):
+    buckets = [defaultdict(list) for _ in range(n)]
+    for word, value in pairs:
+        buckets[zlib.crc32(word.encode()) % n][word].append(value)
+    return [dict(b) for b in buckets]
+
+def reduce_phase(bucket):
+    return {word: sum(values) for word, values in bucket.items()}
+
+def word_count(texts, n=3):
+    pairs = [p for t in texts for p in map_phase(t)]
+    result = {}
+    for bucket in shuffle(pairs, n):
+        result.update(reduce_phase(bucket))
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m63-e4" data-title="Event-time windows with a watermark">
+      <div class="exercise-prompt">
+        <p>Write <code>window_with_watermark(events, size, lateness)</code>. <code>events</code> arrive in processing order
+          as <code>(event_time, value)</code>. Maintain <code>watermark = max(event_time seen) - lateness</code> (start at
+          negative infinity). For each event: if its window <code>[start, start + size)</code> has
+          <code>start + size &lt;= watermark</code>, it is late (record <code>(event_time, value)</code> in a late list);
+          otherwise add <code>value</code> to its window. After updating the watermark, close every open window with
+          <code>start + size &lt;= watermark</code>. At the end, close all remaining windows. Return
+          <code>(closed, late)</code> where <code>closed</code> is a list of <code>(start, total)</code> in the order
+          windows closed (windows closing together in ascending start order).</p>
+      </div>
+<textarea class="starter">
+def window_with_watermark(events, size, lateness):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_watermark():
+    arrivals = [(1, 10), (3, 5), (12, 7), (8, 1), (14, 2), (25, 4), (9, 100), (31, 3), (22, 6), (45, 1)]
+    closed, late = window_with_watermark(arrivals, 10, 5)
+    assert closed == [(0, 16), (10, 9), (20, 10), (30, 3), (40, 1)], f"got {closed}"
+    assert late == [(9, 100)], "only the event at t=9 arrives after its window closed"
+
+def test_zero_lateness_drops_any_out_of_order():
+    closed, late = window_with_watermark([(5, 1), (15, 1), (6, 1)], 10, 0)
+    assert closed == [(0, 1), (10, 1)] and late == [(6, 1)]
+
+def test_large_lateness_accepts_everything():
+    closed, late = window_with_watermark([(15, 1), (5, 1), (25, 1)], 10, 100)
+    assert late == [] and closed == [(0, 1), (10, 1), (20, 1)]
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Use a dict <code>start → total</code> for open windows. Closing:
+        <code>for s in sorted(w for w in open_ if w + size &lt;= watermark): closed.append((s, open_.pop(s)))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def window_with_watermark(events, size, lateness):
+    open_, closed, late = {}, [], []
+    watermark = float("-inf")
+    for t, value in events:
+        start = t // size * size
+        if start + size &lt;= watermark:
+            late.append((t, value))
+            continue
+        open_[start] = open_.get(start, 0) + value
+        watermark = max(watermark, t - lateness)
+        for s in sorted(w for w in open_ if w + size &lt;= watermark):
+            closed.append((s, open_.pop(s)))
+    for s in sorted(open_):
+        closed.append((s, open_[s]))
+    return closed, late</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m63-e5" data-title="Measure and fix partition skew">
+      <div class="exercise-prompt">
+        <p>Write <code>partition_sizes(keys, n)</code> returning a list of <code>n</code> counts, where key <code>k</code>
+          goes to partition <code>zlib.crc32(k.encode()) % n</code>. Write <code>skew(sizes)</code> returning
+          <code>max(sizes) / mean(sizes)</code> (1.0 is perfectly even; return 0.0 for all-zero sizes). Finally write
+          <code>salt(keys, hot, k)</code> returning a new list where every key in the set <code>hot</code> becomes
+          <code>f"{key}#{i % k}"</code>, with <code>i</code> counting that key's occurrences from 0, and other keys are
+          unchanged.</p>
+      </div>
+<textarea class="starter">
+import zlib
+
+def partition_sizes(keys, n):
+    ...
+
+def skew(sizes):
+    ...
+
+def salt(keys, hot, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import zlib
+def test_sizes():
+    keys = ["a", "b", "a", "c"]
+    sizes = partition_sizes(keys, 3)
+    assert len(sizes) == 3 and sum(sizes) == 4
+    assert sizes[zlib.crc32(b"a") % 3] >= 2, "both 'a' rows land together"
+
+def test_skew():
+    assert skew([5, 5, 5, 5]) == 1.0
+    assert skew([10, 0, 0, 0]) == 4.0
+    assert skew([0, 0]) == 0.0
+
+def test_salt():
+    assert salt(["hot", "x", "hot", "hot"], {"hot"}, 2) == ["hot#0", "x", "hot#1", "hot#0"]
+
+def test_salting_reduces_skew():
+    keys = ["celeb"] * 900 + [f"u{i}" for i in range(100)]
+    before = skew(partition_sizes(keys, 8))
+    after = skew(partition_sizes(salt(keys, {"celeb"}, 8), 8))
+    assert before > 5 and after < before / 2, f"salting should spread the hot key (before {before:.1f}, after {after:.1f})"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For <code>salt</code>, keep a <code>collections.Counter</code> of how
+        many times each hot key has been seen so far.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import zlib
+from collections import Counter
+
+def partition_sizes(keys, n):
+    sizes = [0] * n
+    for k in keys:
+        sizes[zlib.crc32(k.encode()) % n] += 1
+    return sizes
+
+def skew(sizes):
+    mean = sum(sizes) / len(sizes)
+    return 0.0 if mean == 0 else max(sizes) / mean
+
+def salt(keys, hot, k):
+    seen = Counter()
+    out = []
+    for key in keys:
+        if key in hot:
+            out.append(f"{key}#{seen[key] % k}")
+            seen[key] += 1
+        else:
+            out.append(key)
+    return out</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a streaming clickstream aggregator</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Live page-view dashboard over a simulated stream</span></div>
+      <div class="widget-body">
+        <p>Build a stream processor that consumes an endless, simulated clickstream and maintains per-page counts in
+          one-minute tumbling windows, by event time, with late-data handling, writing results idempotently to SQLite.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init clickstream &amp;&amp; cd clickstream
+pixi add python structlog pytest
+pixi run python -m clickstream --minutes 10 --late-rate 0.05 --seed 1
+pixi run pytest
+# stretch: a real broker
+pixi add python-confluent-kafka</code></pre>
+        <ol>
+          <li><code>generator.py</code>: an endless generator of events <code>{"event_id", "user", "page", "event_time"}</code>
+            with a fixed seed, mostly in order but with a configurable fraction delayed by up to 90 seconds, plus a few
+            duplicate deliveries.</li>
+          <li><code>windows.py</code>: a generator that consumes events and yields closed <code>(window_start, page, count)</code>
+            results using a watermark with configurable allowed lateness; late events go to a side list.</li>
+          <li><code>sink.py</code>: upsert window results into <code>page_views(window_start, page, views)</code> keyed on
+            <code>(window_start, page)</code>, deduplicating by <code>event_id</code> before counting.</li>
+          <li>A bounded <code>asyncio.Queue</code> between the generator and the windowing stage; log consumer lag every
+            window with structlog.</li>
+        </ol>
+        <ul class="checklist" data-id="m63-mini">
+          <li>Window counts are by event time, not arrival time (tested with a shuffled stream)</li>
+          <li>Duplicate deliveries don't inflate counts</li>
+          <li>Late events beyond the allowed lateness are reported, not silently dropped</li>
+          <li>Replaying the same seeded stream twice leaves identical <code>page_views</code> rows</li>
+          <li>Memory stays bounded: only open windows are held (check with a 100 000-event run)</li>
+        </ul>
+        <p><strong>Stretch:</strong> add 5-minute sliding windows and per-user session windows; produce events into a local
+          Kafka topic with three partitions and consume with two consumers in one group; compare results with a batch
+          DuckDB query over the same events written to Parquet.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m63-quiz">
+<script type="application/json">
+{"title": "Streaming and big data", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "You have 300 GB of Parquet and queries touch a few columns of one month. What is usually the best first choice?", "options": ["A 50-node Spark cluster", "DuckDB or Polars on one machine", "Loading it all into pandas", "Kafka"], "answer": 1, "explanation": "<p>Columnar, out-of-core single-node engines handle this size well, with far less cost and complexity than a cluster.</p>"},
+  {"type": "single", "prompt": "In Kafka, ordering is guaranteed…", "options": ["Across the whole topic", "Within a partition", "Across all topics", "Never"], "answer": 1, "explanation": "<p>Each partition is an ordered log. Use the same key (for example user id) to keep related events in one partition and in order.</p>"},
+  {"type": "single", "prompt": "A topic has 4 partitions and a consumer group has 6 consumers. How many consumers receive data?", "options": ["6", "4", "1", "2"], "answer": 1, "explanation": "<p>Each partition goes to exactly one consumer in the group, so at most 4 are active; 2 are idle standbys.</p>"},
+  {"type": "multi", "prompt": "What does a committed offset let a consumer group do?", "options": ["Resume where it left off after a restart", "Read the topic independently of other groups", "Delete events from the topic", "Measure lag against the latest offset"], "answer": [0, 1, 3], "explanation": "<p>Offsets are per group and per partition. Retention, not consumption, decides when events are deleted.</p>"},
+  {"type": "single", "prompt": "Which window type has a size that varies with user activity?", "options": ["Tumbling", "Sliding", "Session", "Global"], "answer": 2, "explanation": "<p>A session window closes after a gap of inactivity, so its length depends on the events.</p>"},
+  {"type": "output", "prompt": "With tumbling windows of size 10, which window start does an event at t = 37 belong to?", "code": "print(37 // 10 * 10)", "answer": "30", "explanation": "<p>Integer division floors 37 / 10 to 3, so the window is [30, 40).</p>"},
+  {"type": "single", "prompt": "A watermark of W means…", "options": ["W events have been processed", "The system assumes all events with event time up to W have arrived, so windows ending by W can close", "The consumer lag is W", "Processing time is W"], "answer": 1, "explanation": "<p>The watermark tracks event-time progress; windows whose end is at or before it are emitted, and later arrivals for them are late.</p>"},
+  {"type": "single", "prompt": "Increasing the allowed lateness generally…", "options": ["Reduces latency and completeness", "Increases completeness but delays results", "Has no effect", "Causes duplicates"], "answer": 1, "explanation": "<p>Waiting longer captures more stragglers but holds windows open longer.</p>"},
+  {"type": "single", "prompt": "What is backpressure?", "options": ["Compressing events", "A mechanism for a slow consumer to slow down a fast producer, for example a bounded queue", "Replaying a topic from offset 0", "A Spark shuffle"], "answer": 1, "explanation": "<p>Bounded buffers block or shed load so memory doesn't grow without limit. Pull-based consumers show it as growing lag.</p>"},
+  {"type": "single", "prompt": "Which MapReduce phase moves data across the network by key?", "options": ["Map", "Shuffle", "Reduce", "Combine"], "answer": 1, "explanation": "<p>The shuffle routes all values for a key to the same reducer. Combiners shrink it by pre-aggregating locally.</p>"},
+  {"type": "multi", "prompt": "Which Spark operations are <em>wide</em> (cause a shuffle)?", "options": ["filter", "groupBy().agg()", "join of two large DataFrames", "withColumn"], "answer": [1, 2], "explanation": "<p>Grouping and joining need rows with the same key together; filter and withColumn work partition by partition.</p>"},
+  {"type": "single", "prompt": "In Spark, <code>df.filter(...).select(...)</code> on its own…", "options": ["Runs immediately", "Only builds a plan; an action such as count() or write runs it", "Writes to disk", "Collects to the driver"], "answer": 1, "explanation": "<p>Transformations are lazy, which lets Catalyst optimize the whole plan before execution.</p>"},
+  {"type": "single", "prompt": "One task in a stage takes 40 minutes while the other 199 take 30 seconds. The most likely cause is…", "options": ["Too much RAM", "Data skew on a hot key", "Too few columns", "Parquet compression"], "answer": 1, "explanation": "<p>A straggler signals skew. Salting, broadcast joins, or adaptive query execution spread the hot key.</p>"},
+  {"type": "multi", "prompt": "Which are true of S3-style object storage?", "options": ["Objects are written whole; there is no append", "Rename is a cheap metadata operation", "Many tiny files are slow and costly to list and read", "Prefixes such as year=2026/ act like folders for listing"], "answer": [0, 2, 3], "explanation": "<p>A rename is copy plus delete, which is why table formats commit through metadata instead. Prefer large files under partition-style prefixes.</p>"},
+  {"type": "text", "prompt": "Which Dask method triggers execution of a lazy collection or delayed object?", "answer": ["compute", "compute()", ".compute()"], "explanation": "<p><code>.compute()</code> (or <code>dask.compute(...)</code>) runs the task graph; until then Dask only records operations.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Estimate compressed size and the fraction queries touch; single-node DuckDB and Polars handle hundreds of gigabytes.</li>
+      <li>Kafka topics split into partitions, ordered logs with offsets; keys choose partitions; consumer groups share partitions and commit offsets.</li>
+      <li>Tumbling, sliding, and session windows turn unbounded streams into finite results; generators implement them with bounded memory.</li>
+      <li>Window by event time; watermarks decide when windows close; late data needs an explicit policy.</li>
+      <li>Bounded buffers give backpressure; exactly-once means idempotent sinks, transactions, or checkpointed state.</li>
+      <li>MapReduce = map, shuffle, reduce; Dask and Spark add lazy DAGs; shuffles are the expensive wide operations.</li>
+      <li>Skew creates stragglers: salt hot keys, broadcast small tables, or use AQE. Object storage favours large, immutable, partitioned files.</li>
+    </ul>
+    <div class="flashcards" data-title="Streaming and big data">
+<script type="application/json">
+[{"front": "Kafka partition", "back": "An ordered, append-only log within a topic; events get consecutive offsets."},
+ {"front": "Message key in Kafka", "back": "Hashed to choose the partition, so events with the same key stay together and ordered."},
+ {"front": "Consumer group", "back": "Consumers sharing a topic: each partition goes to one member; the group commits offsets per partition."},
+ {"front": "Consumer lag", "back": "Latest offset minus committed offset: how far behind a consumer is. Alert on it."},
+ {"front": "Tumbling vs sliding vs session", "back": "Fixed disjoint / fixed overlapping / per key, closed by an inactivity gap."},
+ {"front": "Event time vs processing time", "back": "When it happened vs when the system saw it."},
+ {"front": "Watermark", "back": "An event-time threshold: events up to it are assumed to have arrived, so earlier windows can close."},
+ {"front": "Backpressure", "back": "Slowing producers to the consumer's pace, e.g. a bounded queue that blocks put()."},
+ {"front": "Shuffle", "back": "Redistributing data across workers by key; network- and disk-heavy; defines stage boundaries in Spark."},
+ {"front": "Narrow vs wide transformation", "back": "Narrow: per partition (filter, select). Wide: needs a shuffle (groupBy, join)."},
+ {"front": "Salting", "back": "Appending a random or round-robin suffix to a hot key to spread it, then aggregating again to remove it."},
+ {"front": "Object storage", "back": "Flat buckets of immutable objects addressed by key; cheap and durable; no cheap rename or append."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3/library/asyncio-queue.html">asyncio queues</a> and <a href="https://docs.python.org/3/library/concurrent.futures.html">concurrent.futures</a> in the Python docs</li>
+      <li><a href="https://kafka.apache.org/documentation/">Apache Kafka documentation</a> and <a href="https://docs.confluent.io/kafka-clients/python/current/overview.html">confluent-kafka for Python</a></li>
+      <li><a href="https://docs.dask.org/">Dask</a> and <a href="https://spark.apache.org/docs/latest/api/python/">PySpark</a> documentation</li>
+      <li>Tyler Akidau, "Streaming 101" and "Streaming 102", and the book <em>Streaming Systems</em></li>
+      <li>Martin Kleppmann, <em>Designing Data-Intensive Applications</em>, chapters 10–11</li>
+      <li>Dean and Ghemawat, "MapReduce: Simplified Data Processing on Large Clusters" (2004)</li>
+      <li>Next: put it all together in <a href="../projects/p09-etl-pipeline.html">Project 9 · ETL Pipeline &amp; Warehouse</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

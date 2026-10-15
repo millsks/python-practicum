@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M02 · Values, Types &amp; Variables · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m02">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 1 · Foundations · Module 02</p>
+    <h1>Values, Types &amp; Variables</h1>
+    <p class="lede">Every program is about values: numbers, text, true and false, nothing at all. In this module you will
+      learn the basic kinds of values Python has, how arithmetic really works (including why <code>0.1 + 0.2</code> is
+      not exactly <code>0.3</code>), and the single most important mental model in Python: names are labels that refer
+      to objects.</p>
+    <div class="lesson-meta"><span>⏱ ~2 hours</span><span>Prerequisites: <a href="m01-first-steps.html">M01</a></span></div>
+    <ul class="objectives">
+      <li>Use <code>int</code>, <code>float</code>, <code>complex</code>, <code>bool</code>, and <code>None</code> and say what each is for</li>
+      <li>Explain floating-point rounding and choose <code>math.isclose</code>, <code>decimal</code>, or <code>fractions</code> when it matters</li>
+      <li>Apply operators and precedence, including <code>//</code>, <code>%</code>, <code>**</code>, and <code>divmod</code></li>
+      <li>Describe names as references to objects, and tell <code>is</code> apart from <code>==</code></li>
+      <li>Explain dynamic and strong typing, and what mutable and immutable mean</li>
+      <li>Convert between types and read user input with <code>input()</code></li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="values-and-types">
+    <h2>Values and types</h2>
+    <p>A <strong>value</strong> is a piece of data: <code>42</code>, <code>3.14</code>, <code>"hello"</code>,
+      <code>True</code>. Every value is an <strong>object</strong> in memory, and every object has a
+      <strong>type</strong>. The type decides two things: what the value can represent, and which operations work on
+      it. You can add two numbers; you cannot divide a word by a word.</p>
+    <table>
+      <thead><tr><th>Type</th><th>Represents</th><th>Examples</th></tr></thead>
+      <tbody>
+        <tr><td><code>int</code></td><td>Whole numbers, any size</td><td><code>0</code>, <code>-7</code>, <code>10**100</code></td></tr>
+        <tr><td><code>float</code></td><td>Real numbers, approximately</td><td><code>3.14</code>, <code>-0.5</code>, <code>1e9</code></td></tr>
+        <tr><td><code>complex</code></td><td>Complex numbers</td><td><code>2+3j</code></td></tr>
+        <tr><td><code>bool</code></td><td>Truth values</td><td><code>True</code>, <code>False</code></td></tr>
+        <tr><td><code>str</code></td><td>Text (next module)</td><td><code>"hi"</code></td></tr>
+        <tr><td><code>NoneType</code></td><td>"No value here"</td><td><code>None</code></td></tr>
+      </tbody>
+    </table>
+    <p>Code that writes a value directly, like <code>42</code> or <code>"hi"</code>, is called a <strong>literal</strong>.</p>
+    <div class="runnable" data-title="Ask each value its type">
+<textarea>
+for value in [42, 3.14, 2 + 3j, True, "hi", None]:
+    print(repr(value), "is a", type(value).__name__)
+</textarea>
+    </div>
+    <p>(<code>repr</code> shows a value the way you would type it in code; the <code>for</code> loop repeats the
+      <code>print</code> for each value. You will study loops properly in M04.)</p>
+  </section>
+
+  <section class="lesson-section" id="integers">
+    <h2>Integers: whole numbers of any size</h2>
+    <p>An <code>int</code> is a whole number, positive, negative, or zero. Many languages limit integers to 64 bits
+      (about 9.2 quintillion). Python integers have <strong>arbitrary precision</strong>: they grow as large as your
+      memory allows. You never get an "overflow".</p>
+    <div class="runnable" data-title="Really big integers">
+<textarea>
+print(2 ** 64)
+print(2 ** 200)
+grains = 2 ** 64 - 1   # grains of rice on a chessboard, doubling each square
+print(grains)
+print(len(str(2 ** 10_000)), "digits")
+</textarea>
+    </div>
+    <p>Underscores can make long literals readable: <code>1_000_000</code> is the same as <code>1000000</code>. You can
+      also write integers in other bases: <code>0b1010</code> (binary), <code>0o12</code> (octal), and
+      <code>0xA</code> (hexadecimal) are all ten.</p>
+    <div class="viz" data-viz="bits" data-config='{"value": 10, "width": 8, "mode": "int"}'></div>
+    <p>Above: how the integer is stored as bits (binary digits, 0 or 1). Change the value and watch the bits change.</p>
+    <aside class="callout note"><p>Arbitrary precision has a cost: very large integers take more memory and time. For
+      everyday numbers you will never notice.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="floats">
+    <h2>Floats: real numbers, approximately</h2>
+    <p>A <code>float</code> ("floating-point number") represents a real number like <code>3.14</code> or
+      <code>-0.001</code>. Any literal with a decimal point or an exponent (<code>2.5e3</code> means 2.5 × 10³) is a
+      float, and dividing with <code>/</code> always gives a float: <code>6 / 2</code> is <code>3.0</code>.</p>
+    <h3>Why <code>0.1 + 0.2</code> is not <code>0.3</code></h3>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print(0.1 + 0.2)
+print(0.1 + 0.2 == 0.3)
+</textarea>
+    </div>
+    <p>This surprises everyone, and it is not a Python bug. Floats follow the <strong>IEEE-754</strong> standard used by
+      virtually every CPU. A float is stored in 64 bits: 1 sign bit, 11 exponent bits, and 52 bits of fraction. Just as
+      1/3 cannot be written exactly in decimal (0.3333…), 1/10 cannot be written exactly in <em>binary</em>. So
+      <code>0.1</code> is stored as the nearest representable binary fraction, which is a tiny bit more than 0.1. Small
+      errors add up.</p>
+    <div class="viz" data-viz="bits" data-config='{"mode": "float", "value": 0.1}'></div>
+    <p>Look at the fraction bits for 0.1: the pattern <code>1001 1001 1001…</code> repeats forever in binary, so it must
+      be cut off and rounded. Try 0.5 or 0.25: those are exact, because they are powers of two.</p>
+    <div class="runnable" data-title="The truth about 0.1">
+<textarea>
+from decimal import Decimal
+print(Decimal(0.1))              # the exact value stored for 0.1
+print((0.1).as_integer_ratio())  # as an exact fraction
+print(round(0.1 + 0.2, 2))       # rounding for display is fine
+</textarea>
+    </div>
+    <h3>What to do about it</h3>
+    <div class="card-grid">
+      <div class="card"><h4><code>math.isclose</code></h4><p>Never compare floats with <code>==</code>. Ask whether they are
+        close enough: <code>math.isclose(a, b)</code> uses a relative tolerance of about nine decimal digits.</p></div>
+      <div class="card"><h4><code>decimal.Decimal</code></h4><p>Exact decimal arithmetic. Use it for money. Create decimals
+        from <em>strings</em>: <code>Decimal("0.1")</code>, not <code>Decimal(0.1)</code>.</p></div>
+      <div class="card"><h4><code>fractions.Fraction</code></h4><p>Exact rational numbers such as 1/3. Useful in maths and
+        whenever you must avoid rounding entirely.</p></div>
+    </div>
+    <div class="runnable" data-title="Three ways to be precise">
+<textarea>
+import math
+from decimal import Decimal
+from fractions import Fraction
+
+print(math.isclose(0.1 + 0.2, 0.3))
+print(Decimal("0.1") + Decimal("0.2"))
+print(Decimal("19.99") * 3)
+print(Fraction(1, 3) + Fraction(1, 6))
+print(float("inf") > 10 ** 300, float("nan") == float("nan"))
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Never store money as a float. <code>0.1 + 0.2</code> dollars being
+      <code>0.30000000000000004</code> is annoying in a demo and a bug report in an accounting system. Use
+      <code>Decimal</code> or count whole cents as an <code>int</code>.</p></aside>
+    <p>The special float values <code>inf</code> (infinity) and <code>nan</code> ("not a number", the result of
+      undefined operations) also come from IEEE-754. <code>nan</code> is not even equal to itself.</p>
+    <h3>Complex numbers</h3>
+    <p>Python also has a built-in <code>complex</code> type, written with <code>j</code> for the imaginary unit (as
+      engineers do): <code>(1 + 2j) * (3 - 1j)</code> is <code>(5+5j)</code>. Use <code>.real</code> and
+      <code>.imag</code> to get the parts. You will mostly meet complex numbers in scientific code.</p>
+    <p><strong>Remember:</strong> floats are fast approximations; compare them with <code>math.isclose</code>; use
+      <code>Decimal</code> for money and <code>Fraction</code> for exact ratios.</p>
+  </section>
+
+  <section class="lesson-section" id="operators">
+    <h2>Operators and precedence</h2>
+    <p>An <strong>operator</strong> is a symbol that combines values, like <code>+</code>. The values it works on are
+      called <strong>operands</strong>.</p>
+    <table>
+      <thead><tr><th>Operator</th><th>Meaning</th><th>Example</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><code>+ - *</code></td><td>Add, subtract, multiply</td><td><code>7 * 3</code></td><td><code>21</code></td></tr>
+        <tr><td><code>/</code></td><td>True division (always a float)</td><td><code>7 / 2</code></td><td><code>3.5</code></td></tr>
+        <tr><td><code>//</code></td><td>Floor division: round down to a whole number</td><td><code>7 // 2</code></td><td><code>3</code></td></tr>
+        <tr><td><code>%</code></td><td>Modulo: the remainder</td><td><code>7 % 2</code></td><td><code>1</code></td></tr>
+        <tr><td><code>**</code></td><td>Power</td><td><code>2 ** 10</code></td><td><code>1024</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>//</code> and <code>%</code> are partners: for any <code>a</code> and nonzero <code>b</code>,
+      <code>(a // b) * b + a % b == a</code>. The built-in <code>divmod(a, b)</code> returns both at once. They are
+      everywhere in real programs: converting minutes into hours and minutes, checking if a number is even
+      (<code>n % 2 == 0</code>), wrapping around a clock.</p>
+    <div class="runnable" data-title="Floor division and remainder">
+<textarea>
+total_minutes = 135
+hours, minutes = divmod(total_minutes, 60)
+print(hours, "h", minutes, "m")
+print(17 % 5, 10 % 2, 3 % 10)
+print(-7 // 2, -7 % 2)    # floor rounds DOWN, towards minus infinity
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>-7 // 2</code> is <code>-4</code>, not <code>-3</code>, because floor division
+      rounds towards negative infinity. And the remainder then takes the sign of the divisor: <code>-7 % 2</code> is
+      <code>1</code>. Some other languages behave differently, so this trips up experienced programmers too.</p></aside>
+    <h3>Precedence</h3>
+    <p><strong>Precedence</strong> is the order in which operators are applied, just like in school maths. From highest
+      to lowest: <code>**</code>, then unary minus <code>-x</code>, then <code>* / // %</code>, then <code>+ -</code>,
+      then comparisons (<code>&lt; == !=</code> and so on), then <code>not</code>, <code>and</code>, <code>or</code>.
+      Operators on the same level go left to right, except <code>**</code>, which goes right to left.</p>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+print(2 + 3 * 4)
+print((2 + 3) * 4)
+print(-2 ** 2)
+print(2 ** 3 ** 2)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>When in doubt, add parentheses. <code>(-2) ** 2</code> is 4; <code>-2 ** 2</code> is -4
+      because <code>**</code> binds tighter than the minus sign. Parentheses cost nothing and make intent obvious.</p></aside>
+    <h3>Augmented assignment</h3>
+    <p>Updating a variable based on its old value is so common that there is a shortcut. <code>count += 1</code> means
+      <code>count = count + 1</code>. There are versions for every operator: <code>-=</code>, <code>*=</code>,
+      <code>/=</code>, <code>//=</code>, <code>%=</code>, <code>**=</code>.</p>
+    <div class="tracer" data-title="Augmented assignment step by step">
+<textarea>
+balance = 100
+balance += 50
+balance -= 30
+balance *= 2
+balance //= 7
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="bool-none">
+    <h2><code>bool</code> and <code>None</code></h2>
+    <p>A <strong>Boolean</strong> (named after mathematician George Boole) is one of two values: <code>True</code> or
+      <code>False</code>. Comparisons produce Booleans: <code>3 &lt; 5</code> is <code>True</code>. Python lets you chain
+      comparisons the way mathematicians write them: <code>0 &lt;= age &lt; 130</code>.</p>
+    <p>Combine Booleans with <code>and</code> (both must be true), <code>or</code> (at least one), and
+      <code>not</code> (flip it). Surprisingly, <code>bool</code> is a kind of <code>int</code>: <code>True</code>
+      behaves like 1 and <code>False</code> like 0, so <code>sum</code> of a list of Booleans counts the true ones.</p>
+    <p><code>None</code> is Python's way of saying "nothing" or "no value yet". It is the only value of its type. A
+      function that does not return anything returns <code>None</code>, which is why <code>print(print("hi"))</code>
+      prints <code>hi</code> and then <code>None</code>.</p>
+    <div class="runnable" data-title="Booleans and None">
+<textarea>
+age = 36
+print(0 <= age < 130)
+print(age > 18 and age < 65)
+print(not True, True + True)
+middle_name = None
+print(middle_name is None)
+print(print("hi"))
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Test for <code>None</code> with <code>is None</code>, never <code>== None</code>. There is
+      exactly one <code>None</code> object, so identity is the precise question.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="names-references">
+    <h2>Names are references to objects</h2>
+    <p>This section contains the most important idea in the module. In some languages a variable is a box that holds a
+      value. In Python, a variable is a <strong>name</strong> that <strong>refers</strong> to an object, like a luggage
+      tag tied to a suitcase. Assignment <code>x = 42</code> does two things: it makes (or finds) the object
+      <code>42</code>, and it ties the tag <code>x</code> to it. This is called <strong>binding</strong> a name.</p>
+    <p>Consequences:</p>
+    <ul>
+      <li><code>y = x</code> does not copy anything. It ties a second tag to the <em>same</em> object. Two names for one
+        object are called <strong>aliases</strong>.</li>
+      <li>Assigning a new value to a name (<strong>rebinding</strong>) moves that tag to a different object. Other names
+        are unaffected.</li>
+    </ul>
+    <p>Explore the scenarios: <em>alias</em> (two names, one list), <em>rebind</em> (moving a tag), and
+      <em>immutable</em> (what happens with numbers).</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "alias"}'></div>
+    <div class="viz" data-viz="references" data-config='{"scenario": "rebind"}'></div>
+    <p>Step through the same idea with the tracer. Watch the "obj N" identity tags: when two names show the same tag,
+      they refer to the same object.</p>
+    <div class="tracer" data-title="Aliases and rebinding">
+<textarea>
+cart = ["apple"]
+same_cart = cart
+same_cart.append("pear")
+cart = ["melon"]
+x = 10
+y = x
+x = x + 1
+</textarea>
+    </div>
+    <p>After line 3, <code>cart</code> also contains "pear", because there was only ever one list. Line 4 rebinds
+      <code>cart</code> to a brand-new list, and <code>same_cart</code> still refers to the old one.</p>
+    <h3>Identity vs equality: <code>is</code> vs <code>==</code></h3>
+    <p>Every object has an <strong>identity</strong>, a unique number for as long as it exists, which
+      <code>id(obj)</code> returns. Two different questions follow:</p>
+    <ul>
+      <li><code>a == b</code>: are they <strong>equal</strong> (same value)?</li>
+      <li><code>a is b</code>: are they the <strong>same object</strong> (same identity)?</li>
+    </ul>
+    <div class="runnable" data-title="Predict the output" data-predict>
+<textarea>
+a = [1, 2, 3]
+b = [1, 2, 3]
+c = a
+print(a == b, a is b)
+print(a == c, a is c)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Do not use <code>is</code> to compare numbers or strings. CPython reuses some small
+      objects (integers from -5 to 256, for example), so <code>is</code> may appear to work in a quick test and then fail
+      for bigger values. Use <code>==</code> for values and <code>is</code> only for <code>None</code> (and similar
+      unique objects).</p></aside>
+  </section>
+
+  <section class="lesson-section" id="typing-mutability">
+    <h2>Dynamic typing, strong typing, and mutability</h2>
+    <h3>Dynamic typing</h3>
+    <p>In Python, <em>names</em> have no type; <em>objects</em> do. A name can refer to an int now and a string later.
+      This is <strong>dynamic typing</strong>: types are checked while the program runs, not before. (In
+      <em>statically typed</em> languages such as Java, a variable's type is fixed when you write the code.)</p>
+    <h3>Strong typing</h3>
+    <p>Python is also <strong>strongly typed</strong>: it does not silently convert between unrelated types.
+      <code>"3" + 4</code> raises a <code>TypeError</code> rather than guessing whether you meant <code>"34"</code> or
+      <code>7</code>. "Explicit is better than implicit." (Numbers do mix sensibly: <code>1 + 2.5</code> is
+      <code>3.5</code>.)</p>
+    <div class="runnable" data-title="Dynamic but strong">
+<textarea>
+thing = 42
+print(type(thing).__name__)
+thing = "forty-two"
+print(type(thing).__name__)
+print(1 + 2.5)
+print("3" + 4)
+</textarea>
+    </div>
+    <h3>Mutable and immutable</h3>
+    <p>An object is <strong>mutable</strong> if it can be changed in place after it is created, and
+      <strong>immutable</strong> if it cannot. All the types in this module (<code>int</code>, <code>float</code>,
+      <code>bool</code>, <code>None</code>, and also <code>str</code>) are immutable. Lists are mutable.</p>
+    <p>This is why <code>x = x + 1</code> never surprises you with numbers: the int object 10 cannot change, so Python
+      makes a new object 11 and rebinds <code>x</code>. Any alias still sees 10. With a list, <code>append</code> changes
+      the one shared object, and every alias sees the change.</p>
+    <div class="viz" data-viz="references" data-config='{"scenario": "immutable"}'></div>
+    <aside class="callout think"><p>If <code>a = 5</code> and <code>b = a</code>, then <code>a += 1</code>: what is
+      <code>b</code>? Now if <code>a = [5]</code>, <code>b = a</code>, then <code>a.append(6)</code>: what is
+      <code>b</code>? Explain the difference using the words "rebind" and "mutate".</p></aside>
+  </section>
+
+  <section class="lesson-section" id="conversion-input">
+    <h2>Type conversion and <code>input()</code></h2>
+    <p>Each type's name is also a function that converts to it:</p>
+    <table>
+      <thead><tr><th>Call</th><th>Result</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><code>int("42")</code></td><td><code>42</code></td><td>Parses text; whitespace is ignored</td></tr>
+        <tr><td><code>int(3.99)</code></td><td><code>3</code></td><td>Truncates towards zero; does not round</td></tr>
+        <tr><td><code>float("2.5")</code></td><td><code>2.5</code></td><td></td></tr>
+        <tr><td><code>str(42)</code></td><td><code>"42"</code></td><td>Works on anything</td></tr>
+        <tr><td><code>bool(0)</code>, <code>bool("")</code></td><td><code>False</code></td><td>Zero and empty are false; almost everything else is true</td></tr>
+        <tr><td><code>int("3.5")</code></td><td><code>ValueError</code></td><td>Not a whole-number string</td></tr>
+      </tbody>
+    </table>
+    <aside class="callout danger"><p><code>bool("False")</code> is <code>True</code>! Any non-empty string is true. To
+      interpret user text, compare it: <code>answer.strip().lower() == "yes"</code>.</p></aside>
+    <h3>Reading input</h3>
+    <p><code>input(prompt)</code> shows the prompt, waits for the user to type a line and press Enter, and returns what
+      they typed, <strong>always as a string</strong>. If you need a number, convert it.</p>
+    <div class="runnable" data-title="input() always returns text" data-stdin="21\n4.5">
+<textarea>
+age_text = input("How old are you? ")
+print(type(age_text).__name__, repr(age_text))
+age = int(age_text)
+rate = float(input("Hourly rate? "))
+print("Next year you will be", age + 1)
+print("A 40-hour week pays", rate * 40)
+</textarea>
+    </div>
+    <p>In the browser, typed input is pre-filled for you (here <code>21</code> and <code>4.5</code>). When you run the
+      script locally with <code>pixi run python</code>, you type the answers.</p>
+    <div class="runnable" data-title="Predict the output" data-predict data-stdin="7">
+<textarea>
+n = input()
+print(n * 3)
+print(int(n) * 3)
+</textarea>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+
+    <div class="exercise" data-id="m02-e1" data-title="Hours and minutes">
+      <div class="exercise-prompt"><p>Given <code>total_minutes = 135</code>, compute <code>hours</code> and
+        <code>minutes</code> using <code>//</code> and <code>%</code> (or <code>divmod</code>), then print exactly
+        <code>2 h 15 m</code>. Your code must work for any value of <code>total_minutes</code>.</p></div>
+<textarea class="starter">
+total_minutes = 135
+hours = ...
+minutes = ...
+print(hours, "h", minutes, "m")
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_values():
+    assert hours == 2 and minutes == 15, f"for 135 minutes expected 2 h 15 m, got {hours} h {minutes} m"
+
+def test_types():
+    assert type(hours) is int and type(minutes) is int, "use // and % so the results are ints"
+
+def test_output():
+    assert program_output.strip() == "2 h 15 m", f"got {program_output.strip()!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>135 // 60</code> is the whole hours; <code>135 % 60</code> is
+        what is left over.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">total_minutes = 135
+hours, minutes = divmod(total_minutes, 60)
+print(hours, "h", minutes, "m")</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m02-e2" data-title="Fix the average">
+      <div class="exercise-prompt"><p>The average of 10, 20, and 30 should be <code>20.0</code>, but this code computes
+        <code>40.0</code>. Fix it with parentheses so <code>average</code> is correct.</p></div>
+<textarea class="starter">
+a, b, c = 10, 20, 30
+average = a + b + c / 3
+print(average)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_average():
+    assert average == 20.0, f"average should be 20.0, got {average}"
+
+def test_printed():
+    assert program_output.strip() == "20.0", "print the average"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>/</code> has higher precedence than <code>+</code>, so only
+        <code>c</code> is being divided.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">a, b, c = 10, 20, 30
+average = (a + b + c) / 3
+print(average)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m02-e3" data-title="Precise money, safe comparisons">
+      <div class="exercise-prompt"><p>Set <code>close</code> to the result of checking, with <code>math.isclose</code>,
+        whether <code>0.1 + 0.2</code> is close to <code>0.3</code>. Then set <code>total</code> to the exact
+        <code>Decimal</code> sum of the prices <code>"19.99"</code>, <code>"5.01"</code>, and <code>"0.10"</code>
+        (create each Decimal from a string).</p></div>
+<textarea class="starter">
+import math
+from decimal import Decimal
+
+close = ...
+total = ...
+print(close, total)
+</textarea>
+      <script type="text/x-python" class="tests">
+from decimal import Decimal as _D
+
+def test_close():
+    assert close is True, "math.isclose(0.1 + 0.2, 0.3) is True"
+
+def test_total_is_decimal():
+    assert isinstance(total, _D), "total should be a Decimal"
+
+def test_total_exact():
+    assert total == _D("25.10"), f"total should be exactly 25.10, got {total}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>Decimal("19.99") + Decimal("5.01") + ...</code></p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+from decimal import Decimal
+
+close = math.isclose(0.1 + 0.2, 0.3)
+total = Decimal("19.99") + Decimal("5.01") + Decimal("0.10")
+print(close, total)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m02-e4" data-title="Alias or copy?">
+      <div class="exercise-prompt"><p>Starting from <code>original = [1, 2]</code>, make <code>alias</code> refer to the
+        <em>same</em> list and <code>copy</code> refer to a <em>new</em> list with the same items (use
+        <code>list(original)</code>). Then append <code>3</code> through <code>alias</code>. Afterwards
+        <code>original</code> must be <code>[1, 2, 3]</code> and <code>copy</code> must still be <code>[1, 2]</code>.</p></div>
+<textarea class="starter">
+original = [1, 2]
+alias = ...
+copy = ...
+# append 3 through alias
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_alias_is_same_object():
+    assert alias is original, "alias should be the same object as original (use alias = original)"
+
+def test_copy_is_new_object():
+    assert copy is not original, "copy should be a different object"
+
+def test_values():
+    assert original == [1, 2, 3], f"original should be [1, 2, 3], got {original}"
+    assert copy == [1, 2], f"copy should still be [1, 2], got {copy}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>alias = original</code> ties a second name to the same list.
+        Use <code>alias.append(3)</code> to mutate it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">original = [1, 2]
+alias = original
+copy = list(original)
+alias.append(3)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m02-e5" data-title="Read numbers from input" data-stdin="3\n2.5">
+      <div class="exercise-prompt"><p>Read a quantity (a whole number) and a unit price (a decimal number) with two calls
+        to <code>input()</code>. Print the total cost: quantity × price. With the inputs <code>3</code> and
+        <code>2.5</code>, your program prints <code>7.5</code>. Store the converted values in <code>quantity</code> and
+        <code>price</code>.</p></div>
+<textarea class="starter">
+quantity = input("Quantity? ")
+price = input("Price? ")
+print(quantity * price)
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_types():
+    assert type(quantity) is int, "convert the quantity with int()"
+    assert type(price) is float, "convert the price with float()"
+
+def test_output():
+    last = program_output.strip().splitlines()[-1]
+    assert last.endswith("7.5"), f"for 3 and 2.5 the total is 7.5; your last line was {last!r}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>input</code> returns strings. Wrap each call:
+        <code>int(input(...))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">quantity = int(input("Quantity? "))
+price = float(input("Price? "))
+print(quantity * price)</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a unit converter</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Unit converter</span></div>
+      <div class="widget-body">
+        <p>Build <code>convert.py</code> in your <code>practice</code> workspace. It asks for a temperature in Celsius, a
+          distance in kilometres, and a duration in seconds, and prints conversions.</p>
+<pre data-label="Example session"><code>Temperature in Celsius? 21.5
+21.5 C = 70.7 F
+Distance in km? 10
+10.0 km = 6.214 miles
+Duration in seconds? 4000
+4000 s = 1 h 6 min 40 s</code></pre>
+        <h4>Specification</h4>
+        <ul>
+          <li>Fahrenheit = Celsius × 9 / 5 + 32. One mile is 1.609344 km.</li>
+          <li>Use <code>round(value, 1)</code> or <code>round(value, 3)</code> for display.</li>
+          <li>Convert seconds with <code>divmod</code> twice (seconds → minutes and seconds, minutes → hours and minutes).</li>
+          <li>Run with <code>pixi run python convert.py</code>; add a <code>convert</code> task.</li>
+        </ul>
+        <h4>Acceptance criteria</h4>
+        <ul class="checklist" data-id="m02-mini">
+          <li>Every <code>input()</code> result is converted with <code>int()</code> or <code>float()</code> before arithmetic</li>
+          <li>21.5 °C prints 70.7 °F; 0 °C prints 32.0 °F; -40 °C prints -40.0 °F</li>
+          <li>10 km prints 6.214 miles</li>
+          <li>4000 seconds prints 1 h 6 min 40 s using <code>divmod</code></li>
+          <li>Constants like the km-per-mile factor are named variables (for example <code>KM_PER_MILE</code>)</li>
+          <li><code>pixi run convert</code> works, and <code>pixi run ruff format convert.py</code> leaves it tidy</li>
+        </ul>
+        <h4>Stretch goals</h4>
+        <ul>
+          <li>Add a currency conversion using <code>Decimal</code> so cents never drift.</li>
+          <li>Type <code>abc</code> at a prompt and read the <code>ValueError</code> traceback. (You will learn to handle it gracefully in M07.)</li>
+          <li>Add kilograms to pounds (1 lb = 0.45359237 kg).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m02-quiz">
+<script type="application/json">
+{"title": "Values and types quiz", "passScore": 0.7, "questions": [
+  {"type": "output", "prompt": "What does this print?", "code": "print(7 // 2, 7 % 2, 7 / 2)", "answer": "3 1 3.5", "explanation": "<p><code>//</code> is floor division, <code>%</code> the remainder, and <code>/</code> always produces a float.</p>"},
+  {"type": "single", "prompt": "Why is <code>0.1 + 0.2 == 0.3</code> False?", "options": ["A bug in Python", "0.1 and 0.2 cannot be represented exactly in binary floating point", "Floats are only accurate to one decimal place", "<code>==</code> does not work on floats"], "answer": 1, "explanation": "<p>IEEE-754 floats store the nearest binary fraction. 0.1 is a repeating fraction in binary, so tiny rounding errors appear. Use <code>math.isclose</code> to compare.</p>"},
+  {"type": "single", "prompt": "Which is the best type for storing a price like 19.99 in an accounting program?", "options": ["<code>float</code>", "<code>decimal.Decimal</code> created from the string <code>\"19.99\"</code>", "<code>complex</code>", "<code>bool</code>"], "answer": 1, "explanation": "<p><code>Decimal(\"19.99\")</code> is exact in base 10. Creating it from a float would copy the float's rounding error.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(-2 ** 2)", "answer": "-4", "explanation": "<p><code>**</code> binds more tightly than unary minus, so this is <code>-(2 ** 2)</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "a = [1]\nb = a\nb.append(2)\nprint(a)", "answer": "[1, 2]", "explanation": "<p><code>b = a</code> makes an alias, not a copy. Mutating the list through <code>b</code> is visible through <code>a</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "x = 5\ny = x\nx += 1\nprint(y)", "answer": "5", "explanation": "<p>Ints are immutable. <code>x += 1</code> creates the object 6 and rebinds <code>x</code>. <code>y</code> still refers to 5.</p>"},
+  {"type": "single", "prompt": "What does <code>a is b</code> test?", "options": ["Whether a and b have equal values", "Whether a and b are the same object", "Whether a and b have the same type", "Whether a is a subclass of b"], "answer": 1, "explanation": "<p><code>is</code> compares identity; <code>==</code> compares values. Use <code>is</code> for <code>None</code>, and <code>==</code> for numbers and strings.</p>"},
+  {"type": "multi", "prompt": "Which of these are immutable?", "options": ["<code>int</code>", "<code>list</code>", "<code>str</code>", "<code>float</code>"], "answer": [0, 2, 3], "explanation": "<p>Numbers and strings cannot change in place. Lists can (<code>append</code>, item assignment).</p>"},
+  {"type": "single", "prompt": "What does <code>input()</code> return when the user types <code>42</code>?", "options": ["The int 42", "The float 42.0", "The string \"42\"", "None"], "answer": 2, "explanation": "<p><code>input</code> always returns a string. Convert with <code>int()</code> or <code>float()</code>.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(bool(\"False\"), bool(0), int(3.99))", "answer": "True False 3", "explanation": "<p>Any non-empty string is truthy. Zero is falsy. <code>int()</code> truncates towards zero rather than rounding.</p>"},
+  {"type": "single", "prompt": "Python raises <code>TypeError</code> for <code>\"3\" + 4</code>. This shows that Python is…", "options": ["weakly typed", "strongly typed", "statically typed", "untyped"], "answer": 1, "explanation": "<p>Strong typing means no silent conversion between unrelated types. (Python is also dynamically typed: names have no fixed type.)</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "print(divmod(17, 5))", "answer": "(3, 2)", "explanation": "<p><code>divmod(a, b)</code> returns <code>(a // b, a % b)</code>: 17 is 3 × 5 with 2 left over.</p>"},
+  {"type": "text", "prompt": "Which value represents \"no value\" in Python?", "answer": ["None"], "explanation": "<p><code>None</code> is the only value of <code>NoneType</code>. Test for it with <code>is None</code>.</p>"},
+  {"type": "single", "prompt": "What is <code>2 ** 100</code> in Python?", "options": ["An OverflowError", "An exact 31-digit integer", "A float approximation", "Infinity"], "answer": 1, "explanation": "<p>Python ints have arbitrary precision: <code>1267650600228229401496703205376</code>, exactly.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Every value is an object with a type; the type decides what operations make sense.</li>
+      <li><code>int</code> has arbitrary precision; <code>float</code> is IEEE-754 and approximate.</li>
+      <li>Compare floats with <code>math.isclose</code>; use <code>Decimal</code> for money and <code>Fraction</code> for exact ratios.</li>
+      <li><code>//</code> floors, <code>%</code> gives the remainder, <code>**</code> is power and binds tightest; parenthesize when unsure.</li>
+      <li>Names are references. Assignment binds; <code>y = x</code> creates an alias; rebinding moves one name only.</li>
+      <li><code>==</code> compares values, <code>is</code> compares identity.</li>
+      <li>Python is dynamically and strongly typed. Numbers and strings are immutable; lists are mutable.</li>
+      <li><code>input()</code> returns a string; convert it with <code>int()</code> or <code>float()</code>.</li>
+    </ul>
+    <div class="flashcards" data-title="Values and types">
+<script type="application/json">
+[{"front": "Arbitrary precision", "back": "Python ints grow as large as memory allows; there is no integer overflow."},
+ {"front": "IEEE-754", "back": "The binary floating-point standard. Floats have 52 fraction bits, so values like 0.1 are rounded."},
+ {"front": "<code>math.isclose(a, b)</code>", "back": "The safe way to compare floats: true when they are equal within a small relative tolerance."},
+ {"front": "<code>Decimal(\"0.1\")</code>", "back": "Exact decimal arithmetic, ideal for money. Build it from a string, not a float."},
+ {"front": "<code>//</code> and <code>%</code>", "back": "Floor division (rounds towards minus infinity) and remainder. <code>divmod</code> returns both."},
+ {"front": "Precedence of <code>**</code>", "back": "Highest of the arithmetic operators and right-associative: <code>-2 ** 2 == -4</code>, <code>2 ** 3 ** 2 == 512</code>."},
+ {"front": "Binding", "back": "Assignment ties a name to an object. Names refer to objects; they do not contain them."},
+ {"front": "Alias", "back": "Two names referring to the same object. Mutations through one are visible through the other."},
+ {"front": "<code>is</code> vs <code>==</code>", "back": "Same object (identity) vs equal value. Use <code>is</code> for <code>None</code>."},
+ {"front": "Dynamic and strong typing", "back": "Names have no fixed type (dynamic), and unrelated types are never silently converted (strong)."},
+ {"front": "Mutable vs immutable", "back": "Mutable objects (list) change in place; immutable ones (int, float, str, bool) never do."},
+ {"front": "<code>input()</code>", "back": "Always returns a string. Convert with <code>int()</code> or <code>float()</code>."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.python.org/3.14/tutorial/floatingpoint.html">Floating-point arithmetic: issues and limitations</a></li>
+      <li><a href="https://docs.python.org/3.14/library/stdtypes.html#numeric-types-int-float-complex">Numeric types</a> in the standard library reference</li>
+      <li><a href="https://docs.python.org/3.14/library/decimal.html"><code>decimal</code></a> and <a href="https://docs.python.org/3.14/library/fractions.html"><code>fractions</code></a></li>
+      <li><a href="https://docs.python.org/3.14/reference/expressions.html#operator-precedence">Operator precedence table</a></li>
+      <li><a href="https://nedbatchelder.com/text/names.html">Ned Batchelder: Facts and myths about Python names and values</a></li>
+      <li>Next: <a href="m03-strings.html">M03 · Strings &amp; Text</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

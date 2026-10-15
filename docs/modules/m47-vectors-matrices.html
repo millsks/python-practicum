@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M47 · Vectors &amp; Matrices from Scratch · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m47">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 47</p>
+    <h1>Vectors &amp; Matrices from Scratch</h1>
+    <p class="lede">Almost every piece of scientific computing, graphics, and machine learning is built from two ideas: the
+      vector and the matrix. You will build both from plain Python lists, see what they mean as pictures, and find out
+      why serious numerical code needs NumPy.</p>
+    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m06-collections.html">M06</a>, <a href="m11-data-model.html">M11</a>, <a href="m19-complexity.html">M19</a></span></div>
+    <ul class="objectives">
+      <li>Explain a vector as an arrow and as a list of numbers, and compute its length, sum, and scalar multiple</li>
+      <li>Compute dot products, the angle between vectors, and cosine similarity, and say what each one measures</li>
+      <li>Represent a matrix as a list of lists, read its shape, index it, and transpose it</li>
+      <li>Multiply matrix by vector and matrix by matrix by hand and in code, and explain why <code>AB ≠ BA</code> and why it costs O(n³)</li>
+      <li>See a 2×2 matrix as a transformation of the plane (rotation, scaling, shear) and plot it with matplotlib</li>
+      <li>Describe row-major and column-major memory layout, and why pure-Python loops are slow for numerical work</li>
+      <li>Write a <code>Vector</code> class whose operators (<code>+</code>, <code>*</code>, <code>@</code>, <code>abs</code>) follow the data model</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="why">
+    <h2>Why vectors and matrices?</h2>
+    <p>A spreadsheet row describing a house (area, bedrooms, age), the red/green/blue values of a pixel, the position and
+      velocity of a satellite, the word counts of a document: each is an ordered list of numbers. Mathematicians call
+      such a list a <strong>vector</strong>. A table of such rows, or a rule that turns one vector into another, is a
+      <strong>matrix</strong>. Once data is in this shape, a small set of operations (adding, scaling, dot products,
+      multiplication) does a surprising amount of work: it measures similarity between documents, rotates 3-D models,
+      fits lines to data, and powers every layer of a neural network.</p>
+    <p>This module uses only high-school math: coordinates on a grid, Pythagoras' theorem, and a little trigonometry
+      (cosine). Everything else is built here, from scratch, in pure Python. In <a href="m48-numpy.html">M48</a> you will
+      swap the hand-written loops for NumPy, and you will understand exactly what NumPy is doing for you.</p>
+    <aside class="callout think"><p>Before reading on: a recommendation system says two users are "similar". Each user
+      is a list of ratings for the same 5 films. What single number would you compute from the two lists to measure how
+      alike they are? Keep your idea in mind; you will meet the standard answer (cosine similarity) shortly.</p></aside>
+    <p><strong>Remember:</strong> a vector is an ordered list of numbers; a matrix is a rectangular grid of them. The
+      rest of this module gives those lists a geometric meaning.</p>
+  </section>
+
+  <section class="lesson-section" id="vectors">
+    <h2>Vectors as arrows and as lists</h2>
+    <p>Draw a grid. Start at the origin (0, 0), walk 3 units right and 2 units up. The arrow from where you started to
+      where you stopped is the vector <code>v = (3, 2)</code>. Its numbers are called <strong>components</strong> (or
+      coordinates). The number of components is the vector's <strong>dimension</strong>: <code>(3, 2)</code> is
+      2-dimensional, a pixel <code>(255, 128, 0)</code> is 3-dimensional, and a document's word counts over a 10,000-word
+      vocabulary is a 10,000-dimensional vector. We can't draw 10,000 dimensions, but every rule we discover in 2-D works
+      the same way there.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 420 260" role="img" aria-label="Vectors v=(3,2) and w=(1,3) and their sum v+w=(4,5) drawn tip to tail">
+        <defs>
+          <marker id="m47-arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-1)"/></marker>
+          <marker id="m47-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-2)"/></marker>
+          <marker id="m47-arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-3)"/></marker>
+        </defs>
+        <g stroke="var(--border)" stroke-width="1">
+          <line x1="40" y1="230" x2="40" y2="20"/><line x1="80" y1="230" x2="80" y2="20"/><line x1="120" y1="230" x2="120" y2="20"/>
+          <line x1="160" y1="230" x2="160" y2="20"/><line x1="200" y1="230" x2="200" y2="20"/><line x1="240" y1="230" x2="240" y2="20"/>
+          <line x1="40" y1="230" x2="260" y2="230"/><line x1="40" y1="190" x2="260" y2="190"/><line x1="40" y1="150" x2="260" y2="150"/>
+          <line x1="40" y1="110" x2="260" y2="110"/><line x1="40" y1="70" x2="260" y2="70"/><line x1="40" y1="30" x2="260" y2="30"/>
+        </g>
+        <g fill="var(--fg-muted)" font-size="11" text-anchor="middle">
+          <text x="40" y="246">0</text><text x="80" y="246">1</text><text x="120" y="246">2</text><text x="160" y="246">3</text><text x="200" y="246">4</text><text x="240" y="246">5</text>
+          <text x="28" y="194">1</text><text x="28" y="154">2</text><text x="28" y="114">3</text><text x="28" y="74">4</text><text x="28" y="34">5</text>
+        </g>
+        <line x1="40" y1="230" x2="160" y2="150" stroke="var(--viz-1)" stroke-width="3" marker-end="url(#m47-arr1)"/>
+        <line x1="160" y1="150" x2="200" y2="30" stroke="var(--viz-2)" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#m47-arr2)"/>
+        <line x1="40" y1="230" x2="80" y2="110" stroke="var(--viz-2)" stroke-width="3" marker-end="url(#m47-arr2)"/>
+        <line x1="40" y1="230" x2="200" y2="30" stroke="var(--viz-3)" stroke-width="3" marker-end="url(#m47-arr3)"/>
+        <text x="110" y="205" fill="var(--viz-1)" font-size="14" font-weight="bold">v = (3, 2)</text>
+        <text x="48" y="100" fill="var(--viz-2)" font-size="14" font-weight="bold">w = (1, 3)</text>
+        <text x="186" y="100" fill="var(--viz-3)" font-size="14" font-weight="bold">v + w</text>
+        <g fill="var(--fg)" font-size="13">
+          <text x="280" y="60">Add component by component:</text>
+          <text x="280" y="84">(3, 2) + (1, 3) = (4, 5)</text>
+          <text x="280" y="120">Geometrically: put w's tail</text>
+          <text x="280" y="138">at v's tip (dashed copy).</text>
+          <text x="280" y="174">Length |v| = √(3² + 2²)</text>
+          <text x="280" y="192">       = √13 ≈ 3.606</text>
+        </g>
+      </svg>
+      <figcaption>Vector addition is "tip to tail": walk along <code>v</code>, then along <code>w</code>. The total trip is <code>v + w</code>.</figcaption>
+    </figure>
+
+    <h3>Three basic operations</h3>
+    <ul>
+      <li><strong>Addition</strong> <code>v + w</code>: add matching components. Only defined when both vectors have the
+        same dimension. Geometrically: tip to tail.</li>
+      <li><strong>Scalar multiplication</strong> <code>c · v</code>: multiply every component by a plain number
+        <code>c</code> (a <em>scalar</em>). <code>2·v</code> points the same way but is twice as long; <code>-1·v</code>
+        points the opposite way; <code>0.5·v</code> is half as long.</li>
+      <li><strong>Magnitude</strong> (also called <em>length</em> or <em>norm</em>) <code>|v|</code>: by Pythagoras, the
+        arrow <code>(3, 2)</code> is the hypotenuse of a right triangle with sides 3 and 2, so its length is
+        <code>√(3² + 2²)</code>. In any dimension: square every component, add, take the square root.</li>
+    </ul>
+    <p>A vector with length 1 is a <strong>unit vector</strong>. Dividing any non-zero vector by its own length
+      ("normalizing" it) keeps its direction and makes its length exactly 1. Unit vectors are how we talk about pure
+      direction.</p>
+    <p>In Python, the most direct representation is a list (or tuple) of floats. Python has no built-in "add these lists
+      element-wise" operator: <code>[3, 2] + [1, 3]</code> <em>concatenates</em> to <code>[3, 2, 1, 3]</code>. So we write
+      small functions with <code>zip</code>.</p>
+
+    <div class="runnable" data-title="Vectors as plain lists">
+<textarea>
+import math
+
+def add(v, w):
+    if len(v) != len(w):
+        raise ValueError(f"dimension mismatch: {len(v)} vs {len(w)}")
+    return [a + b for a, b in zip(v, w, strict=True)]
+
+def scale(c, v):
+    return [c * a for a in v]
+
+def magnitude(v):
+    return math.sqrt(sum(a * a for a in v))
+
+def normalize(v):
+    length = magnitude(v)
+    if length == 0:
+        raise ValueError("cannot normalize the zero vector")
+    return scale(1 / length, v)
+
+v = [3.0, 2.0]
+w = [1.0, 3.0]
+print("v + w      =", add(v, w))
+print("2 * v      =", scale(2, v))
+print("|v|        =", round(magnitude(v), 3))
+print("unit v     =", [round(a, 3) for a in normalize(v)])
+print("|unit v|   =", magnitude(normalize(v)))
+print("list + list concatenates:", v + w)
+print("math.hypot does |v| for you:", math.hypot(*v))
+</textarea>
+    </div>
+
+    <div class="runnable" data-title="Predict: list arithmetic is not vector arithmetic" data-predict>
+<textarea>
+v = [1, 2]
+print(v * 3)
+print([3 * a for a in v])
+</textarea>
+    </div>
+
+    <aside class="callout warn"><p><code>*</code> on a list means <em>repeat</em>, and <code>+</code> means
+      <em>concatenate</em>. That is the single most common surprise for people coming from math. It is also one of the
+      reasons NumPy exists: NumPy arrays redefine these operators to mean element-wise arithmetic.</p></aside>
+    <aside class="callout py314"><p>Use <code>zip(v, w, strict=True)</code> so vectors of different lengths raise
+      <code>ValueError</code> instead of being silently truncated. Python 3.14 adds the same safety to
+      <code>map</code>: <code>map(operator.add, v, w, strict=True)</code>.</p></aside>
+    <p><strong>Remember:</strong> add and scale component by component; length is Pythagoras in any number of
+      dimensions; a unit vector is pure direction.</p>
+  </section>
+
+  <section class="lesson-section" id="dot-product">
+    <h2>The dot product, angles, and cosine similarity</h2>
+    <p>The <strong>dot product</strong> of two vectors of the same dimension is: multiply matching components, then add
+      the results. For <code>v = (3, 2)</code> and <code>w = (1, 3)</code>: <code>v · w = 3·1 + 2·3 = 9</code>. It
+      takes two vectors and returns one number. That number has a beautiful geometric meaning:</p>
+    <pre><code class="language-python">v · w = |v| × |w| × cos(θ)        # θ is the angle between the arrows</code></pre>
+    <p>You don't need to prove it to use it, but here is the intuition. <code>cos(θ)</code> is 1 when the arrows point
+      the same way (θ = 0°), 0 when they are perpendicular (θ = 90°), and -1 when they point in opposite directions
+      (θ = 180°). So the sign of the dot product tells you whether two vectors broadly agree (positive), are unrelated
+      (zero), or disagree (negative). Note also that <code>v · v = |v|²</code>: the dot product of a vector with itself is
+      its squared length, which is exactly Pythagoras again.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 420 220" role="img" aria-label="Projection of w onto v and the angle theta between them">
+        <defs>
+          <marker id="m47-arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-1)"/></marker>
+          <marker id="m47-arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--viz-2)"/></marker>
+        </defs>
+        <line x1="30" y1="190" x2="330" y2="190" stroke="var(--viz-1)" stroke-width="3" marker-end="url(#m47-arr4)"/>
+        <line x1="30" y1="190" x2="190" y2="50" stroke="var(--viz-2)" stroke-width="3" marker-end="url(#m47-arr5)"/>
+        <line x1="190" y1="50" x2="190" y2="190" stroke="var(--fg-muted)" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <rect x="180" y="180" width="10" height="10" fill="none" stroke="var(--fg-muted)"/>
+        <line x1="30" y1="196" x2="190" y2="196" stroke="var(--viz-3)" stroke-width="5"/>
+        <path d="M 80 190 A 50 50 0 0 0 68 157" fill="none" stroke="var(--fg)" stroke-width="1.5"/>
+        <text x="86" y="172" fill="var(--fg)" font-size="14">θ</text>
+        <text x="335" y="186" fill="var(--viz-1)" font-size="14" font-weight="bold">v</text>
+        <text x="196" y="48" fill="var(--viz-2)" font-size="14" font-weight="bold">w</text>
+        <text x="60" y="214" fill="var(--viz-3)" font-size="12">shadow of w on v = |w| cos θ</text>
+        <text x="230" y="90" fill="var(--fg)" font-size="12">v · w = |v| × (shadow length)</text>
+        <text x="230" y="110" fill="var(--fg)" font-size="12">cos θ = v · w / (|v| |w|)</text>
+      </svg>
+      <figcaption>Shine a light straight down onto <code>v</code>: the shadow of <code>w</code> has length <code>|w| cos θ</code>. The dot product is the length of <code>v</code> times that shadow.</figcaption>
+    </figure>
+
+    <p>Rearranging the formula gives the angle: <code>cos θ = (v · w) / (|v| |w|)</code>. That ratio is called
+      <strong>cosine similarity</strong>. It ignores length entirely and keeps only direction, which is exactly what you
+      want when comparing documents: a long article and a short summary about the same topic have very different word
+      counts (lengths) but point in a similar direction. Cosine similarity ranges from -1 (opposite) through 0
+      (unrelated) to 1 (same direction). It is the default way search engines, recommender systems, and embedding models
+      (see <a href="m57-unsupervised-embeddings.html">M57</a>) compare items.</p>
+
+    <div class="viz" data-viz="matrix" data-config='{"op": "dot"}'></div>
+
+    <div class="runnable" data-title="Dot product, angle, and cosine similarity">
+<textarea>
+import math
+
+def dot(v, w):
+    return sum(a * b for a, b in zip(v, w, strict=True))
+
+def norm(v):
+    return math.sqrt(dot(v, v))
+
+def cosine_similarity(v, w):
+    return dot(v, w) / (norm(v) * norm(w))
+
+def angle_degrees(v, w):
+    c = max(-1.0, min(1.0, cosine_similarity(v, w)))   # clamp rounding error
+    return math.degrees(math.acos(c))
+
+v, w = [3, 2], [1, 3]
+print("v . w =", dot(v, w))
+print("angle =", round(angle_degrees(v, w), 2), "degrees")
+print("perpendicular:", dot([1, 0], [0, 5]))
+print("opposite:", cosine_similarity([1, 1], [-2, -2]))   # rounding: not exactly -1
+
+# Ratings of 5 films (0 = not seen) by three users
+alice = [5, 4, 0, 1, 0]
+bob   = [4, 5, 0, 0, 1]
+carol = [0, 0, 5, 4, 5]
+print("alice~bob  ", round(cosine_similarity(alice, bob), 3))
+print("alice~carol", round(cosine_similarity(alice, carol), 3))
+# The stdlib has a fast, accurate dot product too:
+print("math.sumprod:", math.sumprod(v, w))
+</textarea>
+    </div>
+
+    <div class="runnable" data-title="Predict: does length matter to cosine similarity?" data-predict>
+<textarea>
+import math
+def cos_sim(v, w):
+    d = sum(a * b for a, b in zip(v, w))
+    return d / (math.hypot(*v) * math.hypot(*w))
+print(round(cos_sim([1, 2, 3], [10, 20, 30]), 6))
+</textarea>
+    </div>
+
+    <aside class="callout pro"><p>Floating-point rounding can push a computed cosine to <code>1.0000000000000002</code>,
+      and <code>math.acos</code> then raises <code>ValueError: math domain error</code>. Production code clamps to
+      [-1, 1] before calling <code>acos</code>, as above. Also guard against the zero vector: its cosine similarity is
+      undefined (division by zero).</p></aside>
+    <p><strong>Remember:</strong> <code>v · w = Σ vᵢwᵢ = |v||w|cos θ</code>. Positive means "same general direction",
+      zero means perpendicular, negative means opposed. Cosine similarity is the dot product of the two unit vectors.</p>
+  </section>
+
+  <section class="lesson-section" id="matrices">
+    <h2>Matrices as lists of lists</h2>
+    <p>A <strong>matrix</strong> is a rectangular grid of numbers with <code>m</code> rows and <code>n</code> columns; we
+      say its <strong>shape</strong> is <code>m × n</code> (rows first, always). In pure Python, the natural
+      representation is a list of rows, each row a list:</p>
+    <pre><code class="language-python">A = [[1, 2, 3],
+     [4, 5, 6]]          # shape 2 × 3: 2 rows, 3 columns
+rows, cols = len(A), len(A[0])
+A[1][2]                  # row 1, column 2 (zero-based) -&gt; 6</code></pre>
+    <p>Mathematicians write the entry in row <code>i</code>, column <code>j</code> as <code>Aᵢⱼ</code> and count from 1;
+      Python counts from 0. A matrix with one row is a <em>row vector</em>; one with one column is a <em>column
+      vector</em>. You can read a matrix two ways: as a stack of rows (each row a data record, like a spreadsheet), or as
+      a side-by-side list of columns (each column a feature). Both views are useful, and switching between them is what
+      the <strong>transpose</strong> does.</p>
+
+    <h3>Transpose</h3>
+    <p>The transpose <code>Aᵀ</code> flips a matrix across its main diagonal: row <code>i</code> becomes column
+      <code>i</code>, so <code>Aᵀ[j][i] == A[i][j]</code> and a <code>2 × 3</code> matrix becomes <code>3 × 2</code>.
+      Python's <code>zip(*A)</code> idiom does exactly this: <code>*A</code> passes each row as a separate argument, and
+      <code>zip</code> groups the first items, then the second items, and so on.</p>
+    <div class="viz" data-viz="matrix" data-config='{"op": "transpose"}'></div>
+
+    <div class="runnable" data-title="Shape, indexing, columns, transpose">
+<textarea>
+A = [[1, 2, 3],
+     [4, 5, 6]]
+
+def shape(M):
+    return (len(M), len(M[0]) if M else 0)
+
+def column(M, j):
+    return [row[j] for row in M]
+
+def transpose(M):
+    return [list(col) for col in zip(*M)]
+
+print("shape:", shape(A))
+print("A[1][2] =", A[1][2])
+print("row 0:", A[0], " column 1:", column(A, 1))
+T = transpose(A)
+for row in T:
+    print(row)
+print("shape of T:", shape(T))
+print("transpose twice gives A back:", transpose(T) == A)
+</textarea>
+    </div>
+
+    <div class="runnable" data-title="Predict: the shared-row trap" data-predict>
+<textarea>
+grid = [[0] * 3] * 2
+grid[0][0] = 9
+print(grid)
+</textarea>
+    </div>
+    <aside class="callout danger"><p><code>[[0] * 3] * 2</code> builds a list containing the <em>same</em> row object
+      twice, so changing one "row" changes both. This is the aliasing trap from <a href="m02-values-types.html">M02</a>
+      and <a href="m06-collections.html">M06</a>. Build matrices with a comprehension instead:
+      <code>[[0] * cols for _ in range(rows)]</code> creates a fresh row each time.</p></aside>
+    <div class="viz" data-viz="references" data-config='{"scenario": "nested"}'></div>
+    <p><strong>Remember:</strong> shape is (rows, columns). <code>M[i][j]</code> is row <code>i</code>, column
+      <code>j</code>. <code>[list(c) for c in zip(*M)]</code> transposes. Never build rows with <code>[row] * n</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="multiplication">
+    <h2>Matrix multiplication</h2>
+    <h3>Matrix times vector</h3>
+    <p>Multiplying a matrix <code>A</code> (shape <code>m × n</code>) by a vector <code>x</code> (dimension
+      <code>n</code>) gives a new vector of dimension <code>m</code>. Each output entry is the dot product of one row of
+      <code>A</code> with <code>x</code>:</p>
+    <pre><code class="language-python">[[1, 2],      [5]     [1·5 + 2·6]     [17]
+ [3, 4]]  ×   [6]  =  [3·5 + 4·6]  =  [39]</code></pre>
+    <p>There is a second, equally important reading: <code>A x</code> is a <em>weighted sum of the columns</em> of
+      <code>A</code>, with weights taken from <code>x</code>. Above, <code>5·(1, 3) + 6·(2, 4) = (17, 39)</code>. The row
+      view is how you compute it; the column view is how you <em>think</em> about it, especially for transformations.</p>
+
+    <h3>Matrix times matrix</h3>
+    <p>For <code>C = A B</code>, the entry <code>C[i][j]</code> is the dot product of row <code>i</code> of
+      <code>A</code> with column <code>j</code> of <code>B</code>. That requires each row of <code>A</code> to be as long
+      as each column of <code>B</code>: <strong>the inner dimensions must match</strong>. Shapes combine like dominoes:
+      <code>(m × n) · (n × p) → (m × p)</code>. Step through it below and watch which row and column meet for each
+      output cell.</p>
+    <div class="viz" data-viz="matrix" data-config='{"op": "matmul"}'></div>
+
+    <div class="runnable" data-title="matvec and matmul in pure Python">
+<textarea>
+def dot(v, w):
+    return sum(a * b for a, b in zip(v, w, strict=True))
+
+def matvec(A, x):
+    return [dot(row, x) for row in A]
+
+def matmul(A, B):
+    if len(A[0]) != len(B):
+        raise ValueError(f"inner dimensions differ: {len(A[0])} vs {len(B)}")
+    cols_of_B = list(zip(*B))
+    return [[dot(row, col) for col in cols_of_B] for row in A]
+
+A = [[1, 2],
+     [3, 4]]
+B = [[0, 1],
+     [1, 0]]
+print("A x   =", matvec(A, [5, 6]))
+print("A B   =", matmul(A, B))
+print("B A   =", matmul(B, A))
+
+R = [[1, 2, 3]]            # 1 x 3
+S = [[1], [2], [3]]        # 3 x 1
+print("(1x3)(3x1) =", matmul(R, S))   # 1 x 1: a dot product
+print("(3x1)(1x3) =", matmul(S, R))   # 3 x 3: an "outer product"
+</textarea>
+    </div>
+
+    <h3>The identity matrix</h3>
+    <p>The <strong>identity matrix</strong> <code>I</code> has 1s on the main diagonal and 0s elsewhere. It is the
+      matrix version of the number 1: <code>I A = A I = A</code> and <code>I x = x</code>. As a transformation, it
+      leaves every point where it is.</p>
+
+    <h3>Why <code>AB</code> usually differs from <code>BA</code></h3>
+    <p>With numbers, <code>3 × 4 = 4 × 3</code>. With matrices that's almost never true. The run above shows it:
+      <code>B</code> swaps things, and "swap the rows of A" (<code>BA</code>) is a different result from "swap the columns
+      of A" (<code>AB</code>). Shapes make it even clearer: <code>(1×3)(3×1)</code> is <code>1×1</code>, while
+      <code>(3×1)(1×3)</code> is <code>3×3</code>. Geometrically, "rotate then stretch" lands points in different places
+      from "stretch then rotate", which you will see in the next section. Matrix multiplication <em>is</em> associative,
+      though: <code>(AB)C = A(BC)</code>, and the transpose reverses order: <code>(AB)ᵀ = BᵀAᵀ</code>.</p>
+
+    <div class="runnable" data-title="Predict: does order matter?" data-predict>
+<textarea>
+def matmul(A, B):
+    return [[sum(a * b for a, b in zip(r, c)) for c in zip(*B)] for r in A]
+A = [[1, 1], [0, 1]]
+B = [[2, 0], [0, 1]]
+print(matmul(A, B))
+print(matmul(B, A))
+</textarea>
+    </div>
+
+    <h3>The cost: O(n³)</h3>
+    <p>For two <code>n × n</code> matrices, there are <code>n²</code> output cells, and each one is a dot product of
+      length <code>n</code>: <code>n</code> multiplications and about <code>n</code> additions. Total:
+      <code>n · n · n = n³</code> multiply-adds. Doubling <code>n</code> makes the work 8 times bigger. A 1000 × 1000
+      product is a billion multiply-adds. (Clever algorithms such as Strassen's reach about O(n^2.81), but real libraries
+      mostly win with the hardware tricks you will meet below, not by a better exponent.)</p>
+    <div class="viz" data-viz="bigo" data-config='{"functions": ["n", "n^2", "n^3"], "maxN": 50}'></div>
+    <p><strong>Remember:</strong> <code>C[i][j] = row i of A · column j of B</code>; shapes <code>(m×n)(n×p) → (m×p)</code>;
+      <code>AB ≠ BA</code> in general; <code>I</code> is the do-nothing matrix; naive matmul is O(n³).</p>
+  </section>
+
+  <section class="lesson-section" id="transformations">
+    <h2>Matrices as transformations of the plane</h2>
+    <p>Here's the idea that makes linear algebra click. A 2 × 2 matrix is a <em>machine that moves every point of the
+      plane</em>. Feed it a point <code>(x, y)</code> as a vector, and <code>A (x, y)</code> is where that point goes.
+      Because of the column view, you can read the whole transformation straight off the matrix: <strong>the first column
+      is where <code>(1, 0)</code> lands, and the second column is where <code>(0, 1)</code> lands</strong>. Every other
+      point follows along, because <code>(x, y) = x·(1, 0) + y·(0, 1)</code>.</p>
+    <p>Such machines are called <strong>linear transformations</strong>: they keep the origin fixed, keep straight lines
+      straight, and keep evenly spaced grid lines evenly spaced. The common ones:</p>
+    <div class="card-grid">
+      <div class="card"><h4>Scale</h4><p><code>[[sx, 0], [0, sy]]</code> stretches by <code>sx</code> horizontally and
+        <code>sy</code> vertically.</p></div>
+      <div class="card"><h4>Rotate by θ</h4><p><code>[[cos θ, -sin θ], [sin θ, cos θ]]</code> spins counter-clockwise
+        about the origin. <code>(1, 0)</code> goes to <code>(cos θ, sin θ)</code>.</p></div>
+      <div class="card"><h4>Shear</h4><p><code>[[1, k], [0, 1]]</code> slides each point sideways by <code>k</code>
+        times its height, turning squares into parallelograms.</p></div>
+      <div class="card"><h4>Reflect</h4><p><code>[[1, 0], [0, -1]]</code> flips across the x-axis;
+        <code>[[0, 1], [1, 0]]</code> swaps x and y (mirror in the line y = x).</p></div>
+    </div>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 440 200" role="img" aria-label="Unit square before and after the shear [[1, 1], [0, 1]]">
+        <g transform="translate(20,170)">
+          <line x1="0" y1="0" x2="160" y2="0" stroke="var(--fg-muted)"/><line x1="0" y1="0" x2="0" y2="-150" stroke="var(--fg-muted)"/>
+          <polygon points="0,0 100,0 100,-100 0,-100" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--viz-1)" stroke-width="2"/>
+          <line x1="0" y1="0" x2="100" y2="0" stroke="var(--viz-2)" stroke-width="4"/>
+          <line x1="0" y1="0" x2="0" y2="-100" stroke="var(--viz-3)" stroke-width="4"/>
+          <text x="104" y="14" fill="var(--viz-2)" font-size="12">(1, 0)</text>
+          <text x="6" y="-106" fill="var(--viz-3)" font-size="12">(0, 1)</text>
+          <text x="20" y="22" fill="var(--fg)" font-size="12">unit square</text>
+        </g>
+        <text x="190" y="100" fill="var(--fg)" font-size="13">[[1, 1],</text>
+        <text x="190" y="118" fill="var(--fg)" font-size="13"> [0, 1]]  →</text>
+        <g transform="translate(270,170)">
+          <line x1="0" y1="0" x2="160" y2="0" stroke="var(--fg-muted)"/><line x1="0" y1="0" x2="0" y2="-150" stroke="var(--fg-muted)"/>
+          <polygon points="0,0 70,0 140,-70 70,-70" fill="var(--viz-1)" fill-opacity="0.25" stroke="var(--viz-1)" stroke-width="2"/>
+          <line x1="0" y1="0" x2="70" y2="0" stroke="var(--viz-2)" stroke-width="4"/>
+          <line x1="0" y1="0" x2="70" y2="-70" stroke="var(--viz-3)" stroke-width="4"/>
+          <text x="60" y="14" fill="var(--viz-2)" font-size="12">(1, 0) stays</text>
+          <text x="36" y="-80" fill="var(--viz-3)" font-size="12">(0, 1) → (1, 1)</text>
+        </g>
+      </svg>
+      <figcaption>The columns of the shear matrix are <code>(1, 0)</code> and <code>(1, 1)</code>: exactly where the two
+        edges of the unit square go. The area is unchanged (still 1), a fact you will meet again as the
+        <em>determinant</em> in <a href="m49-linear-algebra.html">M49</a>.</figcaption>
+    </figure>
+
+    <p>Now draw it for real. The cell below transforms the corners of a unit square (and an "F" shape, which shows
+      reflections, because an F looks different in a mirror) with several matrices and plots each result. The first
+      <code>import matplotlib</code> in the browser downloads the library, so it takes a few seconds; later runs are
+      fast.</p>
+
+    <div class="runnable" data-title="Rotate, scale, shear: plot the result">
+<textarea>
+import math
+import matplotlib.pyplot as plt
+
+def matvec(A, p):
+    return [A[0][0] * p[0] + A[0][1] * p[1], A[1][0] * p[0] + A[1][1] * p[1]]
+
+def rotation(deg):
+    t = math.radians(deg)
+    return [[math.cos(t), -math.sin(t)], [math.sin(t), math.cos(t)]]
+
+# An "F" made of points; the first and last are equal so the outline closes
+F = [(0, 0), (0, 3), (2, 3), (2, 2.5), (0.5, 2.5), (0.5, 1.7), (1.5, 1.7), (1.5, 1.2), (0.5, 1.2), (0.5, 0), (0, 0)]
+
+transforms = {
+    "identity": [[1, 0], [0, 1]],
+    "scale (2, 0.5)": [[2, 0], [0, 0.5]],
+    "rotate 30°": rotation(30),
+    "shear k=1": [[1, 1], [0, 1]],
+    "reflect x-axis": [[1, 0], [0, -1]],
+}
+# Compose: rotate first, then scale. As one matrix that is S @ R (read right to left).
+S, R = [[2, 0], [0, 0.5]], rotation(30)
+transforms["rotate then scale"] = [[sum(S[i][k] * R[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+
+fig, axes = plt.subplots(2, 3, figsize=(10, 6.5))
+for ax, (name, A) in zip(axes.flat, transforms.items()):
+    moved = [matvec(A, p) for p in F]
+    ax.plot(*zip(*F), color="lightgray", lw=2, label="original")
+    ax.fill(*zip(*moved), alpha=0.35)
+    ax.plot(*zip(*moved), lw=2)
+    ax.set_title(name)
+    ax.set_xlim(-4, 7); ax.set_ylim(-4, 4)
+    ax.set_aspect("equal"); ax.grid(alpha=0.3)
+    ax.axhline(0, color="k", lw=0.6); ax.axvline(0, color="k", lw=0.6)
+fig.tight_layout()
+</textarea>
+    </div>
+
+    <h3>Composition is multiplication</h3>
+    <p>Applying <code>R</code> first and then <code>S</code> to a point is <code>S (R p)</code>. Associativity says
+      that equals <code>(S R) p</code>, so the single matrix <code>SR</code> does both steps at once. Read products
+      <strong>right to left</strong>: in <code>SR</code>, <code>R</code> happens first. This is why games and graphics
+      engines multiply all the transformation matrices together once and then apply one matrix to millions of vertices.
+      And because <code>SR ≠ RS</code>, "rotate then stretch" is a different shape from "stretch then rotate". Change the
+      last transform in the cell to <code>RS</code> and compare.</p>
+    <aside class="callout think"><p>Rotate by 90° twice. What single matrix should you get? Work out
+      <code>rotation(90)</code> by hand (cos 90° = 0, sin 90° = 1), multiply it by itself, and check that you get
+      rotation by 180°: <code>[[-1, 0], [0, -1]]</code>.</p></aside>
+    <p><strong>Remember:</strong> the columns of a 2 × 2 matrix are the images of <code>(1, 0)</code> and
+      <code>(0, 1)</code>. Multiplying matrices composes transformations, applied right to left.</p>
+  </section>
+
+  <section class="lesson-section" id="memory-layout">
+    <h2>Memory layout: row-major vs column-major</h2>
+    <p>Computer memory is one long line of numbered bytes, not a grid. To store a 2-D matrix you must choose an order.
+      <strong>Row-major</strong> order (used by C and by NumPy by default) stores row 0 completely, then row 1, and so on.
+      <strong>Column-major</strong> order (used by Fortran, MATLAB, R, Julia, and much of the LAPACK library that NumPy
+      and SciPy call) stores column 0 completely, then column 1.</p>
+
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 210" role="img" aria-label="A 2 by 3 matrix laid out in row-major and column-major order">
+        <g font-size="14" text-anchor="middle" fill="var(--fg)">
+          <g stroke="var(--border-strong)">
+            <rect x="20" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="56" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="92" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/>
+            <rect x="20" y="60" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="56" y="60" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="92" y="60" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/>
+          </g>
+          <text x="38" y="50">1</text><text x="74" y="50">2</text><text x="110" y="50">3</text>
+          <text x="38" y="80">4</text><text x="74" y="80">5</text><text x="110" y="80">6</text>
+          <text x="74" y="20" font-size="12" fill="var(--fg-muted)">2 × 3 matrix</text>
+        </g>
+        <g font-size="14" text-anchor="middle" fill="var(--fg)">
+          <text x="250" y="22" font-size="12" fill="var(--fg-muted)">row-major (C, NumPy default)</text>
+          <g stroke="var(--border-strong)">
+            <rect x="160" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="196" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="232" y="30" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/>
+            <rect x="268" y="30" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="304" y="30" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="340" y="30" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/>
+          </g>
+          <text x="178" y="50">1</text><text x="214" y="50">2</text><text x="250" y="50">3</text><text x="286" y="50">4</text><text x="322" y="50">5</text><text x="358" y="50">6</text>
+          <text x="250" y="122" font-size="12" fill="var(--fg-muted)">column-major (Fortran, MATLAB, R)</text>
+          <g stroke="var(--border-strong)">
+            <rect x="160" y="130" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="196" y="130" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="232" y="130" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/>
+            <rect x="268" y="130" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/><rect x="304" y="130" width="36" height="30" fill="var(--viz-1)" fill-opacity="0.3"/><rect x="340" y="130" width="36" height="30" fill="var(--viz-2)" fill-opacity="0.3"/>
+          </g>
+          <text x="178" y="150">1</text><text x="214" y="150">4</text><text x="250" y="150">2</text><text x="286" y="150">5</text><text x="322" y="150">3</text><text x="358" y="150">6</text>
+        </g>
+        <g font-size="12" fill="var(--fg-muted)">
+          <text x="160" y="80">address of A[i][j] = i × cols + j</text>
+          <text x="160" y="185">address of A[i][j] = j × rows + i</text>
+          <text x="20" y="120">Same numbers,</text><text x="20" y="136">different order</text><text x="20" y="152">in memory.</text>
+        </g>
+      </svg>
+      <figcaption>Walking along a row is a walk through consecutive memory in row-major order, and a big jump in
+        column-major order.</figcaption>
+    </figure>
+
+    <h3>Why it matters: the cache</h3>
+    <p>A CPU can do arithmetic far faster than it can fetch data from main memory. To hide that gap, it keeps small,
+      very fast memories called <strong>caches</strong>, and it fetches memory in chunks (a <em>cache line</em>, typically
+      64 bytes, or eight 64-bit floats). If your loop reads numbers that sit next to each other, one fetch serves eight
+      reads. If it jumps around, almost every read misses the cache and waits for main memory, which can be tens of
+      times slower. So: <strong>loop in the order the data is stored</strong>. For row-major data, the innermost loop
+      should walk along a row.</p>
+    <p>Pure Python lists blur this picture: a list of lists stores <em>pointers</em> to separate float objects scattered
+      around the heap, so even "consecutive" numbers are not adjacent in memory. You can still see a small difference
+      below (partly cache, partly the extra indexing work), but the dramatic effect appears with contiguous arrays in
+      <a href="m48-numpy.html">M48</a>, where the numbers really do sit side by side.</p>
+
+    <div class="runnable" data-title="Row order vs column order traversal">
+<textarea>
+import time
+
+n = 600
+M = [[float(i * n + j) for j in range(n)] for i in range(n)]
+
+def sum_by_rows(M):
+    total = 0.0
+    for row in M:              # follow the storage order
+        for x in row:
+            total += x
+    return total
+
+def sum_by_columns(M):
+    total = 0.0
+    rows, cols = len(M), len(M[0])
+    for j in range(cols):      # jump to a different row list every step
+        for i in range(rows):
+            total += M[i][j]
+    return total
+
+for fn in (sum_by_rows, sum_by_columns):
+    start = time.perf_counter()
+    result = fn(M)
+    print(f"{fn.__name__:15} {time.perf_counter() - start:.3f} s  (sum={result:.0f})")
+
+# A flat, row-major list: element (i, j) lives at index i * n + j
+flat = [x for row in M for x in row]
+i, j = 7, 42
+print("M[i][j] == flat[i*n + j]:", M[i][j] == flat[i * n + j])
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Libraries store a matrix as one flat block of numbers plus a <em>shape</em> and a
+      <em>layout</em> rule. Transposing then needs no copying at all: just swap the rule. NumPy calls this rule the
+      array's <strong>strides</strong>, and you will inspect them in <a href="m48-numpy.html">M48</a>.</p></aside>
+    <p><strong>Remember:</strong> memory is 1-D; row-major puts rows together, column-major puts columns together.
+      Loop in storage order so the cache can help you.</p>
+  </section>
+
+  <section class="lesson-section" id="why-slow">
+    <h2>Why pure Python is slow for this, and what comes next</h2>
+    <p>Your <code>matmul</code> is correct, but time it. Every <code>a * b</code> in a Python loop does far more than one
+      multiplication: the interpreter fetches the next bytecode, looks up the types of both objects, finds the right
+      <code>__mul__</code>, allocates a brand-new float object for the result, updates reference counts, and later frees
+      the old object. Each number is a full Python object (24 bytes for a float, plus an 8-byte pointer in the list),
+      scattered across memory. The actual multiplication is perhaps 1% of the work.</p>
+    <p>Optimized numerical libraries remove all of that overhead. They store raw 8-byte floats contiguously, run the
+      loops in compiled C or Fortran, use SIMD instructions that multiply 4 to 16 numbers at once, split work across CPU
+      cores, and arrange the computation in cache-sized blocks. That's the BLAS (Basic Linear Algebra Subprograms)
+      library that NumPy calls for <code>@</code>. The cell below compares the two. (It imports NumPy, which takes a few
+      seconds to download the first time in the browser.)</p>
+
+    <div class="runnable" data-title="Timing: pure Python vs NumPy">
+<textarea>
+import random
+import time
+
+def matmul(A, B):
+    cols = list(zip(*B))
+    return [[sum(a * b for a, b in zip(row, col)) for col in cols] for row in A]
+
+import numpy as np
+np.ones((2, 2)) @ np.ones((2, 2))   # warm up NumPy once so the first timing is fair
+
+for n in (50, 100, 150):
+    A = [[random.random() for _ in range(n)] for _ in range(n)]
+    B = [[random.random() for _ in range(n)] for _ in range(n)]
+    t0 = time.perf_counter(); C = matmul(A, B); t_py = time.perf_counter() - t0
+    An, Bn = np.array(A), np.array(B)
+    t0 = time.perf_counter(); Cn = An @ Bn; t_np = time.perf_counter() - t0
+    same = np.allclose(C, Cn)
+    print(f"n={n:4}  python {t_py:7.4f}s  numpy {t_np:8.5f}s  speedup ~{t_py / max(t_np, 1e-9):6.0f}x  same={same}")
+</textarea>
+    </div>
+    <p>Notice two things. First, the Python time grows roughly 8× when <code>n</code> doubles: that's O(n³) in action.
+      Second, NumPy is typically hundreds of times faster, and the gap grows with <code>n</code>. In the browser (WebAssembly,
+      single thread) the gap is smaller than on your own machine; run it locally with
+      <code>pixi run python timing.py</code> to see the full effect.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi add numpy matplotlib     # conda-forge packages; NumPy links an optimized BLAS
+pixi run python timing.py</code></pre>
+    <aside class="callout note"><p>Writing it yourself still matters. Knowing that <code>@</code> is "rows dot columns",
+      that shapes must line up, and that the cost is O(n³) lets you predict errors, estimate run time, and reason about
+      what a model is doing, even when a library does the arithmetic.</p></aside>
+    <p><strong>Remember:</strong> interpreted loops pay object and dispatch overhead on every number. Use pure Python to
+      understand; use NumPy to compute.</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>These exercises are graded in the browser. Use only plain Python (no NumPy), and the <code>math</code> module.</p>
+
+    <div class="exercise" data-id="m47-e1" data-title="dot and norm">
+      <div class="exercise-prompt">
+        <p>Write <code>dot(v, w)</code> returning the dot product of two equal-length sequences of numbers, and
+          <code>norm(v)</code> returning the Euclidean length. <code>dot</code> must raise <code>ValueError</code> when the
+          lengths differ. <code>norm([])</code> is <code>0.0</code>.</p>
+      </div>
+<textarea class="starter">
+import math
+
+def dot(v, w):
+    ...
+
+def norm(v):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_dot_basic():
+    assert dot([3, 2], [1, 3]) == 9, "dot([3, 2], [1, 3]) should be 3*1 + 2*3 = 9"
+
+def test_dot_perpendicular():
+    assert dot([1, 0, 0], [0, 7, 0]) == 0, "perpendicular vectors have dot product 0"
+
+def test_dot_mismatch():
+    try:
+        dot([1, 2], [1, 2, 3])
+    except ValueError:
+        return
+    raise AssertionError("dot must raise ValueError for different lengths")
+
+def test_norm():
+    assert math.isclose(norm([3, 4]), 5.0), "norm([3, 4]) should be 5.0"
+    assert math.isclose(norm([1, 2, 2]), 3.0), "norm([1, 2, 2]) should be 3.0"
+
+def test_norm_empty():
+    assert norm([]) == 0.0, "norm([]) should be 0.0"
+
+def test_norm_is_sqrt_of_self_dot():
+    v = [1.5, -2.0, 0.25]
+    assert math.isclose(norm(v) ** 2, dot(v, v)), "norm(v)**2 should equal dot(v, v)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check lengths first, then <code>sum(a * b for a, b in zip(v, w))</code>.
+        The norm is <code>math.sqrt(dot(v, v))</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def dot(v, w):
+    if len(v) != len(w):
+        raise ValueError(f"length mismatch: {len(v)} vs {len(w)}")
+    return sum(a * b for a, b in zip(v, w))
+
+def norm(v):
+    return math.sqrt(dot(v, v))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m47-e2" data-title="cosine_similarity and most_similar">
+      <div class="exercise-prompt">
+        <p>Write <code>cosine_similarity(v, w)</code>. Raise <code>ValueError</code> if either vector has length zero.
+          Then write <code>most_similar(query, items)</code>, where <code>items</code> is a dict mapping names to vectors;
+          return the name whose vector has the highest cosine similarity to <code>query</code>.</p>
+      </div>
+<textarea class="starter">
+import math
+
+def cosine_similarity(v, w):
+    ...
+
+def most_similar(query, items):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_same_direction():
+    assert math.isclose(cosine_similarity([1, 2, 3], [2, 4, 6]), 1.0), "parallel vectors have similarity 1"
+
+def test_perpendicular():
+    assert math.isclose(cosine_similarity([1, 0], [0, 3]), 0.0, abs_tol=1e-12), "perpendicular vectors have similarity 0"
+
+def test_opposite():
+    assert math.isclose(cosine_similarity([1, 1], [-3, -3]), -1.0), "opposite vectors have similarity -1"
+
+def test_known_value():
+    assert math.isclose(cosine_similarity([3, 2], [1, 3]), 9 / (math.sqrt(13) * math.sqrt(10))), "check the formula dot / (|v| |w|)"
+
+def test_zero_vector():
+    try:
+        cosine_similarity([0, 0], [1, 2])
+    except ValueError:
+        return
+    raise AssertionError("a zero vector must raise ValueError")
+
+def test_most_similar():
+    items = {"sci-fi": [5, 0, 1], "romance": [0, 5, 1], "space-opera": [4, 1, 0]}
+    assert most_similar([10, 1, 1], items) in {"sci-fi", "space-opera"}, "should pick a sci-fi-like item"
+    assert most_similar([0, 9, 2], items) == "romance", "query [0, 9, 2] is closest in direction to romance"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Compute both norms first and check for zero. For
+        <code>most_similar</code>, use <code>max(items, key=lambda name: ...)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+
+def cosine_similarity(v, w):
+    nv = math.sqrt(sum(a * a for a in v))
+    nw = math.sqrt(sum(b * b for b in w))
+    if nv == 0 or nw == 0:
+        raise ValueError("cosine similarity is undefined for the zero vector")
+    return sum(a * b for a, b in zip(v, w, strict=True)) / (nv * nw)
+
+def most_similar(query, items):
+    return max(items, key=lambda name: cosine_similarity(query, items[name]))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m47-e3" data-title="transpose without zip">
+      <div class="exercise-prompt">
+        <p>Write <code>transpose(M)</code> for a list-of-lists matrix <strong>using nested loops or comprehensions with
+          indices</strong> (practice the index rule <code>T[j][i] = M[i][j]</code>). Return a new matrix; do not modify
+          <code>M</code>. The transpose of <code>[]</code> is <code>[]</code>. Also write <code>shape(M)</code> returning
+          <code>(rows, cols)</code>, with <code>shape([]) == (0, 0)</code>.</p>
+      </div>
+<textarea class="starter">
+def shape(M):
+    ...
+
+def transpose(M):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_shape():
+    assert shape([[1, 2, 3], [4, 5, 6]]) == (2, 3), "2 rows, 3 columns"
+    assert shape([]) == (0, 0), "empty matrix has shape (0, 0)"
+
+def test_transpose_rect():
+    assert transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]], "2x3 transposes to 3x2"
+
+def test_transpose_row():
+    assert transpose([[1, 2, 3]]) == [[1], [2], [3]], "a row vector becomes a column vector"
+
+def test_transpose_empty():
+    assert transpose([]) == [], "transpose([]) should be []"
+
+def test_involution():
+    M = [[1, 2], [3, 4], [5, 6]]
+    assert transpose(transpose(M)) == M, "transposing twice gives the original"
+
+def test_does_not_mutate():
+    M = [[1, 2], [3, 4]]
+    T = transpose(M)
+    T[0][0] = 99
+    assert M == [[1, 2], [3, 4]], "transpose must return a new matrix, not share rows with M"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>[[M[i][j] for i in range(rows)] for j in range(cols)]</code>:
+        the outer loop runs over the <em>columns</em> of <code>M</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def shape(M):
+    if not M:
+        return (0, 0)
+    return (len(M), len(M[0]))
+
+def transpose(M):
+    rows, cols = shape(M)
+    return [[M[i][j] for i in range(rows)] for j in range(cols)]</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m47-e4" data-title="matmul and identity">
+      <div class="exercise-prompt">
+        <p>Write <code>identity(n)</code> returning the <code>n × n</code> identity matrix (with independent rows), and
+          <code>matmul(A, B)</code> returning the product. Raise <code>ValueError</code> if the inner dimensions don't
+          match. Then write <code>matpow(A, k)</code> returning <code>A</code> multiplied by itself <code>k</code> times
+          (<code>k ≥ 0</code>; <code>matpow(A, 0)</code> is the identity).</p>
+      </div>
+<textarea class="starter">
+def identity(n):
+    ...
+
+def matmul(A, B):
+    ...
+
+def matpow(A, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def test_identity():
+    assert identity(3) == [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "identity(3) has ones on the diagonal"
+
+def test_identity_rows_independent():
+    I = identity(2)
+    I[0][1] = 5
+    assert I[1][1] == 1 and I[1][0] == 0, "rows of identity(n) must be separate lists"
+
+def test_matmul_square():
+    assert matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]]) == [[19, 22], [43, 50]], "[[1,2],[3,4]] @ [[5,6],[7,8]]"
+
+def test_matmul_rect():
+    assert matmul([[1, 2, 3]], [[1], [2], [3]]) == [[14]], "(1x3)(3x1) is a 1x1 dot product"
+    assert matmul([[1], [2]], [[3, 4]]) == [[3, 4], [6, 8]], "(2x1)(1x2) is a 2x2 outer product"
+
+def test_matmul_identity():
+    A = [[2, -1], [0, 3]]
+    assert matmul(A, identity(2)) == A and matmul(identity(2), A) == A, "I is the multiplicative identity"
+
+def test_matmul_mismatch():
+    try:
+        matmul([[1, 2]], [[1, 2]])
+    except ValueError:
+        return
+    raise AssertionError("(1x2)(1x2) has mismatched inner dimensions and must raise ValueError")
+
+def test_not_commutative():
+    A, B = [[1, 1], [0, 1]], [[1, 0], [1, 1]]
+    assert matmul(A, B) != matmul(B, A), "this pair should not commute"
+
+def test_matpow_fibonacci():
+    assert matpow([[1, 1], [1, 0]], 10) == [[89, 55], [55, 34]], "powers of [[1,1],[1,0]] contain Fibonacci numbers"
+    assert matpow([[2, 0], [0, 3]], 0) == [[1, 0], [0, 1]], "A**0 is the identity"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Output cell <code>(i, j)</code> is
+        <code>sum(A[i][k] * B[k][j] for k in range(n))</code>. For <code>matpow</code>, start from
+        <code>identity(len(A))</code> and multiply <code>k</code> times.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def identity(n):
+    return [[1 if i == j else 0 for j in range(n)] for i in range(n)]
+
+def matmul(A, B):
+    if len(A[0]) != len(B):
+        raise ValueError(f"inner dimensions differ: {len(A[0])} vs {len(B)}")
+    n, p = len(B), len(B[0])
+    return [[sum(A[i][k] * B[k][j] for k in range(n)) for j in range(p)] for i in range(len(A))]
+
+def matpow(A, k):
+    result = identity(len(A))
+    for _ in range(k):
+        result = matmul(result, A)
+    return result</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m47-e5" data-title="A Vector class with operator overloading">
+      <div class="exercise-prompt">
+        <p>Using the data model from <a href="m11-data-model.html">M11</a>, write an immutable <code>Vector</code> class:</p>
+        <ul>
+          <li><code>Vector(1, 2, 3)</code> stores the components as a tuple; <code>len(v)</code>, iteration, and
+            <code>v[i]</code> work.</li>
+          <li><code>v + w</code> and <code>v - w</code> are element-wise (raise <code>ValueError</code> on a dimension
+            mismatch).</li>
+          <li><code>v * 3</code> and <code>3 * v</code> scale; <code>v @ w</code> is the dot product.</li>
+          <li><code>abs(v)</code> is the length; <code>-v</code> negates.</li>
+          <li><code>==</code> compares components; vectors are hashable; <code>repr(Vector(1, 2))</code> is
+            <code>'Vector(1, 2)'</code>.</li>
+          <li><code>v * w</code> with two vectors must raise <code>TypeError</code> (return <code>NotImplemented</code>).</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import math
+
+class Vector:
+    def __init__(self, *components):
+        ...
+
+    def __repr__(self):
+        ...
+
+    # __len__, __iter__, __getitem__, __eq__, __hash__
+    # __add__, __sub__, __mul__, __rmul__, __matmul__, __abs__, __neg__
+</textarea>
+      <script type="text/x-python" class="tests">
+import math
+
+def test_basics():
+    v = Vector(1, 2, 3)
+    assert len(v) == 3, "len(Vector(1, 2, 3)) should be 3"
+    assert list(v) == [1, 2, 3], "iterating gives the components"
+    assert v[1] == 2, "v[1] should be 2"
+    assert repr(Vector(1, 2)) == "Vector(1, 2)", f"repr should be 'Vector(1, 2)', got {Vector(1, 2)!r}"
+
+def test_add_sub():
+    assert Vector(1, 2) + Vector(3, 4) == Vector(4, 6), "element-wise addition"
+    assert Vector(5, 5) - Vector(1, 2) == Vector(4, 3), "element-wise subtraction"
+
+def test_mismatch():
+    try:
+        Vector(1, 2) + Vector(1, 2, 3)
+    except ValueError:
+        return
+    raise AssertionError("adding vectors of different dimension must raise ValueError")
+
+def test_scalar_both_sides():
+    assert Vector(1, -2) * 3 == Vector(3, -6), "v * 3"
+    assert 3 * Vector(1, -2) == Vector(3, -6), "3 * v needs __rmul__"
+
+def test_dot_matmul():
+    assert Vector(3, 2) @ Vector(1, 3) == 9, "@ is the dot product"
+
+def test_abs_neg():
+    assert math.isclose(abs(Vector(3, 4)), 5.0), "abs(Vector(3, 4)) should be 5.0"
+    assert -Vector(1, -2) == Vector(-1, 2), "-v negates every component"
+
+def test_vector_times_vector():
+    try:
+        Vector(1, 2) * Vector(3, 4)
+    except TypeError:
+        return
+    raise AssertionError("Vector * Vector should raise TypeError (return NotImplemented from __mul__)")
+
+def test_hash_and_eq():
+    assert Vector(1, 2) == Vector(1, 2) and Vector(1, 2) != Vector(2, 1), "equality compares components"
+    assert len({Vector(1, 2), Vector(1, 2), Vector(0, 0)}) == 2, "equal vectors must hash equally"
+    assert (Vector(1, 2) == (1, 2)) is False, "a Vector is not equal to a plain tuple"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Store <code>self._c = tuple(components)</code>. In
+        <code>__mul__</code>, check <code>isinstance(other, (int, float))</code> and otherwise
+        <code>return NotImplemented</code>; set <code>__rmul__ = __mul__</code>. In <code>__eq__</code>, return
+        <code>NotImplemented</code> for non-Vectors.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import math
+from numbers import Real
+
+class Vector:
+    __slots__ = ("_c",)
+
+    def __init__(self, *components):
+        self._c = tuple(components)
+
+    def __repr__(self):
+        return f"Vector({', '.join(repr(c) for c in self._c)})"
+
+    def __len__(self):
+        return len(self._c)
+
+    def __iter__(self):
+        return iter(self._c)
+
+    def __getitem__(self, i):
+        return self._c[i]
+
+    def __eq__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        return self._c == other._c
+
+    def __hash__(self):
+        return hash(self._c)
+
+    def _check(self, other):
+        if len(self) != len(other):
+            raise ValueError(f"dimension mismatch: {len(self)} vs {len(other)}")
+
+    def __add__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return Vector(*(a + b for a, b in zip(self, other)))
+
+    def __sub__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return Vector(*(a - b for a, b in zip(self, other)))
+
+    def __mul__(self, scalar):
+        if not isinstance(scalar, Real):
+            return NotImplemented
+        return Vector(*(scalar * a for a in self))
+
+    __rmul__ = __mul__
+
+    def __matmul__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return sum(a * b for a, b in zip(self, other))
+
+    def __abs__(self):
+        return math.sqrt(self @ self)
+
+    def __neg__(self):
+        return self * -1</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a tiny 2-D transformation toolkit</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">transform2d: build, compose, and draw transformations</span></div>
+      <div class="widget-body">
+        <p>Build a small pure-Python module, <code>transform2d.py</code>, plus a script that draws its output with
+          matplotlib. You will reuse the ideas (and maybe the code) when you meet NumPy and computer graphics later.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init transform2d &amp;&amp; cd transform2d
+pixi add python=3.14 matplotlib pytest
+pixi run python demo.py          # writes shapes.png
+pixi run pytest -q</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li>Matrices are tuples of tuples (immutable). Provide <code>identity()</code>, <code>scale(sx, sy)</code>,
+            <code>rotate(degrees)</code>, <code>shear(kx, ky)</code>, <code>reflect(axis)</code> where
+            <code>axis</code> is <code>"x"</code>, <code>"y"</code>, or <code>"diag"</code>.</li>
+          <li><code>compose(*matrices)</code> returns one matrix equivalent to applying them <em>left to right</em>
+            (so <code>compose(R, S)</code> means "R first, then S", which is the product <code>S @ R</code>). Document
+            this choice clearly in the docstring.</li>
+          <li><code>apply(M, points)</code> transforms a list of <code>(x, y)</code> points.</li>
+          <li><code>area(points)</code> computes a polygon's area with the shoelace formula; use it to observe that
+            rotations and shears keep area, while <code>scale(sx, sy)</code> multiplies it by <code>sx · sy</code>.</li>
+          <li><code>demo.py</code> draws a unit square and an "F" shape after at least four transformations in a grid of
+            subplots, with titles, equal aspect ratio, and the original shape in light gray, then saves
+            <code>shapes.png</code> with <code>fig.savefig</code>.</li>
+        </ul>
+        <ul class="checklist" data-id="m47-mini">
+          <li>All matrix helpers return immutable tuples and have type hints and docstrings</li>
+          <li><code>compose(rotate(90), rotate(90))</code> equals <code>rotate(180)</code> within 1e-9 (a test checks this)</li>
+          <li>A test shows <code>compose(A, B) != compose(B, A)</code> for a rotation and a non-uniform scale</li>
+          <li>A test checks <code>area(apply(shear(1, 0), square)) == area(square)</code></li>
+          <li><code>demo.py</code> produces <code>shapes.png</code> with at least four labeled subplots</li>
+          <li><code>pixi run pytest</code> passes</li>
+        </ul>
+        <h3>Stretch goals</h3>
+        <ul>
+          <li>Support translation using 3 × 3 <em>homogeneous coordinates</em> (append a 1 to every point), the trick every
+            graphics engine uses so moves can be matrices too.</li>
+          <li>Animate a rotation from 0° to 360° with <code>matplotlib.animation.FuncAnimation</code>.</li>
+          <li>Reimplement <code>apply</code> with NumPy after <a href="m48-numpy.html">M48</a> and time both on a million
+            points.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m47-quiz">
+<script type="application/json">
+{"title": "Vectors & matrices quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "What is the length of the vector <code>(6, 8)</code>?", "options": ["14", "10", "48", "√14"], "answer": 1,
+   "explanation": "<p>By Pythagoras: √(6² + 8²) = √(36 + 64) = √100 = 10.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "v = [1, 2]\nw = [3, 4]\nprint(v + w)", "answer": "[1, 2, 3, 4]",
+   "explanation": "<p>On lists, <code>+</code> concatenates. Element-wise addition needs a comprehension with <code>zip</code> (or NumPy).</p>"},
+  {"type": "single", "prompt": "The dot product of two non-zero vectors is 0. What does that tell you?", "options": ["They are equal", "They point in opposite directions", "They are perpendicular", "One of them has length 1"], "answer": 2,
+   "explanation": "<p><code>v · w = |v||w| cos θ</code>. With non-zero lengths, the product is 0 only when cos θ = 0, i.e. θ = 90°.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "v = [2, -1, 3]\nw = [4, 5, -1]\nprint(sum(a * b for a, b in zip(v, w)))", "answer": "0",
+   "explanation": "<p>2·4 + (-1)·5 + 3·(-1) = 8 - 5 - 3 = 0. These vectors are perpendicular.</p>"},
+  {"type": "single", "prompt": "Why is cosine similarity preferred over the raw dot product for comparing documents of different lengths?", "options": ["It is faster to compute", "It ignores vector length and compares direction only", "It is always positive", "It works on vectors of different dimensions"], "answer": 1,
+   "explanation": "<p>Dividing by both lengths removes the effect of magnitude. A long and a short document on the same topic point the same way, so their cosine similarity is close to 1 even though their dot product with a query differs a lot.</p>"},
+  {"type": "single", "prompt": "<code>A</code> has shape 3 × 4 and <code>B</code> has shape 4 × 2. What is the shape of <code>A B</code>?", "options": ["3 × 2", "4 × 4", "2 × 3", "It is undefined"], "answer": 0,
+   "explanation": "<p>Inner dimensions (4 and 4) match and cancel; the outer ones remain: (3 × 4)(4 × 2) → 3 × 2. <code>B A</code> would be undefined (2 ≠ 3).</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "M = [[1, 2, 3], [4, 5, 6]]\nprint([list(c) for c in zip(*M)])", "answer": "[[1, 4], [2, 5], [3, 6]]",
+   "explanation": "<p><code>zip(*M)</code> groups first elements of each row, then second elements, and so on: the columns, which become rows of the transpose.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "g = [[0] * 2] * 2\ng[1][0] = 7\nprint(g)", "answer": "[[7, 0], [7, 0]]",
+   "explanation": "<p><code>[row] * 2</code> repeats a reference to the same inner list, so both rows are one object. Use <code>[[0] * 2 for _ in range(2)]</code>.</p>"},
+  {"type": "multi", "prompt": "Which statements about matrix multiplication are true in general?", "options": ["<code>AB = BA</code>", "<code>(AB)C = A(BC)</code>", "<code>AI = A</code>", "<code>(AB)ᵀ = AᵀBᵀ</code>", "<code>(AB)ᵀ = BᵀAᵀ</code>"], "answer": [1, 2, 4],
+   "explanation": "<p>Matrix multiplication is associative and has an identity, but is not commutative. The transpose of a product reverses the order: <code>(AB)ᵀ = BᵀAᵀ</code>.</p>"},
+  {"type": "single", "prompt": "Where does the matrix <code>[[0, -1], [1, 0]]</code> send the point <code>(1, 0)</code>?", "options": ["(0, -1)", "(0, 1)", "(-1, 0)", "(1, 0)"], "answer": 1,
+   "explanation": "<p>The first column of a matrix is the image of <code>(1, 0)</code>. Here that's <code>(0, 1)</code>: this matrix rotates the plane by 90° counter-clockwise.</p>"},
+  {"type": "single", "prompt": "Multiplying two n × n matrices with the textbook algorithm takes how many multiplications?", "options": ["n", "n²", "n³", "2ⁿ"], "answer": 2,
+   "explanation": "<p>There are n² output cells, and each is a length-n dot product: n · n² = n³. Doubling n multiplies the work by 8.</p>"},
+  {"type": "single", "prompt": "In row-major storage of a matrix with <code>cols</code> columns, at which flat index is element <code>(i, j)</code>?", "options": ["<code>j * rows + i</code>", "<code>i * cols + j</code>", "<code>i + j</code>", "<code>i * j</code>"], "answer": 1,
+   "explanation": "<p>Rows are stored one after another, so skip <code>i</code> whole rows (<code>i * cols</code> elements), then move <code>j</code> along the row. Column-major uses <code>j * rows + i</code>.</p>"},
+  {"type": "multi", "prompt": "Why is a pure-Python <code>matmul</code> much slower than NumPy's <code>@</code>?", "options": ["Each number is a separate heap object with type checks on every operation", "The interpreter dispatches bytecode for every multiply and add", "NumPy uses a better exponent than n³ for all sizes", "NumPy stores raw floats contiguously and runs compiled, vectorized, cache-aware loops"], "answer": [0, 1, 3],
+   "explanation": "<p>The speedup comes from removing interpreter and object overhead and from hardware-friendly compiled code (BLAS), not from a fundamentally different algorithm.</p>"},
+  {"type": "text", "prompt": "Which special method makes <code>3 * v</code> work when <code>v</code> is your <code>Vector</code> and <code>int.__mul__</code> returns <code>NotImplemented</code>? (method name only)", "answer": ["__rmul__", "rmul"],
+   "explanation": "<p>Python tries <code>int.__mul__(3, v)</code>, gets <code>NotImplemented</code>, then tries the reflected <code>v.__rmul__(3)</code>.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>A vector is an ordered list of numbers and an arrow. Add and scale component-wise; length is
+        <code>√(Σ vᵢ²)</code>.</li>
+      <li>The dot product <code>Σ vᵢwᵢ = |v||w|cos θ</code> measures agreement; cosine similarity is its length-free
+        version.</li>
+      <li>A matrix has shape (rows, cols). The transpose swaps rows and columns: <code>Aᵀ[j][i] = A[i][j]</code>.</li>
+      <li><code>(AB)[i][j]</code> is row i of A dotted with column j of B. Shapes chain as
+        <code>(m×n)(n×p) → (m×p)</code>. Multiplication is associative but not commutative, and costs O(n³).</li>
+      <li>A 2 × 2 matrix transforms the plane; its columns are where the basis vectors land; products compose
+        transformations right to left.</li>
+      <li>Memory is linear: row-major vs column-major order decides which loop order is cache friendly.</li>
+      <li>Pure Python pays object and interpreter overhead per number, which is why <a href="m48-numpy.html">NumPy</a> comes next.</li>
+    </ul>
+    <div class="flashcards" data-title="Vectors & matrices">
+<script type="application/json">
+[{"front": "Magnitude of <code>v</code>", "back": "<code>√(v₁² + v₂² + … + vₙ²)</code>, Pythagoras in n dimensions; equals <code>√(v · v)</code>."},
+ {"front": "Dot product, algebraically and geometrically", "back": "<code>Σ vᵢwᵢ</code> and <code>|v||w|cos θ</code>."},
+ {"front": "Cosine similarity", "back": "<code>v · w / (|v||w|)</code>: compares direction only, from -1 to 1."},
+ {"front": "Unit vector", "back": "A vector of length 1; obtained by dividing a non-zero vector by its length."},
+ {"front": "Shape rule for <code>A @ B</code>", "back": "<code>(m×n)(n×p) → (m×p)</code>; inner dimensions must match."},
+ {"front": "What are the columns of a 2×2 transformation matrix?", "back": "The images of <code>(1, 0)</code> and <code>(0, 1)</code>."},
+ {"front": "Rotation by θ", "back": "<code>[[cos θ, -sin θ], [sin θ, cos θ]]</code>"},
+ {"front": "Is <code>AB = BA</code>?", "back": "Not in general. Order matters; transformations compose right to left."},
+ {"front": "Transpose of a product", "back": "<code>(AB)ᵀ = BᵀAᵀ</code>"},
+ {"front": "Cost of naive n×n matmul", "back": "O(n³): n² cells × n multiply-adds each."},
+ {"front": "Row-major address of (i, j)", "back": "<code>i * cols + j</code> (C and NumPy default); column-major is <code>j * rows + i</code>."},
+ {"front": "Transpose idiom in pure Python", "back": "<code>[list(col) for col in zip(*M)]</code>"}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://www.3blue1brown.com/topics/linear-algebra">3Blue1Brown: Essence of Linear Algebra</a>, the best visual introduction to everything in this module</li>
+      <li><a href="https://docs.python.org/3/reference/datamodel.html#emulating-numeric-types">Python docs: emulating numeric types</a> (<code>__add__</code>, <code>__rmul__</code>, <code>__matmul__</code>)</li>
+      <li><a href="https://peps.python.org/pep-0465/">PEP 465</a>: why Python added the <code>@</code> operator</li>
+      <li><a href="https://docs.python.org/3/library/math.html#math.sumprod"><code>math.sumprod</code></a>, <a href="https://docs.python.org/3/library/math.html#math.hypot"><code>math.hypot</code></a>, and <a href="https://docs.python.org/3/library/math.html#math.dist"><code>math.dist</code></a></li>
+      <li>Next: <a href="m48-numpy.html">M48 · NumPy Fundamentals</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,1224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M49 · Linear Algebra with NumPy &amp; SciPy · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m49">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 7 · Scientific Computing &amp; Data Science · Module 49</p>
+    <h1>Linear Algebra with NumPy &amp; SciPy</h1>
+    <p class="lede">Solving equations, fitting lines to noisy data, compressing images, finding the main directions in a
+      dataset, and storing a social network with a billion links: all of these are the same handful of linear-algebra
+      ideas. This module builds each one from a picture, then hands the arithmetic to NumPy and SciPy.</p>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m47-vectors-matrices.html">M47</a>, <a href="m48-numpy.html">M48</a></span></div>
+    <ul class="objectives">
+      <li>Picture a system of linear equations as intersecting lines, write it as <code>Ax = b</code>, and solve it with <code>np.linalg.solve</code> (and say why not to invert)</li>
+      <li>Explain the determinant as an area scale factor and rank as "how many independent directions"</li>
+      <li>Compute L1, L2, and max norms and say when each is used</li>
+      <li>Project vectors, and fit a line to data with least squares (<code>np.linalg.lstsq</code>)</li>
+      <li>Find eigenvalues and eigenvectors and recognize them as directions a matrix only stretches</li>
+      <li>Use the SVD for low-rank approximation and implement PCA from scratch</li>
+      <li>Use <code>scipy.linalg</code> factorizations and <code>scipy.sparse</code> CSR/CSC/COO matrices, and explain why ML relies on sparsity</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="systems">
+    <h2>Systems of linear equations, as pictures</h2>
+    <p>A classic puzzle: "Two coffees and one muffin cost $7; one coffee and three muffins cost $11. What does each
+      cost?" Calling the coffee price <code>x</code> and the muffin price <code>y</code>:</p>
+    <pre><code class="language-python">2x +  y =  7
+ x + 3y = 11</code></pre>
+    <p>Each equation is a straight line in the (x, y) plane: all the price pairs that satisfy it. The answer is the point
+      that lies on <em>both</em> lines, where they cross. There are only three possible pictures for two lines:</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 170" role="img" aria-label="Three cases: lines cross at one point, lines are parallel, lines coincide">
+        <g transform="translate(10,10)">
+          <rect x="0" y="0" width="140" height="120" fill="var(--bg-sunk)" stroke="var(--border)"/>
+          <line x1="10" y1="110" x2="130" y2="10" stroke="var(--viz-1)" stroke-width="2.5"/>
+          <line x1="10" y1="30" x2="130" y2="100" stroke="var(--viz-2)" stroke-width="2.5"/>
+          <circle cx="67" cy="63" r="5" fill="var(--viz-3)"/>
+          <text x="70" y="145" text-anchor="middle" fill="var(--fg)" font-size="12">one solution</text>
+          <text x="70" y="160" text-anchor="middle" fill="var(--fg-muted)" font-size="11">det ≠ 0, rank 2</text>
+        </g>
+        <g transform="translate(160,10)">
+          <rect x="0" y="0" width="140" height="120" fill="var(--bg-sunk)" stroke="var(--border)"/>
+          <line x1="10" y1="90" x2="130" y2="30" stroke="var(--viz-1)" stroke-width="2.5"/>
+          <line x1="10" y1="110" x2="130" y2="50" stroke="var(--viz-2)" stroke-width="2.5"/>
+          <text x="70" y="145" text-anchor="middle" fill="var(--fg)" font-size="12">no solution</text>
+          <text x="70" y="160" text-anchor="middle" fill="var(--fg-muted)" font-size="11">parallel: det = 0</text>
+        </g>
+        <g transform="translate(310,10)">
+          <rect x="0" y="0" width="140" height="120" fill="var(--bg-sunk)" stroke="var(--border)"/>
+          <line x1="10" y1="100" x2="130" y2="20" stroke="var(--viz-1)" stroke-width="5"/>
+          <line x1="10" y1="100" x2="130" y2="20" stroke="var(--viz-2)" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="70" y="145" text-anchor="middle" fill="var(--fg)" font-size="12">infinitely many</text>
+          <text x="70" y="160" text-anchor="middle" fill="var(--fg-muted)" font-size="11">same line: det = 0</text>
+        </g>
+      </svg>
+      <figcaption>Two equations in two unknowns: the lines cross once, never, or everywhere. With three unknowns, each equation is a plane, and the same three cases apply.</figcaption>
+    </figure>
+    <p>Stack the coefficients into a matrix and the unknowns into a vector, and the whole system becomes one matrix-vector
+      equation, using the multiplication from <a href="m47-vectors-matrices.html">M47</a>:</p>
+    <pre><code class="language-python">A = [[2, 1],     x = [x,     b = [ 7,        A @ x == b
+     [1, 3]]          y]          11]</code></pre>
+    <p>There's also a column picture: <code>A x = x·(2, 1) + y·(1, 3)</code>, so solving means "find how much of each
+      column to mix to reach <code>b</code>". That reading is the one that generalizes to least squares later.</p>
+    <p>Step through a matrix product below to refresh the "row dot column" rule that <code>A @ x</code> uses.</p>
+    <div class="viz" data-viz="matrix" data-config='{"op": "matmul"}'></div>
+    <aside class="callout note"><p>The first <code>import numpy</code> or <code>import scipy</code> in a browser cell
+      downloads the package, which takes a few seconds (SciPy is the larger one). Later cells are fast.</p></aside>
+    <div class="runnable" data-title="Solve and plot a 2 × 2 system">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+A = np.array([[2.0, 1.0], [1.0, 3.0]])
+b = np.array([7.0, 11.0])
+x = np.linalg.solve(A, b)
+print("coffee, muffin =", x)
+print("check A @ x == b:", np.allclose(A @ x, b))
+
+xs = np.linspace(0, 6, 50)
+fig, ax = plt.subplots(figsize=(5, 4))
+ax.plot(xs, 7 - 2 * xs, label="2x + y = 7")
+ax.plot(xs, (11 - xs) / 3, label="x + 3y = 11")
+ax.plot(*x, "o", ms=9, label=f"solution {tuple(x.round(2))}")
+ax.set_xlim(0, 6); ax.set_ylim(0, 6); ax.set_xlabel("x (coffee $)"); ax.set_ylabel("y (muffin $)")
+ax.grid(alpha=0.3); ax.legend()
+fig.tight_layout()
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> each linear equation is a line (or plane); the solution is where they all meet;
+      <code>A x = b</code> packages the whole system.</p>
+  </section>
+
+  <section class="lesson-section" id="solve-vs-inverse">
+    <h2>solve, not inverse</h2>
+    <p>For numbers, you solve <code>3x = 12</code> by dividing: <code>x = 12 / 3</code>. Matrices have an analogue of
+      "divide by": the <strong>inverse</strong> <code>A⁻¹</code>, the matrix that undoes <code>A</code>
+      (<code>A⁻¹A = I</code>). Then <code>x = A⁻¹ b</code>. Textbooks write that; working code almost never computes
+      it. Use <code>np.linalg.solve(A, b)</code> instead, for three reasons:</p>
+    <ul>
+      <li><strong>Speed</strong>: <code>solve</code> uses <em>Gaussian elimination</em> (the "subtract a multiple of one
+        equation from another" method you may have done by hand), packaged as an LU factorization. Computing the full
+        inverse does about three times as much work, then you still multiply.</li>
+      <li><strong>Accuracy</strong>: every extra floating-point operation adds rounding error. <code>solve</code>
+        typically gives a smaller <em>residual</em> <code>|A x - b|</code>, and the difference becomes dramatic for
+        nearly-singular matrices.</li>
+      <li><strong>Structure</strong>: the inverse of a sparse matrix is usually dense, which can turn megabytes into
+        terabytes.</li>
+    </ul>
+    <p>The <strong>condition number</strong> <code>np.linalg.cond(A)</code> measures how sensitive the answer is to tiny
+      changes in <code>A</code> or <code>b</code>. Roughly, you lose about <code>log10(cond)</code> of your ~16 significant
+      digits. A condition number of 10¹² leaves about 4 trustworthy digits, whichever method you use.</p>
+    <div class="runnable" data-title="solve vs inv on a badly conditioned matrix">
+<textarea>
+import numpy as np
+from scipy.linalg import hilbert
+
+for n in (4, 8, 12):
+    A = hilbert(n)                     # famously ill-conditioned: A[i, j] = 1 / (i + j + 1)
+    x_true = np.ones(n)
+    b = A @ x_true
+    x_solve = np.linalg.solve(A, b)
+    x_inv = np.linalg.inv(A) @ b
+    print(f"n={n:2}  cond={np.linalg.cond(A):9.1e}  "
+          f"residual solve={np.linalg.norm(A @ x_solve - b):.1e}  inv={np.linalg.norm(A @ x_inv - b):.1e}  "
+          f"error solve={np.linalg.norm(x_solve - x_true):.1e}")
+
+try:
+    np.linalg.solve(np.array([[1.0, 2.0], [2.0, 4.0]]), np.array([3.0, 6.0]))
+except np.linalg.LinAlgError as e:
+    print("LinAlgError:", e)
+</textarea>
+    </div>
+    <aside class="callout pro"><p>If you must solve with the same <code>A</code> for many right-hand sides, factor once
+      and reuse: pass a 2-D <code>b</code> (one column per right-hand side) to <code>solve</code>, or use
+      <code>scipy.linalg.lu_factor</code> then <code>lu_solve</code> (shown later).</p></aside>
+    <p><strong>Remember:</strong> <code>x = np.linalg.solve(A, b)</code>. Treat <code>inv</code> as a code smell, and
+      check <code>cond</code> when results look odd.</p>
+  </section>
+
+  <section class="lesson-section" id="determinant-rank">
+    <h2>Determinant and rank: does the matrix squash space?</h2>
+    <p>Recall from M47 that a 2 × 2 matrix transforms the plane, sending the unit square (area 1) to a parallelogram
+      whose sides are the matrix's columns. The <strong>determinant</strong> <code>det(A)</code> is the area of that
+      parallelogram: <em>the factor by which the transformation scales areas</em>. For
+      <code>[[a, b], [c, d]]</code> it is <code>ad - bc</code>. (In 3-D it scales volumes.)</p>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 460 180" role="img" aria-label="Determinant as area: det 6, det 1 for a shear, det 0 when collapsed to a line">
+        <g transform="translate(20,150)">
+          <polygon points="0,0 90,0 90,-60 0,-60" fill="var(--viz-1)" fill-opacity="0.3" stroke="var(--viz-1)" stroke-width="2"/>
+          <text x="45" y="-25" text-anchor="middle" fill="var(--fg)" font-size="13">area 6</text>
+          <text x="45" y="20" text-anchor="middle" fill="var(--fg)" font-size="12">[[3, 0], [0, 2]]</text>
+          <text x="45" y="-70" text-anchor="middle" fill="var(--fg-muted)" font-size="11">det = 3·2 − 0 = 6</text>
+        </g>
+        <g transform="translate(170,150)">
+          <polygon points="0,0 50,0 100,-50 50,-50" fill="var(--viz-2)" fill-opacity="0.3" stroke="var(--viz-2)" stroke-width="2"/>
+          <text x="50" y="-20" text-anchor="middle" fill="var(--fg)" font-size="13">area 1</text>
+          <text x="50" y="20" text-anchor="middle" fill="var(--fg)" font-size="12">shear [[1, 1], [0, 1]]</text>
+          <text x="50" y="-62" text-anchor="middle" fill="var(--fg-muted)" font-size="11">det = 1</text>
+        </g>
+        <g transform="translate(320,150)">
+          <line x1="0" y1="0" x2="110" y2="-110" stroke="var(--viz-3)" stroke-width="4"/>
+          <text x="70" y="-30" fill="var(--fg)" font-size="13">area 0</text>
+          <text x="50" y="20" text-anchor="middle" fill="var(--fg)" font-size="12">[[1, 2], [1, 2]]</text>
+          <text x="40" y="-90" text-anchor="end" fill="var(--fg-muted)" font-size="11">det = 1·2 − 2·1 = 0</text>
+        </g>
+      </svg>
+      <figcaption>The determinant is the signed area of the image of the unit square. Zero means the plane was flattened onto a line: information is lost and the matrix has no inverse.</figcaption>
+    </figure>
+    <ul>
+      <li><code>|det| &gt; 1</code> expands areas; <code>|det| &lt; 1</code> shrinks them; rotations and shears have
+        <code>det = 1</code>.</li>
+      <li>A <strong>negative</strong> determinant means the transformation also flips orientation (a mirror image, like
+        the reflected "F" in M47).</li>
+      <li><code>det = 0</code> means the matrix squashes the plane onto a line (or a point). Many different inputs land
+        on the same output, so you can't undo it: the matrix is <strong>singular</strong> (not invertible), and
+        <code>A x = b</code> has either no solution or infinitely many. These are the parallel and same-line pictures
+        above.</li>
+    </ul>
+    <p><strong>Rank</strong> is the number of genuinely independent directions the output fills: the dimension of the
+      space you can reach. A 3 × 3 matrix with rank 3 fills all of space; rank 2 flattens it to a plane; rank 1 to a line.
+      Equivalently, it's the number of linearly independent columns (columns that can't be made by mixing the others).
+      Rank is the honest version of "is it singular?", because <code>np.linalg.matrix_rank</code> uses a tolerance, while
+      a determinant can be tiny for perfectly healthy matrices (<code>det(0.1 · I₁₀₀) = 10⁻¹⁰⁰</code>).</p>
+    <div class="runnable" data-title="Determinants and ranks">
+<textarea>
+import numpy as np
+
+mats = {
+    "scale 3,2": np.array([[3.0, 0], [0, 2]]),
+    "shear": np.array([[1.0, 1], [0, 1]]),
+    "reflect": np.array([[1.0, 0], [0, -1]]),
+    "collapse": np.array([[1.0, 2], [1, 2]]),
+}
+for name, A in mats.items():
+    print(f"{name:10} det={np.linalg.det(A):6.2f}  rank={np.linalg.matrix_rank(A)}")
+
+B = np.array([[1.0, 2, 3], [4, 5, 6], [7, 8, 9]])     # row 3 = 2*row2 - row1
+print("3x3 det (should be 0, rounding!):", np.linalg.det(B))
+print("rank:", np.linalg.matrix_rank(B))
+print("det(0.1 * I_100) =", np.linalg.det(0.1 * np.eye(100)), " but rank =", np.linalg.matrix_rank(0.1 * np.eye(100)))
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: area scaling" data-predict>
+<textarea>
+import numpy as np
+A = np.array([[2.0, 0.0], [0.0, 3.0]])
+B = np.array([[0.0, 1.0], [1.0, 0.0]])
+print(round(np.linalg.det(A @ B), 6))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> det = area (volume) scale factor, sign = orientation flip, zero = squashed and
+      non-invertible. Rank counts independent directions; prefer it to "det == 0" tests.</p>
+  </section>
+
+  <section class="lesson-section" id="norms">
+    <h2>Norms: different ways to measure size</h2>
+    <p>M47's length <code>√(Σ xᵢ²)</code> is one way to measure a vector's size. A <strong>norm</strong> is any such size
+      measure that behaves sensibly (zero only for the zero vector, scales with the vector, and obeys the triangle
+      inequality <code>|v + w| ≤ |v| + |w|</code>). Three norms do most of the work:</p>
+    <div class="card-grid">
+      <div class="card"><h4>L2 (Euclidean)</h4><p><code>√(Σ xᵢ²)</code>. Straight-line distance. The default in
+        <code>np.linalg.norm</code>. Used for least squares and most geometry.</p></div>
+      <div class="card"><h4>L1 (Manhattan)</h4><p><code>Σ |xᵢ|</code>. Distance walking along city blocks. Less sensitive
+        to outliers; L1 penalties (lasso) push model weights to exactly zero.</p></div>
+      <div class="card"><h4>L∞ (max)</h4><p><code>max |xᵢ|</code>. The worst single component. Used for tolerances
+        ("no reading is off by more than 0.01").</p></div>
+    </div>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 420 170" role="img" aria-label="Unit balls of L1 (diamond), L2 (circle), and L-infinity (square)">
+        <g transform="translate(210,85)">
+          <line x1="-120" y1="0" x2="120" y2="0" stroke="var(--fg-muted)"/><line x1="0" y1="-80" x2="0" y2="80" stroke="var(--fg-muted)"/>
+          <rect x="-60" y="-60" width="120" height="120" fill="none" stroke="var(--viz-3)" stroke-width="2.5"/>
+          <circle cx="0" cy="0" r="60" fill="none" stroke="var(--viz-2)" stroke-width="2.5"/>
+          <polygon points="60,0 0,-60 -60,0 0,60" fill="none" stroke="var(--viz-1)" stroke-width="2.5"/>
+          <text x="66" y="-64" fill="var(--viz-3)" font-size="12">L∞ = 1 (square)</text>
+          <text x="48" y="-34" fill="var(--viz-2)" font-size="12">L2 = 1 (circle)</text>
+          <text x="10" y="26" fill="var(--viz-1)" font-size="12">L1 = 1 (diamond)</text>
+        </g>
+      </svg>
+      <figcaption>All the points at distance 1 from the origin, under each norm. Same idea, different shape of "nearby".</figcaption>
+    </figure>
+    <div class="runnable" data-title="np.linalg.norm with ord">
+<textarea>
+import numpy as np
+
+v = np.array([3.0, -4.0, 1.0])
+print("L2:", np.linalg.norm(v), " L1:", np.linalg.norm(v, ord=1), " Linf:", np.linalg.norm(v, ord=np.inf))
+
+errors = np.array([[0.1, -0.2, 0.05], [0.0, 3.0, -0.1]])     # one row has an outlier
+print("per-row L2 :", np.linalg.norm(errors, axis=1).round(3))
+print("per-row Linf:", np.linalg.norm(errors, ord=np.inf, axis=1))
+
+A = np.array([[1.0, 2], [3, 4]])
+print("Frobenius (matrix L2 of all entries):", np.linalg.norm(A).round(4))
+print("spectral (max stretch):", np.linalg.norm(A, ord=2).round(4))
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> L2 for distance, L1 for robustness and sparsity, L∞ for worst-case error.</p>
+  </section>
+
+  <section class="lesson-section" id="least-squares">
+    <h2>Projections and least squares</h2>
+    <h3>Projection: the closest point on a line</h3>
+    <p>In M47 you saw the "shadow" of <code>w</code> on <code>v</code>. The shadow, as a vector, is the
+      <strong>projection</strong> of <code>w</code> onto the line through <code>v</code>:</p>
+    <pre><code class="language-python">proj = (w @ v) / (v @ v) * v          # a multiple of v
+residual = w - proj                   # what's left over; perpendicular to v</code></pre>
+    <p>The projection is the point on the line <em>closest</em> to <code>w</code>, and the leftover (residual) is
+      perpendicular to the line. "Closest point = drop a perpendicular" is the key geometric fact behind least squares.</p>
+    <h3>Least squares: when there are more equations than unknowns</h3>
+    <p>Suppose you measured study hours and exam scores for 30 students and want a line <code>score ≈ m·hours + c</code>.
+      That's 30 equations (one per student) but only 2 unknowns (<code>m</code> and <code>c</code>). Real data is noisy,
+      so no line passes through every point: the system is <strong>overdetermined</strong> and has no exact solution.
+      Least squares picks the line that minimizes the sum of squared vertical errors <code>Σ (yᵢ - (m xᵢ + c))²</code>.</p>
+    <p>In matrix form, the design matrix <code>X</code> has a column of x-values and a column of 1s, and we want
+      <code>X @ [m, c] ≈ y</code>. Geometrically, the columns of <code>X</code> span a flat plane inside 30-dimensional
+      space; <code>y</code> sticks out of it; the best fit is the <em>projection</em> of <code>y</code> onto that plane.
+      <code>np.linalg.lstsq(X, y)</code> computes it stably (via the SVD, below). You may see the "normal equations"
+      <code>(XᵀX) β = Xᵀy</code> in textbooks; they give the same answer but square the condition number, so prefer
+      <code>lstsq</code>.</p>
+    <div class="runnable" data-title="Fit a line with lstsq">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(4)
+hours = rng.uniform(0, 10, 30)
+score = 52 + 4.5 * hours + rng.normal(0, 5, 30)
+
+X = np.column_stack([hours, np.ones_like(hours)])     # (30, 2)
+(m, c), residual_ss, rank, sv = np.linalg.lstsq(X, score, rcond=None)
+print(f"score ≈ {m:.2f} * hours + {c:.2f}   (true: 4.5, 52)")
+print("rank:", rank, " sum of squared residuals:", residual_ss.round(1))
+
+fitted = X @ np.array([m, c])
+print("residuals ⟂ columns of X:", np.allclose(X.T @ (score - fitted), 0, atol=1e-8))
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.scatter(hours, score, label="students")
+xx = np.linspace(0, 10, 2)
+ax.plot(xx, m * xx + c, color="C1", lw=2, label="least-squares line")
+ax.vlines(hours, fitted, score, color="gray", alpha=0.5, lw=1, label="residuals")
+ax.set_xlabel("study hours"); ax.set_ylabel("exam score"); ax.legend(); ax.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <div class="runnable" data-title="Predict: projection" data-predict>
+<textarea>
+import numpy as np
+v = np.array([1.0, 0.0])
+w = np.array([3.0, 4.0])
+proj = (w @ v) / (v @ v) * v
+print(proj, w - proj)
+</textarea>
+    </div>
+    <aside class="callout tip"><p>Least squares fits more than lines. Any model that is linear in its unknown
+      coefficients works: add a column of <code>hours**2</code> for a parabola, or columns of <code>sin</code> and
+      <code>cos</code> for a seasonal pattern. The machine-learning version is linear regression in
+      <a href="m55-ml-foundations.html">M55</a>.</p></aside>
+    <p><strong>Remember:</strong> projection = closest point, residual is perpendicular. Least squares projects
+      <code>y</code> onto the column space of <code>X</code>; use <code>np.linalg.lstsq</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="eigen">
+    <h2>Eigenvalues and eigenvectors: directions that only stretch</h2>
+    <p>Apply a matrix to most vectors and they change direction. But some special directions are only stretched (or
+      shrunk, or flipped): the output points along the same line as the input. Those are <strong>eigenvectors</strong>
+      ("eigen" is German for "own" or "characteristic"), and the stretch factor is the <strong>eigenvalue</strong>
+      <code>λ</code>:</p>
+    <pre><code class="language-python">A @ v == λ * v        # v is an eigenvector, λ its eigenvalue</code></pre>
+    <p>For <code>A = [[2, 1], [1, 2]]</code>, the direction <code>(1, 1)</code> is stretched by 3, and
+      <code>(1, -1)</code> is left alone (stretch 1). Every other direction gets pulled toward <code>(1, 1)</code>, the
+      direction with the largest eigenvalue. The plot below shows it: gray arrows are unit vectors, colored arrows are
+      where <code>A</code> sends them, and the eigen-directions are the only ones that don't turn.</p>
+    <div class="runnable" data-title="See the eigenvectors">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+A = np.array([[2.0, 1.0], [1.0, 2.0]])
+vals, vecs = np.linalg.eig(A)
+# eig may return complex dtype in general; this matrix's eigenvalues are real, so drop the 0j parts
+vals, vecs = vals.real, vecs.real
+print("eigenvalues:", vals)
+print("eigenvectors (columns):\n", vecs.round(3))
+for lam, v in zip(vals, vecs.T):
+    print(f"A @ v = {A @ v}   λ v = {lam * v}")
+
+angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+U = np.vstack([np.cos(angles), np.sin(angles)])      # (2, 24) unit vectors
+AU = A @ U
+fig, ax = plt.subplots(figsize=(5.5, 5.5))
+ax.quiver(np.zeros(24), np.zeros(24), U[0], U[1], angles="xy", scale_units="xy", scale=1, color="lightgray", width=0.004)
+ax.quiver(np.zeros(24), np.zeros(24), AU[0], AU[1], angles="xy", scale_units="xy", scale=1, color="C0", alpha=0.5, width=0.004)
+for lam, v, col in zip(vals, vecs.T, ["C1", "C3"]):
+    ax.quiver(0, 0, *(lam * v), angles="xy", scale_units="xy", scale=1, color=col, width=0.012, label=f"λ={lam:.0f} along {v.round(2)}")
+    ax.axline((0, 0), tuple(v), color=col, ls="--", lw=1)
+ax.set_xlim(-3.5, 3.5); ax.set_ylim(-3.5, 3.5); ax.set_aspect("equal"); ax.grid(alpha=0.3); ax.legend(loc="lower right")
+fig.tight_layout()
+</textarea>
+    </div>
+    <p>Why care? Eigenvectors reveal what a matrix "does" in its most natural coordinates:</p>
+    <ul>
+      <li><strong>Repeated application</strong>: applying <code>A</code> many times makes the largest-eigenvalue
+        direction dominate. That's <em>power iteration</em>, and it's how PageRank ranks web pages.</li>
+      <li><strong>Stability</strong>: in a system that evolves by <code>xₙ₊₁ = A xₙ</code>, eigenvalues with
+        <code>|λ| &gt; 1</code> mean something blows up; all <code>|λ| &lt; 1</code> means it settles down.</li>
+      <li><strong>Data</strong>: the eigenvectors of a covariance matrix are the principal directions of the data (PCA,
+        below).</li>
+    </ul>
+    <p>For <strong>symmetric</strong> matrices (<code>A == A.T</code>, like covariance matrices), the eigenvalues are real
+      and the eigenvectors are perpendicular. Use <code>np.linalg.eigh</code> for them: it is faster, more accurate, and
+      returns eigenvalues sorted ascending. A general matrix can have complex eigenvalues: a rotation, for example, turns
+      <em>every</em> direction, so it has no real eigenvectors.</p>
+    <div class="runnable" data-title="Power iteration finds the dominant eigenvector">
+<textarea>
+import numpy as np
+
+A = np.array([[2.0, 1.0], [1.0, 2.0]])
+v = np.array([1.0, 0.0])
+for step in range(1, 9):
+    v = A @ v
+    v = v / np.linalg.norm(v)
+    print(step, v.round(5), " Rayleigh quotient λ ≈", round(v @ A @ v, 5))
+
+vals, vecs = np.linalg.eigh(A)
+print("eigh (ascending):", vals)
+print("rotation's eigenvalues are complex:", np.linalg.eigvals(np.array([[0.0, -1.0], [1.0, 0.0]])))
+</textarea>
+    </div>
+    <aside class="callout warn"><p>An eigenvector is only defined up to scale and sign: if <code>v</code> is one, so is
+      <code>-v</code> or <code>5v</code>. NumPy returns unit-length eigenvectors, but the sign may differ between
+      machines or versions. Never test eigenvectors with exact equality; test <code>A @ v ≈ λ v</code>.</p></aside>
+    <p><strong>Remember:</strong> <code>A v = λ v</code>: eigenvectors keep their direction, eigenvalues are the stretch.
+      Use <code>eigh</code> for symmetric matrices.</p>
+  </section>
+
+  <section class="lesson-section" id="svd">
+    <h2>The SVD and low-rank approximation</h2>
+    <p>Eigenvectors only work for square matrices, and not even all of those. The <strong>singular value
+      decomposition</strong> (SVD) works for <em>every</em> matrix, any shape. It says that any linear transformation is,
+      in the right coordinates, just three simple steps:</p>
+    <pre><code class="language-python">A = U @ diag(s) @ Vt
+#   rotate  ·  stretch along axes  ·  rotate
+#   U, Vt: orthogonal (pure rotations/reflections)   s: singular values, s[0] ≥ s[1] ≥ … ≥ 0</code></pre>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 470 140" role="img" aria-label="SVD: a circle is rotated, stretched into an ellipse, then rotated">
+        <g transform="translate(55,70)"><circle r="40" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--viz-1)" stroke-width="2"/><line x1="0" y1="0" x2="40" y2="0" stroke="var(--viz-2)" stroke-width="2.5"/><line x1="0" y1="0" x2="0" y2="-40" stroke="var(--viz-3)" stroke-width="2.5"/></g>
+        <text x="120" y="74" fill="var(--fg)" font-size="12">Vᵀ →</text>
+        <g transform="translate(195,70)"><circle r="40" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--viz-1)" stroke-width="2"/><line x1="0" y1="0" x2="28" y2="-28" stroke="var(--viz-2)" stroke-width="2.5"/><line x1="0" y1="0" x2="-28" y2="-28" stroke="var(--viz-3)" stroke-width="2.5"/></g>
+        <text x="250" y="74" fill="var(--fg)" font-size="12">diag(s) →</text>
+        <g transform="translate(355,70)"><ellipse rx="60" ry="20" fill="var(--viz-1)" fill-opacity="0.2" stroke="var(--viz-1)" stroke-width="2" transform="rotate(-30)"/><line x1="0" y1="0" x2="52" y2="-30" stroke="var(--viz-2)" stroke-width="2.5"/><line x1="0" y1="0" x2="-10" y2="-17" stroke="var(--viz-3)" stroke-width="2.5"/></g>
+        <text x="300" y="130" fill="var(--fg-muted)" font-size="11">then U rotates: circle → tilted ellipse</text>
+        <text x="20" y="130" fill="var(--fg-muted)" font-size="11">unit circle</text>
+        <text x="425" y="40" fill="var(--fg-muted)" font-size="11">s₀</text>
+      </svg>
+      <figcaption>Every matrix turns the unit circle into an ellipse. The singular values are the ellipse's semi-axis lengths; <code>U</code> and <code>Vᵀ</code> are the rotations.</figcaption>
+    </figure>
+    <p>The SVD can also be read as a sum of simple pieces: <code>A = s₀ u₀ v₀ᵀ + s₁ u₁ v₁ᵀ + …</code>, where each
+      <code>uᵢ vᵢᵀ</code> is a rank-1 matrix (an outer product, as in M47). The pieces are ordered by importance. Keeping only
+      the first <code>k</code> gives the <strong>best possible rank-k approximation</strong> of <code>A</code> (the
+      Eckart–Young theorem): no other rank-k matrix is closer. That is the idea behind image compression, noise removal,
+      recommender systems, and PCA.</p>
+    <p>Storage tells the story. An <code>m × n</code> image needs <code>m·n</code> numbers; a rank-k approximation needs
+      only <code>k·(m + n + 1)</code>. For a 200 × 300 image and <code>k = 20</code>, that's 60,000 vs 10,020: about 6×
+      smaller.</p>
+    <div class="runnable" data-title="SVD image compression">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+h, w = 200, 300
+yy, xx = np.mgrid[0:h, 0:w] / np.array([h, w])[:, None, None]
+img = 0.5 + 0.3 * np.sin(6 * xx) * np.cos(4 * yy)                      # smooth background
+img += 0.4 * (((xx - 0.3) ** 2 + (yy - 0.5) ** 2) < 0.04)             # a disc
+img[60:140, 180:270] = 0.15                                            # a dark rectangle
+img += np.random.default_rng(0).normal(0, 0.03, img.shape)            # a little noise
+
+U, s, Vt = np.linalg.svd(img, full_matrices=False)
+print("shapes:", U.shape, s.shape, Vt.shape, " top singular values:", s[:5].round(1))
+
+def rank_k(k):
+    return (U[:, :k] * s[:k]) @ Vt[:k]
+
+fig, axes = plt.subplots(2, 3, figsize=(11, 6))
+for ax, k in zip(axes.flat[:5], [1, 5, 20, 50, 200]):
+    approx = rank_k(k)
+    err = np.linalg.norm(img - approx) / np.linalg.norm(img)
+    ax.imshow(approx, cmap="gray", vmin=0, vmax=1)
+    ax.set_title(f"k={k}  size {k * (h + w + 1) / (h * w):.0%}  err {err:.1%}", fontsize=9)
+    ax.axis("off")
+axes.flat[5].semilogy(s, ".-"); axes.flat[5].set_title("singular values (log scale)", fontsize=9)
+axes.flat[5].grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <p>The singular-value plot is the diagnostic: a few big values followed by a long flat tail means the image (or
+      dataset) is "really" low-rank plus noise. Cutting the tail compresses <em>and</em> denoises.</p>
+    <p><strong>Remember:</strong> <code>A = U diag(s) Vᵀ</code> for any matrix: rotate, stretch, rotate. Truncating to the
+      top <code>k</code> singular values gives the best rank-k approximation.</p>
+  </section>
+
+  <section class="lesson-section" id="pca">
+    <h2>PCA from scratch via the SVD</h2>
+    <p><strong>Principal component analysis</strong> finds the directions along which data varies the most. Picture a
+      cloud of points shaped like a tilted cigar: the first principal component points along the cigar, the second across
+      it. Projecting onto the first few components keeps most of the information with fewer numbers, which is useful for
+      visualization (squash 50 features into a 2-D scatter plot), compression, and speeding up models.</p>
+    <p>The recipe, with data <code>X</code> of shape <code>(n_samples, n_features)</code>:</p>
+    <ol>
+      <li><strong>Center</strong>: subtract each column's mean, so the cloud sits at the origin
+        (broadcasting from M48).</li>
+      <li><strong>SVD</strong>: <code>U, s, Vt = np.linalg.svd(Xc, full_matrices=False)</code>. The rows of
+        <code>Vt</code> are the principal directions, already sorted by importance.</li>
+      <li><strong>Variance explained</strong>: the variance along component <code>i</code> is
+        <code>s[i]**2 / (n - 1)</code>; divide by the total for the <em>explained variance ratio</em>.</li>
+      <li><strong>Project</strong>: <code>Z = Xc @ Vt[:k].T</code> gives the new k-dimensional coordinates.
+        <strong>Reconstruct</strong> approximately with <code>Z @ Vt[:k] + mean</code>.</li>
+    </ol>
+    <p>(Equivalently, the principal directions are the eigenvectors of the covariance matrix
+      <code>XcᵀXc / (n - 1)</code>; the SVD gets them without forming that matrix, which is more accurate.)</p>
+    <div class="runnable" data-title="PCA on a 2-D dataset">
+<textarea>
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(1)
+n = 300
+t = rng.normal(0, 3, n)
+X = np.column_stack([t + rng.normal(0, 0.8, n), 0.6 * t + rng.normal(0, 0.8, n)]) + [5, 2]
+
+mean = X.mean(axis=0)
+Xc = X - mean
+U, s, Vt = np.linalg.svd(Xc, full_matrices=False)
+var = s ** 2 / (n - 1)
+print("principal directions (rows):\n", Vt.round(3))
+print("explained variance ratio:", (var / var.sum()).round(3))
+print("matches covariance eigenvalues:", np.allclose(np.sort(var), np.linalg.eigvalsh(np.cov(X, rowvar=False))))
+
+Z = Xc @ Vt[:1].T                      # 1-D coordinates
+X1 = Z @ Vt[:1] + mean                 # back in 2-D, on the PC1 line
+
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.5))
+a1.scatter(*X.T, s=8, alpha=0.5)
+for i in range(2):
+    a1.annotate("", xy=mean + 2 * np.sqrt(var[i]) * Vt[i], xytext=mean,
+                arrowprops=dict(arrowstyle="->", lw=2.5, color=f"C{i + 1}"))
+a1.scatter(*X1.T, s=4, color="C1", alpha=0.6, label="projected onto PC1")
+a1.set_aspect("equal"); a1.set_title("data with principal axes"); a1.legend(); a1.grid(alpha=0.3)
+a2.scatter(Xc @ Vt[0], Xc @ Vt[1], s=8, alpha=0.5)
+a2.set_aspect("equal"); a2.set_title("same data in PC coordinates"); a2.set_xlabel("PC1"); a2.set_ylabel("PC2"); a2.grid(alpha=0.3)
+fig.tight_layout()
+</textarea>
+    </div>
+    <aside class="callout pro"><p>PCA is sensitive to units: a feature measured in millimetres has 1000× the variance of
+      the same feature in metres and will dominate. Standardize features first (z-scores, from the M48 exercises) unless
+      they share units. scikit-learn's <code>PCA</code> (<a href="m57-unsupervised-embeddings.html">M57</a>) does
+      exactly this SVD recipe.</p></aside>
+    <p><strong>Remember:</strong> center, SVD, keep the top rows of <code>Vt</code>; <code>s²/(n-1)</code> are the
+      variances; project with <code>Xc @ Vt[:k].T</code>.</p>
+  </section>
+
+  <section class="lesson-section" id="scipy-linalg">
+    <h2>scipy.linalg: factorizations you can reuse</h2>
+    <p><code>scipy.linalg</code> contains everything in <code>np.linalg</code> plus more, always built against LAPACK.
+      Its main extra value is <strong>factorizations</strong>: splitting a matrix into simpler pieces once, then reusing
+      them.</p>
+    <ul>
+      <li><strong>LU</strong>: <code>A = P L U</code>, where <code>L</code> is lower-triangular, <code>U</code> is
+        upper-triangular, and <code>P</code> is a row permutation. This is Gaussian elimination written down.
+        <code>lu_factor</code>/<code>lu_solve</code> reuse it for many right-hand sides.</li>
+      <li><strong>Cholesky</strong>: for symmetric positive-definite matrices (covariance matrices, many physics
+        problems), <code>A = L Lᵀ</code>, about twice as fast as LU. Failure (<code>LinAlgError</code>) is also a cheap
+        test that a matrix is <em>not</em> positive-definite.</li>
+      <li><strong>Triangular solves</strong>: a triangular system is solved by substitution in O(n²) (one unknown at a
+        time, top to bottom). <code>solve_triangular</code> does it; solving <code>LUx = b</code> is two of these.</li>
+    </ul>
+    <div class="runnable" data-title="LU, Cholesky, solve_triangular">
+<textarea>
+import numpy as np
+from scipy import linalg
+
+A = np.array([[4.0, 3, 0], [6, 3, 1], [0, 2, 5]])
+P, L, U = linalg.lu(A)
+print("L =\n", L.round(3), "\nU =\n", U.round(3))
+print("P @ L @ U == A:", np.allclose(P @ L @ U, A))
+
+lu, piv = linalg.lu_factor(A)              # factor once...
+for b in (np.array([1.0, 2, 3]), np.array([0.0, 1, 0])):
+    x = linalg.lu_solve((lu, piv), b)      # ...solve many times in O(n^2)
+    print("x =", x.round(4), " ok:", np.allclose(A @ x, b))
+
+rng = np.random.default_rng(0)
+M = rng.normal(size=(4, 4))
+S = M @ M.T + 4 * np.eye(4)                # symmetric positive-definite
+Lc = linalg.cholesky(S, lower=True)
+print("L @ L.T == S:", np.allclose(Lc @ Lc.T, S))
+b = np.ones(4)
+y = linalg.solve_triangular(Lc, b, lower=True)        # L y = b
+x = linalg.solve_triangular(Lc.T, y, lower=False)     # L^T x = y
+print("two triangular solves == solve:", np.allclose(x, np.linalg.solve(S, b)))
+try:
+    linalg.cholesky(np.array([[1.0, 2], [2, 1]]))
+except np.linalg.LinAlgError as e:
+    print("not positive-definite:", e)
+</textarea>
+    </div>
+    <p><strong>Remember:</strong> factor once, solve many times. LU for general square systems, Cholesky for symmetric
+      positive-definite, triangular solves are O(n²).</p>
+  </section>
+
+  <section class="lesson-section" id="sparse">
+    <h2>Sparse matrices: storing only what's there</h2>
+    <p>Many real matrices are almost entirely zeros. A friendship graph of 1 million people where each has about 200
+      friends has 10¹² possible entries but only 2 × 10⁸ ones: 99.98% zeros. Stored densely as float64, that's 8 TB; stored
+      sparsely, a few gigabytes. Machine-learning feature matrices are similar: one-hot encoded categories and bag-of-words
+      text produce rows with a handful of non-zeros among tens of thousands of columns. A <strong>sparse matrix</strong>
+      stores only the non-zero entries and their positions.</p>
+    <h3>Formats</h3>
+    <ul>
+      <li><strong>COO</strong> (coordinate): three parallel arrays <code>row</code>, <code>col</code>,
+        <code>data</code>. Easiest to build; duplicates are summed on conversion.</li>
+      <li><strong>CSR</strong> (compressed sparse row): <code>data</code> and <code>indices</code> (column of each
+        value), listed row by row, plus <code>indptr</code>, where row <code>i</code>'s entries are
+        <code>data[indptr[i]:indptr[i+1]]</code>. Fast row slicing and matrix-vector products. The workhorse.</li>
+      <li><strong>CSC</strong> (compressed sparse column): the same idea column by column. Fast column slicing; preferred
+        by some solvers.</li>
+      <li>Also <code>LIL</code> and <code>DOK</code> for incremental construction, <code>DIA</code> for banded matrices.</li>
+    </ul>
+    <figure class="figure">
+      <svg class="diagram" viewBox="0 0 470 230" role="img" aria-label="A 4 by 5 sparse matrix and its CSR arrays data, indices, and indptr">
+        <g font-size="13" text-anchor="middle" fill="var(--fg)">
+          <g stroke="var(--border)">
+            <rect x="20" y="30" width="150" height="120" fill="var(--bg-sunk)"/>
+          </g>
+          <g fill="var(--fg-faint)">
+            <text x="65" y="50">0</text><text x="95" y="50">0</text><text x="125" y="50">0</text>
+            <text x="35" y="80">0</text><text x="95" y="80">0</text><text x="125" y="80">0</text><text x="155" y="80">0</text>
+            <text x="35" y="110">0</text><text x="65" y="110">0</text><text x="95" y="110">0</text><text x="125" y="110">0</text><text x="155" y="110">0</text>
+            <text x="65" y="140">0</text><text x="155" y="140">0</text>
+          </g>
+          <g fill="var(--viz-1)" font-weight="bold"><text x="35" y="50">10</text><text x="155" y="50">20</text></g>
+          <g fill="var(--viz-2)" font-weight="bold"><text x="65" y="80">30</text></g>
+          <g fill="var(--viz-4)" font-weight="bold"><text x="35" y="140">40</text><text x="95" y="140">50</text><text x="125" y="140">60</text></g>
+          <g fill="var(--fg-muted)" font-size="10"><text x="35" y="22">c0</text><text x="65" y="22">c1</text><text x="95" y="22">c2</text><text x="125" y="22">c3</text><text x="155" y="22">c4</text>
+          <text x="10" y="50">r0</text><text x="10" y="80">r1</text><text x="10" y="110">r2</text><text x="10" y="140">r3</text></g>
+        </g>
+        <g font-size="12" fill="var(--fg)" font-family="var(--font-mono)">
+          <text x="200" y="45">data    = [</text>
+          <text x="290" y="45" fill="var(--viz-1)">10, 20,</text><text x="350" y="45" fill="var(--viz-2)">30,</text><text x="378" y="45" fill="var(--viz-4)">40, 50, 60</text><text x="458" y="45">]</text>
+          <text x="200" y="75">indices = [</text>
+          <text x="290" y="75" fill="var(--viz-1)">0,  4,</text><text x="350" y="75" fill="var(--viz-2)">1,</text><text x="378" y="75" fill="var(--viz-4)">0,  2,  3</text><text x="458" y="75">]</text>
+          <text x="200" y="105">indptr  = [0, 2, 3, 3, 6]</text>
+        </g>
+        <g font-size="11" fill="var(--fg-muted)">
+          <text x="200" y="130">row i lives in data[indptr[i] : indptr[i+1]]</text>
+          <text x="200" y="148">row 0 → 0:2   row 1 → 2:3   row 2 → 3:3 (empty)   row 3 → 3:6</text>
+          <text x="20" y="180">Dense: 20 values. CSR: 6 values + 6 column indices + 5 row pointers.</text>
+          <text x="20" y="198">For an n×n matrix with z non-zeros: dense O(n²) memory, CSR O(z + n).</text>
+          <text x="20" y="216">Matrix-vector product: dense O(n²) work, CSR O(z).</text>
+        </g>
+      </svg>
+      <figcaption>CSR stores the non-zeros row by row. <code>indptr</code> has one more entry than there are rows; consecutive differences are the row lengths.</figcaption>
+    </figure>
+    <div class="runnable" data-title="Build, inspect, and multiply sparse matrices">
+<textarea>
+import numpy as np
+from scipy import sparse
+
+dense = np.array([[10, 0, 0, 0, 20],
+                  [0, 30, 0, 0, 0],
+                  [0, 0, 0, 0, 0],
+                  [40, 0, 50, 60, 0]], dtype=float)
+A = sparse.csr_array(dense)
+print("data   :", A.data)
+print("indices:", A.indices)
+print("indptr :", A.indptr, "  nnz =", A.nnz)
+print("A @ x  :", A @ np.ones(5))
+print("as CSC indptr:", A.tocsc().indptr)
+
+coo = sparse.coo_array((np.array([1.0, 2.0, 5.0]), (np.array([0, 2, 0]), np.array([1, 0, 1]))), shape=(3, 3))
+print("COO with a duplicate (0,1) summed:\n", coo.toarray())
+
+# Memory and speed at scale: 20,000 x 20,000 with ~10 non-zeros per row
+rng = np.random.default_rng(0)
+n, per_row = 20_000, 10
+rows = np.repeat(np.arange(n), per_row)
+cols = rng.integers(0, n, n * per_row)
+big = sparse.csr_array((rng.random(n * per_row), (rows, cols)), shape=(n, n))
+csr_bytes = big.data.nbytes + big.indices.nbytes + big.indptr.nbytes
+print(f"dense would need {n * n * 8 / 1e9:.1f} GB; CSR uses {csr_bytes / 1e6:.1f} MB")
+y = big @ rng.random(n)
+print("sparse mat-vec result shape:", y.shape)
+</textarea>
+    </div>
+    <h3>Why machine learning loves sparse matrices</h3>
+    <ul>
+      <li><strong>One-hot features</strong>: a "city" column with 5,000 possible values becomes 5,000 columns, each row
+        with a single 1. scikit-learn's <code>OneHotEncoder</code> and <code>CountVectorizer</code> return CSR matrices by
+        default.</li>
+      <li><strong>Text</strong>: a bag-of-words matrix over a 50,000-word vocabulary has a few hundred non-zeros per
+        document.</li>
+      <li><strong>Graphs</strong>: an adjacency matrix has a 1 at <code>[i, j]</code> when there is an edge from i to j
+        (see <a href="m26-graphs.html">M26</a>). <code>A @ x</code> spreads values along edges, which is one step of
+        PageRank or a graph neural network layer; <code>scipy.sparse.csgraph</code> has shortest paths and connected
+        components.</li>
+    </ul>
+    <div class="runnable" data-title="A graph as a sparse adjacency matrix: PageRank by power iteration">
+<textarea>
+import numpy as np
+from scipy import sparse
+
+edges = [(0, 1), (0, 2), (1, 2), (2, 0), (3, 2), (4, 2), (4, 3)]   # i links to j
+n = 5
+src, dst = np.array(edges).T
+A = sparse.csr_array((np.ones(len(edges)), (dst, src)), shape=(n, n))   # column j = links out of j
+out_degree = np.bincount(src, minlength=n)
+M = (A / out_degree).tocsr()           # column-stochastic: each column sums to 1
+damping = 0.85
+rank = np.full(n, 1 / n)
+for _ in range(50):
+    rank = damping * (M @ rank) + (1 - damping) / n
+print("PageRank:", rank.round(3), " most important page:", rank.argmax())
+print("type after division:", type(M).__name__, " nnz:", M.nnz)
+</textarea>
+    </div>
+    <aside class="callout warn"><p>Never call <code>.toarray()</code> on a large sparse matrix "just to look": it allocates
+      the full dense array. Also avoid operations that destroy sparsity, like adding a constant to every entry. SciPy now
+      recommends the array classes (<code>csr_array</code>, <code>coo_array</code>) over the older
+      <code>csr_matrix</code>; with arrays, <code>*</code> is element-wise and <code>@</code> is matrix multiplication,
+      just like NumPy.</p></aside>
+    <p><strong>Remember:</strong> store only non-zeros. Build in COO, compute in CSR (rows) or CSC (columns). Sparse
+      mat-vec costs O(nnz), not O(n²).</p>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Use NumPy (and SciPy where asked). Tests compare with tolerances, and eigenvector/SVD signs are not assumed.</p>
+
+    <div class="exercise" data-id="m49-e1" data-title="Solve a system safely">
+      <div class="exercise-prompt">
+        <p>Write <code>solve_system(A, b)</code> that returns the solution of <code>A x = b</code> using
+          <code>np.linalg.solve</code>. If <code>A</code> is not square, or its rank is less than its size, raise
+          <code>ValueError</code> with a message containing <code>"singular"</code> or <code>"square"</code>. Also write
+          <code>residual(A, x, b)</code> returning the L2 norm of <code>A x - b</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def solve_system(A, b):
+    ...
+
+def residual(A, x, b):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_coffee():
+    x = solve_system(np.array([[2.0, 1.0], [1.0, 3.0]]), np.array([7.0, 11.0]))
+    assert np.allclose(x, [2.0, 3.0]), f"expected [2, 3], got {x}"
+
+def test_3x3():
+    A = np.array([[3.0, 2, -1], [2, -2, 4], [-1, 0.5, -1]])
+    b = np.array([1.0, -2, 0])
+    x = solve_system(A, b)
+    assert np.allclose(x, [1, -2, -2]), f"expected [1, -2, -2], got {x}"
+    assert residual(A, x, b) < 1e-10, "residual of a correct solution should be ~0"
+
+def test_singular():
+    try:
+        solve_system(np.array([[1.0, 2.0], [2.0, 4.0]]), np.array([1.0, 2.0]))
+    except ValueError as e:
+        assert "singular" in str(e).lower(), "message should mention 'singular'"
+        return
+    raise AssertionError("a singular matrix must raise ValueError")
+
+def test_not_square():
+    try:
+        solve_system(np.ones((2, 3)), np.ones(2))
+    except ValueError as e:
+        assert "square" in str(e).lower(), "message should mention 'square'"
+        return
+    raise AssertionError("a non-square matrix must raise ValueError")
+
+def test_residual_value():
+    assert np.isclose(residual(np.eye(2), np.array([1.0, 1.0]), np.array([4.0, 5.0])), 5.0), "|[1,1] - [4,5]| = 5"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Check <code>A.ndim == 2 and A.shape[0] == A.shape[1]</code>, then
+        <code>np.linalg.matrix_rank(A) &lt; A.shape[0]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def solve_system(A, b):
+    A = np.asarray(A, dtype=float)
+    if A.ndim != 2 or A.shape[0] != A.shape[1]:
+        raise ValueError(f"A must be square, got shape {A.shape}")
+    if np.linalg.matrix_rank(A) &lt; A.shape[0]:
+        raise ValueError("A is singular: no unique solution")
+    return np.linalg.solve(A, b)
+
+def residual(A, x, b):
+    return float(np.linalg.norm(A @ x - b))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m49-e2" data-title="Least-squares polynomial fit">
+      <div class="exercise-prompt">
+        <p>Write <code>fit_poly(x, y, degree)</code> that returns the least-squares coefficients
+          <code>[c0, c1, ..., c_degree]</code> of <code>y ≈ c0 + c1·x + c2·x² + …</code> using
+          <code>np.linalg.lstsq</code> on a design matrix you build yourself (no <code>np.polyfit</code>). Then write
+          <code>predict(coeffs, x)</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def fit_poly(x, y, degree):
+    ...
+
+def predict(coeffs, x):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_exact_line():
+    x = np.array([0.0, 1, 2, 3])
+    c = fit_poly(x, 2 * x + 1, 1)
+    assert np.allclose(c, [1, 2]), f"y = 1 + 2x should give [1, 2], got {c}"
+
+def test_noisy_line():
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0, 10, 200)
+    y = 3 - 0.5 * x + rng.normal(0, 0.1, 200)
+    c = fit_poly(x, y, 1)
+    assert np.allclose(c, [3, -0.5], atol=0.05), f"should recover about [3, -0.5], got {c}"
+
+def test_parabola():
+    x = np.linspace(-2, 2, 9)
+    c = fit_poly(x, x ** 2 - x + 4, 2)
+    assert np.allclose(c, [4, -1, 1]), f"expected [4, -1, 1], got {c}"
+
+def test_predict():
+    assert np.allclose(predict([1, 2, 3], np.array([0.0, 1.0, 2.0])), [1, 6, 17]), "1 + 2x + 3x^2 at 0, 1, 2"
+
+def test_matches_polyfit():
+    rng = np.random.default_rng(2)
+    x, y = rng.random(30), rng.random(30)
+    assert np.allclose(fit_poly(x, y, 3), np.polyfit(x, y, 3)[::-1]), "should match np.polyfit (reversed)"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>The design matrix has columns <code>x**0, x**1, …, x**degree</code>:
+        <code>np.column_stack([x ** p for p in range(degree + 1)])</code> or
+        <code>np.vander(x, degree + 1, increasing=True)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def fit_poly(x, y, degree):
+    x = np.asarray(x, dtype=float)
+    X = np.column_stack([x ** p for p in range(degree + 1)])
+    coeffs, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return coeffs
+
+def predict(coeffs, x):
+    x = np.asarray(x, dtype=float)
+    return sum(c * x ** p for p, c in enumerate(coeffs))</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m49-e3" data-title="Dominant eigenpair by power iteration">
+      <div class="exercise-prompt">
+        <p>Write <code>power_iteration(A, iters=500, tol=1e-12)</code> returning <code>(eigenvalue, unit_eigenvector)</code>
+          for the eigenvalue of largest absolute value of a square matrix. Start from a vector of ones, repeatedly
+          multiply and normalize, and estimate the eigenvalue with the Rayleigh quotient <code>v @ A @ v</code>. Stop early
+          when the eigenvalue estimate changes by less than <code>tol</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def power_iteration(A, iters=500, tol=1e-12):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_symmetric_2x2():
+    A = np.array([[2.0, 1.0], [1.0, 2.0]])
+    lam, v = power_iteration(A)
+    assert np.isclose(lam, 3.0), f"dominant eigenvalue is 3, got {lam}"
+    assert np.isclose(np.linalg.norm(v), 1.0), "eigenvector must have unit length"
+    assert np.allclose(A @ v, lam * v, atol=1e-8), "A v should equal lambda v"
+
+def test_matches_eigh():
+    rng = np.random.default_rng(7)
+    M = rng.normal(size=(5, 5))
+    S = M @ M.T
+    lam, v = power_iteration(S, iters=5000)
+    expected = np.linalg.eigvalsh(S)[-1]
+    assert np.isclose(lam, expected, rtol=1e-6), f"expected {expected}, got {lam}"
+    assert abs(abs(v @ np.linalg.eigh(S)[1][:, -1]) - 1) < 1e-5, "direction should match eigh (up to sign)"
+
+def test_diagonal():
+    lam, v = power_iteration(np.diag([1.0, -4.0, 2.0]))
+    assert np.isclose(lam, -4.0), f"largest |eigenvalue| of diag(1, -4, 2) is -4, got {lam}"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Inside the loop: <code>w = A @ v</code>,
+        <code>v = w / np.linalg.norm(w)</code>, <code>lam_new = v @ A @ v</code>. Compare <code>lam_new</code> with the
+        previous estimate.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def power_iteration(A, iters=500, tol=1e-12):
+    A = np.asarray(A, dtype=float)
+    v = np.ones(A.shape[0]) / np.sqrt(A.shape[0])
+    lam = v @ A @ v
+    for _ in range(iters):
+        w = A @ v
+        v = w / np.linalg.norm(w)
+        lam_new = v @ A @ v
+        if abs(lam_new - lam) &lt; tol:
+            lam = lam_new
+            break
+        lam = lam_new
+    return float(lam), v</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m49-e4" data-title="Low-rank approximation">
+      <div class="exercise-prompt">
+        <p>Write <code>low_rank(A, k)</code> returning the best rank-<code>k</code> approximation of <code>A</code> using
+          <code>np.linalg.svd</code>, and <code>storage_ratio(shape, k)</code> returning
+          <code>k * (m + n + 1) / (m * n)</code>. Then write <code>rank_for_energy(A, fraction)</code> returning the
+          smallest <code>k</code> such that the top <code>k</code> singular values hold at least <code>fraction</code> of
+          the total <code>Σ s²</code>.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def low_rank(A, k):
+    ...
+
+def storage_ratio(shape, k):
+    ...
+
+def rank_for_energy(A, fraction):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def test_exact_rank():
+    rng = np.random.default_rng(0)
+    A = rng.normal(size=(30, 2)) @ rng.normal(size=(2, 20))     # rank 2
+    assert np.allclose(low_rank(A, 2), A), "a rank-2 matrix is reproduced exactly by k=2"
+    assert np.linalg.matrix_rank(low_rank(A, 1)) == 1, "k=1 gives a rank-1 matrix"
+
+def test_error_decreases():
+    A = np.random.default_rng(1).normal(size=(20, 15))
+    errs = [np.linalg.norm(A - low_rank(A, k)) for k in range(1, 16)]
+    assert all(a >= b - 1e-12 for a, b in zip(errs, errs[1:])), "error must not increase with k"
+    assert errs[-1] < 1e-10, "full rank reproduces A"
+
+def test_eckart_young():
+    A = np.random.default_rng(2).normal(size=(10, 8))
+    s = np.linalg.svd(A, compute_uv=False)
+    assert np.isclose(np.linalg.norm(A - low_rank(A, 3)), np.sqrt((s[3:] ** 2).sum())), "error = sqrt of dropped s^2"
+
+def test_storage_ratio():
+    assert np.isclose(storage_ratio((200, 300), 20), 20 * 501 / 60000), "k(m+n+1)/(mn)"
+
+def test_rank_for_energy():
+    A = np.diag([3.0, 2.0, 1.0])     # energies 9, 4, 1 of 14
+    assert rank_for_energy(A, 0.6) == 1, "9/14 = 0.64 >= 0.6"
+    assert rank_for_energy(A, 0.9) == 2, "13/14 = 0.93 >= 0.9"
+    assert rank_for_energy(A, 1.0) == 3, "all energy needs all 3"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>U, s, Vt = np.linalg.svd(A, full_matrices=False)</code> then
+        <code>(U[:, :k] * s[:k]) @ Vt[:k]</code>. For energy, <code>np.cumsum(s**2) / (s**2).sum()</code> and
+        <code>np.searchsorted</code> (or <code>argmax</code> of a boolean).</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def low_rank(A, k):
+    U, s, Vt = np.linalg.svd(A, full_matrices=False)
+    return (U[:, :k] * s[:k]) @ Vt[:k]
+
+def storage_ratio(shape, k):
+    m, n = shape
+    return k * (m + n + 1) / (m * n)
+
+def rank_for_energy(A, fraction):
+    s = np.linalg.svd(A, compute_uv=False)
+    energy = np.cumsum(s ** 2) / (s ** 2).sum()
+    return int(np.argmax(energy &gt;= fraction - 1e-12)) + 1</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m49-e5" data-title="PCA from scratch">
+      <div class="exercise-prompt">
+        <p>Write <code>pca(X, k)</code> returning a tuple <code>(components, explained_ratio, Z, mean)</code>:
+          <code>components</code> is <code>(k, n_features)</code> with unit-length rows (the top principal directions),
+          <code>explained_ratio</code> is the fraction of variance each explains (length <code>k</code>), <code>Z</code>
+          is the <code>(n_samples, k)</code> projection of the centered data, and <code>mean</code> is the column mean.
+          Use the SVD.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def pca(X, k):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+
+def _data():
+    rng = np.random.default_rng(3)
+    t = rng.normal(0, 3, 500)
+    return np.column_stack([t, 2 * t + rng.normal(0, 0.5, 500), rng.normal(0, 0.5, 500)]) + [1, 2, 3]
+
+def test_shapes():
+    comps, ratio, Z, mean = pca(_data(), 2)
+    assert comps.shape == (2, 3), f"components should be (2, 3), got {comps.shape}"
+    assert ratio.shape == (2,) and Z.shape == (500, 2) and mean.shape == (3,), "check output shapes"
+
+def test_orthonormal_components():
+    comps, *_ = pca(_data(), 3)
+    assert np.allclose(comps @ comps.T, np.eye(3), atol=1e-8), "components must be orthonormal"
+
+def test_first_direction():
+    comps, ratio, _, _ = pca(_data(), 1)
+    expected = np.array([1, 2, 0]) / np.sqrt(5)
+    assert abs(abs(comps[0] @ expected) - 1) < 0.01, "PC1 should point along (1, 2, 0), up to sign"
+    assert ratio[0] > 0.95, "PC1 should explain most of the variance"
+
+def test_ratios_and_projection():
+    X = _data()
+    comps, ratio, Z, mean = pca(X, 3)
+    assert np.isclose(ratio.sum(), 1.0), "all components explain 100% of the variance"
+    assert np.all(np.diff(ratio) <= 1e-12), "ratios must be sorted descending"
+    assert np.allclose(Z @ comps + mean, X), "full reconstruction must recover X"
+    assert np.allclose(mean, X.mean(axis=0)), "mean is the column mean"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Center, SVD, <code>var = s**2 / (n - 1)</code>,
+        <code>ratio = var[:k] / var.sum()</code>, <code>components = Vt[:k]</code>, <code>Z = Xc @ Vt[:k].T</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def pca(X, k):
+    X = np.asarray(X, dtype=float)
+    mean = X.mean(axis=0)
+    Xc = X - mean
+    _, s, Vt = np.linalg.svd(Xc, full_matrices=False)
+    var = s ** 2 / (X.shape[0] - 1)
+    components = Vt[:k]
+    return components, var[:k] / var.sum(), Xc @ components.T, mean</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m49-e6" data-title="CSR matrix-vector multiply by hand">
+      <div class="exercise-prompt">
+        <p>Write <code>to_csr(dense)</code> returning a tuple <code>(data, indices, indptr)</code> of NumPy arrays for a 2-D
+          array (row by row, columns ascending, skipping zeros), and <code>csr_matvec(data, indices, indptr, x)</code>
+          computing <code>A @ x</code> using only those arrays. A Python loop over rows is fine; touch only the non-zeros.</p>
+      </div>
+<textarea class="starter">
+import numpy as np
+
+def to_csr(dense):
+    ...
+
+def csr_matvec(data, indices, indptr, x):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import numpy as np
+from scipy import sparse
+
+D = np.array([[10, 0, 0, 0, 20], [0, 30, 0, 0, 0], [0, 0, 0, 0, 0], [40, 0, 50, 60, 0]], dtype=float)
+
+def test_to_csr_arrays():
+    data, indices, indptr = to_csr(D)
+    assert list(data) == [10, 20, 30, 40, 50, 60], f"data wrong: {data}"
+    assert list(indices) == [0, 4, 1, 0, 2, 3], f"indices wrong: {indices}"
+    assert list(indptr) == [0, 2, 3, 3, 6], f"indptr wrong: {indptr}"
+
+def test_matches_scipy():
+    rng = np.random.default_rng(0)
+    M = rng.random((30, 40)) * (rng.random((30, 40)) < 0.1)
+    data, indices, indptr = to_csr(M)
+    ref = sparse.csr_array(M)
+    assert np.array_equal(indptr, ref.indptr) and np.array_equal(indices, ref.indices), "should match scipy's CSR"
+
+def test_matvec():
+    x = np.arange(1.0, 6.0)
+    assert np.allclose(csr_matvec(*to_csr(D), x), D @ x), "csr_matvec must equal dense A @ x"
+
+def test_empty_row_gives_zero():
+    out = csr_matvec(*to_csr(D), np.ones(5))
+    assert out.shape == (4,) and out[2] == 0, "an empty row produces 0"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>For each row, <code>cols = np.nonzero(row)[0]</code>; append values
+        and columns; push the running count onto <code>indptr</code>. For the product, row <code>i</code> is
+        <code>data[s:e] @ x[indices[s:e]]</code> with <code>s, e = indptr[i], indptr[i+1]</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import numpy as np
+
+def to_csr(dense):
+    dense = np.asarray(dense)
+    data, indices, indptr = [], [], [0]
+    for row in dense:
+        cols = np.nonzero(row)[0]
+        data.extend(row[cols])
+        indices.extend(cols)
+        indptr.append(len(data))
+    return np.array(data, dtype=float), np.array(indices, dtype=int), np.array(indptr, dtype=int)
+
+def csr_matvec(data, indices, indptr, x):
+    n_rows = len(indptr) - 1
+    out = np.zeros(n_rows)
+    for i in range(n_rows):
+        s, e = indptr[i], indptr[i + 1]
+        out[i] = data[s:e] @ x[indices[s:e]]
+    return out</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: a PCA-based compressor</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">pcazip: compress images (or tables) with PCA</span></div>
+      <div class="widget-body">
+        <p>Treat each row of a grayscale image as a sample with <code>width</code> features (or use any numeric dataset).
+          Fit PCA, keep <code>k</code> components, and store only what's needed to reconstruct: the mean, the
+          <code>k</code> components, and the projected coordinates.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi init pcazip &amp;&amp; cd pcazip
+pixi add python=3.14 numpy matplotlib pytest
+pixi run python -m pcazip photo.png --energy 0.95      # writes photo.pcaz.npz and report.png
+pixi run pytest -q</code></pre>
+        <h3>Spec</h3>
+        <ul>
+          <li><code>fit(X, k)</code> returns a small frozen dataclass <code>PCAModel(mean, components, explained_ratio)</code>
+            built with the SVD (reuse your exercise code).</li>
+          <li><code>encode(model, X)</code> → <code>Z</code>; <code>decode(model, Z)</code> → approximate <code>X</code>.</li>
+          <li><code>choose_k(X, energy)</code> picks the smallest <code>k</code> keeping that fraction of variance.</li>
+          <li><code>save(path, model, Z)</code> / <code>load(path)</code> use <code>np.savez_compressed</code>; store
+            <code>Z</code> and components as <code>float32</code> to halve the size.</li>
+          <li>A CLI (<code>__main__.py</code> with <code>argparse</code>) compresses an image, reports original vs
+            compressed bytes and relative error, and saves a figure: original, reconstruction, error image, and the
+            cumulative explained-variance curve.</li>
+        </ul>
+        <ul class="checklist" data-id="m49-mini">
+          <li><code>decode(model, encode(model, X))</code> equals <code>X</code> (within 1e-8) when <code>k</code> is the full rank (tested)</li>
+          <li>Reconstruction error decreases as <code>k</code> increases (tested on random data)</li>
+          <li><code>choose_k</code> returns 1 for data that lies exactly on a line (tested)</li>
+          <li>Save/load round-trips the model and codes exactly (tested with <code>tmp_path</code>)</li>
+          <li>The CLI prints sizes and error, and writes <code>report.png</code> with four panels</li>
+          <li><code>pixi run pytest</code> passes</li>
+        </ul>
+        <h3>Stretch goals</h3>
+        <ul>
+          <li>Compress color images by processing each channel, or by stacking channels as features.</li>
+          <li>Compare with plain SVD truncation of the whole image at equal storage. Which wins, and why?</li>
+          <li>Use <code>scipy.sparse.linalg.svds</code> to compute only the top <code>k</code> singular vectors of a large
+            matrix, and time it against the full SVD.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m49-quiz">
+<script type="application/json">
+{"title": "Linear algebra quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Two equations in two unknowns describe parallel, distinct lines. How many solutions are there?", "options": ["Exactly one", "None", "Infinitely many", "Two"], "answer": 1,
+   "explanation": "<p>Parallel lines never meet, so no point satisfies both equations. The coefficient matrix has determinant 0.</p>"},
+  {"type": "single", "prompt": "Why prefer <code>np.linalg.solve(A, b)</code> to <code>np.linalg.inv(A) @ b</code>?", "options": ["inv does not work on floats", "solve is faster and usually more accurate", "solve works on singular matrices", "They are identical internally"], "answer": 1,
+   "explanation": "<p>solve performs one LU factorization and two triangular solves. Forming the inverse costs more operations and accumulates more rounding error.</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nprint(round(np.linalg.det(np.array([[3.0, 1.0], [2.0, 4.0]])), 6))", "answer": "10.0",
+   "explanation": "<p>For [[a, b], [c, d]], det = ad - bc = 3·4 - 1·2 = 10: the transformation multiplies areas by 10.</p>"},
+  {"type": "multi", "prompt": "A square matrix has determinant 0. Which statements follow?", "options": ["It is not invertible", "It squashes space into fewer dimensions", "Its rank is less than its size", "Ax = b always has exactly one solution", "All its entries are zero"], "answer": [0, 1, 2],
+   "explanation": "<p>Zero area/volume scaling means a dimension was collapsed, so the map can't be undone and rank drops. Ax = b has no solution or infinitely many. The entries need not be zero, e.g. [[1, 2], [2, 4]].</p>"},
+  {"type": "output", "prompt": "What does this print?", "code": "import numpy as np\nv = np.array([3.0, -4.0])\nprint(np.linalg.norm(v, 1), np.linalg.norm(v), np.linalg.norm(v, np.inf))", "answer": "7.0 5.0 4.0",
+   "explanation": "<p>L1 sums absolute values (7), L2 is the Euclidean length (5), L∞ takes the largest absolute component (4).</p>"},
+  {"type": "single", "prompt": "In least squares, the residual vector <code>y - X β</code> at the best fit is:", "options": ["Zero", "Parallel to y", "Perpendicular to every column of X", "Equal to the mean of y"], "answer": 2,
+   "explanation": "<p>The best fit is the projection of y onto the column space of X, so what's left over is perpendicular to it: <code>Xᵀ(y - Xβ) = 0</code>.</p>"},
+  {"type": "single", "prompt": "What does it mean that <code>v</code> is an eigenvector of <code>A</code> with eigenvalue 2?", "options": ["A @ v has length 2", "A @ v == 2 * v: A only stretches v by 2", "v has two non-zero components", "A has rank 2"], "answer": 1,
+   "explanation": "<p>An eigenvector keeps its direction under A; the eigenvalue is the stretch factor.</p>"},
+  {"type": "single", "prompt": "Which NumPy function should you use for eigen-decomposition of a symmetric matrix like a covariance matrix?", "options": ["<code>np.linalg.eig</code>", "<code>np.linalg.eigh</code>", "<code>np.linalg.inv</code>", "<code>np.linalg.det</code>"], "answer": 1,
+   "explanation": "<p><code>eigh</code> exploits symmetry: guaranteed real eigenvalues (sorted ascending), orthonormal eigenvectors, and better speed and accuracy.</p>"},
+  {"type": "multi", "prompt": "Which statements about the SVD <code>A = U diag(s) Vᵀ</code> are true?", "options": ["It exists for every matrix, of any shape", "The singular values are non-negative and sorted descending", "Keeping the top k terms gives the best rank-k approximation", "It only exists for symmetric matrices"], "answer": [0, 1, 2],
+   "explanation": "<p>The SVD always exists. Truncating it is optimal (Eckart–Young). Symmetry is needed for eigh's guarantees, not for the SVD.</p>"},
+  {"type": "single", "prompt": "A 400 × 600 image is approximated with rank k = 10. Roughly how many numbers are stored?", "options": ["240,000", "10,010", "6,000", "4,000"], "answer": 1,
+   "explanation": "<p>k(m + n + 1) = 10 × (400 + 600 + 1) = 10,010, versus 240,000 for the full image.</p>"},
+  {"type": "single", "prompt": "What is the first step of PCA?", "options": ["Sort the rows", "Subtract the column means (center the data)", "Take the inverse of X", "Normalize every row to length 1"], "answer": 1,
+   "explanation": "<p>PCA describes variation around the mean, so the cloud must be centered first. Without centering, PC1 just points at the mean.</p>"},
+  {"type": "output", "prompt": "For this CSR matrix, how many non-zeros are in row 1? (print the number)", "code": "indptr = [0, 3, 3, 7]\nprint(indptr[2] - indptr[1])", "answer": "0",
+   "explanation": "<p>Row i spans <code>indptr[i]:indptr[i+1]</code>. Row 1 spans 3:3, which is empty.</p>"},
+  {"type": "single", "prompt": "An n × n sparse matrix has z non-zeros. What does a CSR matrix-vector product cost?", "options": ["O(n²)", "O(z)", "O(n³)", "O(z²)"], "answer": 1,
+   "explanation": "<p>Each stored value is used exactly once (one multiply-add), plus O(n) bookkeeping for the rows.</p>"},
+  {"type": "multi", "prompt": "Which kinds of data naturally produce sparse matrices?", "options": ["One-hot encoded categorical features", "Bag-of-words document vectors", "Adjacency matrices of social graphs", "A grayscale photograph"], "answer": [0, 1, 2],
+   "explanation": "<p>Each of the first three has a few non-zeros per row among many columns. Photographs have a value at nearly every pixel, so they're dense.</p>"},
+  {"type": "text", "prompt": "Which SciPy factorization writes a symmetric positive-definite matrix as <code>L Lᵀ</code>?", "answer": ["cholesky", "cholesky decomposition", "scipy.linalg.cholesky"],
+   "explanation": "<p>The Cholesky factorization: about twice as fast as LU, and its failure is a cheap test that a matrix is not positive-definite.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Linear systems are intersecting lines/planes; write them as <code>A x = b</code> and use
+        <code>np.linalg.solve</code>, not <code>inv</code>. Check <code>cond</code> for sensitivity.</li>
+      <li>Determinant = area/volume scale factor (sign = flip, zero = squashed). Rank = independent directions.</li>
+      <li>L2, L1, and L∞ norms measure size differently: distance, robustness/sparsity, worst case.</li>
+      <li>Least squares projects <code>y</code> onto the column space of <code>X</code>; <code>np.linalg.lstsq</code>.</li>
+      <li>Eigenvectors are only stretched: <code>A v = λ v</code>. Use <code>eigh</code> for symmetric matrices.</li>
+      <li>SVD: rotate, stretch, rotate, for any matrix; truncation gives optimal low-rank approximations; PCA is SVD of
+        centered data.</li>
+      <li>Reuse <code>scipy.linalg</code> factorizations (LU, Cholesky). Store mostly-zero data in
+        <code>scipy.sparse</code> CSR/CSC.</li>
+    </ul>
+    <div class="flashcards" data-title="Linear algebra">
+<script type="application/json">
+[{"front": "Solve Ax = b in NumPy", "back": "<code>np.linalg.solve(A, b)</code>, never <code>inv(A) @ b</code>."},
+ {"front": "Determinant of [[a, b], [c, d]]", "back": "<code>ad - bc</code>: the factor by which areas are scaled."},
+ {"front": "det = 0 means…", "back": "Space is squashed into fewer dimensions; the matrix is singular (no inverse)."},
+ {"front": "Rank", "back": "Number of linearly independent columns: the dimension of the reachable output space."},
+ {"front": "Condition number", "back": "Sensitivity of the solution to small input changes; you lose about log10(cond) digits."},
+ {"front": "Projection of w onto v", "back": "<code>(w·v)/(v·v) · v</code>; the residual is perpendicular to v."},
+ {"front": "Least squares in NumPy", "back": "<code>coef, *_ = np.linalg.lstsq(X, y, rcond=None)</code>"},
+ {"front": "Eigenvector", "back": "A direction that A only stretches: <code>A v = λ v</code>."},
+ {"front": "SVD", "back": "<code>A = U diag(s) Vᵀ</code>: rotate, stretch along axes, rotate. Exists for every matrix."},
+ {"front": "PCA recipe", "back": "Center X, SVD, rows of Vt are components, s²/(n-1) are variances, project with Xc @ Vt[:k].T."},
+ {"front": "CSR arrays", "back": "<code>data</code>, <code>indices</code> (columns), <code>indptr</code> (row i = indptr[i]:indptr[i+1])."},
+ {"front": "When is Cholesky applicable?", "back": "Symmetric positive-definite matrices: A = L Lᵀ."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://numpy.org/doc/stable/reference/routines.linalg.html">numpy.linalg reference</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/tutorial/linalg.html">SciPy tutorial: linear algebra</a></li>
+      <li><a href="https://docs.scipy.org/doc/scipy/tutorial/sparse.html">SciPy tutorial: sparse arrays</a></li>
+      <li><a href="https://www.3blue1brown.com/topics/linear-algebra">3Blue1Brown: Essence of Linear Algebra</a> (determinants, eigenvectors)</li>
+      <li>Gilbert Strang, <em>Introduction to Linear Algebra</em>, and his free MIT OpenCourseWare 18.06 lectures</li>
+      <li>Next: <a href="m50-scipy.html">M50 · SciPy for Science &amp; Engineering</a></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
