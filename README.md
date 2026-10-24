@@ -58,6 +58,7 @@ pixi run test               # unit tests (fast)
 pixi run test-integration   # integration tests: every exercise solution and project solution is verified
 pixi run check-site         # validate links, anchors, quizzes, exercises, and visualizers in docs/
 pixi run practicum check-exercises docs/modules/m05-functions.html
+pixi run bundle             # build the single-file edition: dist/python-practicum.html (one page, every module)
 pixi run ci                 # pre-commit, build, mypy, ruff, and tests with a coverage gate (>= 90%)
 ```
 

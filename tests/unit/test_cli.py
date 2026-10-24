@@ -88,3 +88,23 @@ def test_check_exercises_reports_failures(monkeypatch: pytest.MonkeyPatch, in_re
 def test_missing_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     monkeypatch.setenv(ROOT_ENV_VAR, str(tmp_path_factory.mktemp("empty")))
     assert cli.main(["list"]) == 2
+
+
+def test_bundle_writes_file(in_repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_write(site_root: Path, out: Path) -> tuple[int, int]:
+        out.write_text("x", encoding="utf-8")
+        return 3, 1
+
+    monkeypatch.setattr(cli, "write_bundle", fake_write)
+    assert cli.main(["bundle", "--out", "single.html"]) == 0
+    assert (in_repo / "single.html").read_text(encoding="utf-8") == "x"
+    assert "pages=3" in capsys.readouterr().err
+
+
+def test_bundle_failure_returns_one(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(site_root: Path, out: Path) -> tuple[int, int]:
+        raise cli.BundleError("no manifest")
+
+    monkeypatch.setattr(cli, "write_bundle", broken)
+    assert cli.main(["bundle"]) == 1
+    assert "no manifest" in capsys.readouterr().err

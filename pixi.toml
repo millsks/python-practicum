@@ -54,3 +54,4 @@ projects = "practicum list"
 start = { cmd = "practicum start {{ project }}", args = ["project"] }
 grade = { cmd = "practicum grade {{ project }}", args = ["project"] }
 check-site = "practicum check-site"
+bundle = "practicum bundle"
