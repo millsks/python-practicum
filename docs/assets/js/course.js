@@ -58,7 +58,11 @@
   }
   function loadCss(href) {
     if (document.querySelector(`link[href="${href}"]`)) return;
-    document.head.append(h("link", { rel: "stylesheet", href }));
+    // Library styles go before the page's own so course.css wins ties (e.g. CodeMirror's white background in dark mode).
+    const link = h("link", { rel: "stylesheet", href });
+    const first = document.head.querySelector("link[rel='stylesheet'], style");
+    if (first) first.before(link);
+    else document.head.append(link);
   }
   const icon = {
     menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
