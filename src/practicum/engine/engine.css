@@ -145,27 +145,3 @@ a.e-link:hover,button.e-link:hover{color:var(--e-accent);text-decoration:underli
 .engine-body .lesson-hero,.engine-body .home-hero{display:none}
 .engine-body .widget{border-radius:var(--r)}
 .stat .eyebrow{display:block;margin-bottom:.2rem}
-/* CodeMirror loads its own stylesheet after the page styles; repeat the course editor rules with higher specificity */
-.engine-body .CodeMirror {
-  height: auto; min-height: 3em; font-family: var(--font-mono); font-size: 0.86rem; line-height: 1.6;
-  background: var(--bg-code); color: var(--fg);
-}
-.engine-body .CodeMirror-scroll { max-height: 560px; min-height: 3em; }
-.engine-body .CodeMirror-gutters { background: var(--bg-code); border-right: 1px solid var(--border); }
-.engine-body .CodeMirror-linenumber { color: var(--fg-faint); }
-.engine-body .CodeMirror-cursor { border-left: 2px solid var(--accent); }
-.engine-body .CodeMirror-selected, .engine-body .CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 22%, transparent) !important; }
-.engine-body .CodeMirror-activeline-background { background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.engine-body .cm-s-default .cm-keyword { color: var(--tok-keyword); }
-.engine-body .cm-s-default .cm-string, .engine-body .cm-s-default .cm-string-2 { color: var(--tok-string); }
-.engine-body .cm-s-default .cm-number { color: var(--tok-number); }
-.engine-body .cm-s-default .cm-comment { color: var(--tok-comment); font-style: italic; }
-.engine-body .cm-s-default .cm-builtin { color: var(--tok-builtin); }
-.engine-body .cm-s-default .cm-def { color: var(--tok-function); }
-.engine-body .cm-s-default .cm-variable { color: var(--fg); }
-.engine-body .cm-s-default .cm-variable-2 { color: var(--tok-function); }
-.engine-body .cm-s-default .cm-property { color: var(--tok-function); }
-.engine-body .cm-s-default .cm-operator { color: var(--tok-operator); }
-.engine-body .cm-s-default .cm-meta { color: var(--tok-decorator); }
-.engine-body .cm-s-default .cm-atom { color: var(--tok-number); }
-.engine-body .cm-s-default .cm-error { color: var(--bad); background: none; }

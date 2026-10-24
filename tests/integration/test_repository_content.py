@@ -34,3 +34,12 @@ def test_project_solution_passes(project: object) -> None:
 @pytest.mark.parametrize("project", PROJECTS, ids=lambda p: p.id)
 def test_project_starter_is_unsolved(project: object) -> None:
     assert grade_project(REPO_ROOT, project, source=Source.STARTER, extra_args=["-q", "-x"]) != 0  # type: ignore[arg-type]
+
+
+def test_library_styles_load_before_course_styles() -> None:
+    # Regression: CodeMirror's stylesheet was appended after course.css and won every tie,
+    # leaving editors white in dark mode and fixed at 300px tall.
+    course_js = (REPO_ROOT / "docs" / "assets" / "js" / "course.js").read_text(encoding="utf-8")
+    load_css = course_js[course_js.index("function loadCss") : course_js.index("const icon")]
+    assert "first.before(link)" in load_css
+    assert "head.append(h(" not in load_css
