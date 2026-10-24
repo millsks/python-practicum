@@ -1,10 +1,11 @@
-"""Command-line interface: ``practicum list|start|grade|serve|check-site``."""
+"""Command-line interface: ``practicum list|start|grade|serve|check-site|check-exercises|bundle``."""
 
 import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
 from practicum import __version__
+from practicum.bundle import BundleError, write_bundle
 from practicum.exercises import check_page_exercises
 from practicum.log import configure_logging, get_logger
 from practicum.projects import (
@@ -50,6 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve_cmd.add_argument("--no-browser", action="store_true", help="do not open a browser window")
 
     commands.add_parser("check-site", help="validate links, quizzes, and exercises in docs/")
+
+    bundle = commands.add_parser("bundle", help="build the single-file edition of the course website")
+    bundle.add_argument(
+        "--out",
+        type=Path,
+        default=Path("dist/python-practicum.html"),
+        help="output file, relative to the repository root",
+    )
 
     exercises = commands.add_parser("check-exercises", help="run each exercise's reference solution against its tests")
     exercises.add_argument("pages", nargs="*", type=Path, help="HTML pages to check (default: every page in docs/)")
@@ -107,6 +116,8 @@ def _dispatch(args: argparse.Namespace, root: Path) -> int:
         except KeyboardInterrupt:
             log.info("server_stopped")
         return 0
+    if args.command == "bundle":
+        return _bundle(site_root, root / args.out)
     if args.command == "check-exercises":
         return _check_exercises(args.pages or sorted(site_root.rglob("*.html")))
     issues = check_site(site_root)
@@ -114,6 +125,17 @@ def _dispatch(args: argparse.Namespace, root: Path) -> int:
         log.error("site_issue", path=issue.path, message=issue.message)
     log.info("site_checked", issues=len(issues))
     return 1 if issues else 0
+
+
+def _bundle(site_root: Path, out: Path) -> int:
+    log = get_logger()
+    try:
+        pages, size = write_bundle(site_root, out)
+    except BundleError as exc:
+        log.error("bundle_failed", reason=str(exc))
+        return 1
+    log.info("bundled", pages=pages, bytes=size, out=str(out))
+    return 0
 
 
 def _check_exercises(pages: list[Path]) -> int:

@@ -925,8 +925,8 @@ self.onmessage = async (event) => {
       });
     });
   }
-  async function renderMermaid() {
-    const blocks = $$("pre.mermaid, div.mermaid");
+  async function renderMermaid(root = document) {
+    const blocks = $$("pre.mermaid, div.mermaid", root);
     if (!blocks.length) return;
     blocks.forEach((b) => { b.dataset.mmd ||= b.textContent; });
     try {
@@ -1080,20 +1080,26 @@ self.onmessage = async (event) => {
   }
 
   /* ---------------- boot ---------------- */
+  function mountComponents(root = document) {
+    $$(".runnable", root).forEach(mountRunnable);
+    $$(".exercise[data-id]", root).forEach(mountExercise);
+    $$(".quiz[data-id]", root).forEach(mountQuiz);
+    $$(".flashcards", root).forEach(mountFlashcards);
+    $$(".tracer", root).forEach(mountTracer);
+    $$(".tabs", root).forEach(mountTabs);
+    $$(".checklist[data-id]", root).forEach(mountChecklist);
+    if (window.PPViz) $$(".viz[data-viz]", root).forEach((el) => { try { window.PPViz.mount(el); } catch (e) { el.textContent = `Visualizer failed: ${e.message}`; } });
+  }
+  // The single-file edition (body[data-engine="single"]) supplies its own shell and calls these directly.
+  window.PPCourse = { Store, Py, mount: mountComponents, highlightAll, renderMermaid, currentTheme, isDone, allItems };
   applySavedTheme();
+  if (body.dataset.engine === "single") return;
   document.addEventListener("DOMContentLoaded", () => {
     const main = $("main");
     if (!main) return;
     buildShell();
     if (PAGE_ID === "home") renderHome();
-    $$(".runnable").forEach(mountRunnable);
-    $$(".exercise[data-id]").forEach(mountExercise);
-    $$(".quiz[data-id]").forEach(mountQuiz);
-    $$(".flashcards").forEach(mountFlashcards);
-    $$(".tracer").forEach(mountTracer);
-    $$(".tabs").forEach(mountTabs);
-    $$(".checklist[data-id]").forEach(mountChecklist);
-    if (window.PPViz) $$(".viz[data-viz]").forEach((el) => { try { window.PPViz.mount(el); } catch (e) { el.textContent = `Visualizer failed: ${e.message}`; } });
+    mountComponents();
     buildModuleFooter(main);
     highlightAll();
     renderMermaid();
