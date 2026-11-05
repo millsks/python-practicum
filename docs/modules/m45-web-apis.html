@@ -21,7 +21,7 @@
       is no longer magic, then shows how to consume APIs robustly (timeouts, retries, pagination, auth) with the
       standard library and httpx, how to test that code without a network, and how to design and build a REST API
       with FastAPI.</p>
-    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m38-asyncio.html">M38</a>, <a href="m44-data-databases.html">M44</a>, <a href="m17-testing.html">M17</a></span></div>
+    <div class="lesson-meta"><span>⏱ ~3.5 hours</span><span>Prerequisites: <a href="m38-asyncio.html">M38</a>, <a href="m44-data-databases.html">M44</a>, <a href="m17-testing.html">M17</a></span></div>
     <ul class="objectives">
       <li>Describe an HTTP exchange: methods, status codes, headers, bodies, JSON, and statelessness</li>
       <li>Build and parse URLs safely with <code>urllib.parse</code></li>
@@ -811,6 +811,145 @@ for message in sent:
       lines so every request log (method, path, status, duration, request id) is searchable.</p></aside>
   </section>
 
+  <section class="lesson-section" id="observability">
+    <h2>Observability: logs, metrics, and traces</h2>
+    <p>Your API is in production and a customer says it is slow. You can't attach a debugger, and you can't reproduce it on your
+      laptop. <strong>Observability</strong> means your service emits enough information to let you answer new questions about
+      its behavior from the outside. There are three kinds of signal, and each answers a different question.</p>
+    <table>
+      <thead><tr><th>Signal</th><th>Answers</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Metrics</strong></td><td>Is something wrong, and how much?</td><td>The 95th percentile of request time rose from 80 ms to 2 s</td></tr>
+        <tr><td><strong>Traces</strong></td><td>Where is the time going in this request?</td><td>1.9 s of it was spent in one database call</td></tr>
+        <tr><td><strong>Logs</strong></td><td>What exactly happened?</td><td><code>event='lock_timeout' table='notes' request_id='a14e...'</code></td></tr>
+      </tbody>
+    </table>
+    <h3>Metrics: start with rate, errors, and duration</h3>
+    <p>For each endpoint, track the <strong>rate</strong> of requests, the fraction that <strong>error</strong>, and the
+      <strong>duration</strong> as percentiles rather than an average, since an average hides the slowest users. Metrics are cheap
+      because they are aggregated numbers, but that depends on keeping the label values few.</p>
+    <aside class="callout warn"><p>Label a metric with <code>route="/notes/{id}"</code>, never with the actual URL or a user id.
+      Every distinct label value creates a new time series. This is called <strong>high cardinality</strong>, and it can overload
+      a metrics system. Detail like that belongs in logs and traces.</p></aside>
+    <h3>Traces: follow one request</h3>
+    <p>A <strong>trace</strong> is the story of one request, built from nested <strong>spans</strong>. A span is one timed
+      operation with a name, a start, a duration, and a parent. This cell builds a tiny tracer, so that you can see there is no
+      magic in the idea:</p>
+    <div class="runnable" data-title="A tiny tracer">
+<textarea>
+import time
+from contextlib import contextmanager
+
+finished = []
+stack = []
+
+@contextmanager
+def span(name):
+    depth = len(stack)
+    stack.append(name)
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        stack.pop()
+        finished.append((depth, name, (time.perf_counter() - start) * 1000))
+
+def load_note():
+    with span("db.load_note"):
+        time.sleep(0.03)
+
+def render():
+    with span("render_json"):
+        time.sleep(0.005)
+
+with span("GET /notes/{id}"):
+    load_note()
+    render()
+
+for depth, name, ms in sorted(finished, key=lambda item: item[0]):
+    print(f"{'  ' * depth}{name}: about {round(ms, -1):.0f} ms")
+</textarea>
+    </div>
+    <p>In real services, use <a href="https://opentelemetry.io/docs/languages/python/">OpenTelemetry</a>, the vendor-neutral
+      standard. Your code stays the same whichever backend stores the data, and context can travel between services in HTTP
+      headers, so one trace can follow a request across your whole system. Packages such as
+      <code>opentelemetry-instrumentation-fastapi</code> create the request spans for you.</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi add opentelemetry-sdk
+pixi run python trace_demo.py</code></pre>
+    <div class="runnable" data-local="OpenTelemetry isn't available in the browser runtime." data-title="trace_demo.py: real spans and a counter">
+<textarea>
+import time
+
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+
+tracing = TracerProvider()
+tracing.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+trace.set_tracer_provider(tracing)
+tracer = trace.get_tracer("notes.api")
+
+meters = MeterProvider(metric_readers=[PeriodicExportingMetricReader(ConsoleMetricExporter())])
+metrics.set_meter_provider(meters)
+requests = metrics.get_meter("notes.api").create_counter("http.requests")
+
+
+def load_note(note_id):
+    with tracer.start_as_current_span("db.load_note") as span:
+        span.set_attribute("note.id", note_id)
+        time.sleep(0.01)
+
+
+def handle_request(note_id):
+    with tracer.start_as_current_span("GET /notes/{id}") as span:
+        load_note(note_id)
+        span.set_attribute("http.response.status_code", 200)
+    requests.add(1, {"route": "/notes/{id}", "status": 200})
+
+
+handle_request(7)
+meters.shutdown()
+</textarea>
+    </div>
+    <p>Run it and find the <code>parent_id</code> of each span in the output: <code>db.load_note</code> points at the request span,
+      and the request span's is <code>null</code>. In production, you would replace the console exporters with an OTLP exporter that
+      sends data to a collector.</p>
+    <h3>Logs: connect them to the request</h3>
+    <p>A busy server interleaves log lines from many requests. Give each request an id, bind it once at the start, and every log
+      line in that request carries it. structlog's <code>contextvars</code> support does this without passing the id through every
+      function, and it is safe with asyncio.</p>
+    <div class="runnable" data-local="structlog isn't available in the browser runtime. Add it with pixi add structlog." data-title="A request id on every log line">
+<textarea>
+import uuid
+
+import structlog
+from structlog.contextvars import bind_contextvars, clear_contextvars, merge_contextvars
+
+structlog.configure(processors=[merge_contextvars, structlog.processors.KeyValueRenderer()])
+log = structlog.get_logger()
+
+
+def load_note(note_id):
+    log.info("note_loaded", note_id=note_id)      # never mentions the request id
+
+
+def handle_request(note_id):
+    clear_contextvars()
+    bind_contextvars(request_id=str(uuid.uuid4()))
+    load_note(note_id)
+
+
+handle_request(7)
+</textarea>
+    </div>
+    <aside class="callout danger"><p>Logs and span attributes often outlive the data they describe and are read by more people. Don't
+      put passwords, tokens, or personal data in them.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> metrics tell you something is wrong, traces tell you where, and logs tell
+      you what. Keep metric labels few, and put a request id on every log line.</p></aside>
+  </section>
+
   <section class="lesson-section" id="security">
     <h2>A first look at API security</h2>
     <p>Security deserves its own course; here are the ideas every API author must know on day one (see also
@@ -1156,6 +1295,90 @@ class Router:
         return (405, "method not allowed") if path_matched else (404, "not found")</code></pre>
       </details>
     </div>
+
+    <div class="exercise" data-id="m45-e6" data-title="Record nested spans">
+      <div class="exercise-prompt">
+        <p>Write a context manager <code>span(name)</code> that appends a dictionary to the list <code>SPANS</code> when the block
+          ends. The dictionary has <code>name</code>, <code>parent</code> (the name of the enclosing span, or <code>None</code> at the
+          top level), and <code>ms</code> (the elapsed milliseconds as a number). It must record the span even if the block raises,
+          and the exception must keep propagating.</p>
+      </div>
+<textarea class="starter">
+import time
+from contextlib import contextmanager
+
+SPANS = []
+_stack = []
+
+@contextmanager
+def span(name):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+def _run_nested():
+    SPANS.clear()
+    with span("request"):
+        with span("db"):
+            pass
+        with span("render"):
+            pass
+    return SPANS
+
+def test_inner_spans_finish_first():
+    assert [s["name"] for s in _run_nested()] == ["db", "render", "request"], "a span is recorded when its block ends"
+
+def test_parents_are_recorded():
+    assert {s["name"]: s["parent"] for s in _run_nested()} == {"db": "request", "render": "request", "request": None}, "parent is the enclosing span's name"
+
+def test_duration_is_a_number():
+    SPANS.clear()
+    with span("sleepy"):
+        time.sleep(0.01)
+    assert SPANS[0]["ms"] >= 5, "ms should be elapsed milliseconds, not seconds"
+
+def test_recorded_when_the_block_raises():
+    SPANS.clear()
+    try:
+        with span("boom"):
+            raise KeyError("x")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("the exception must propagate")
+    assert [s["name"] for s in SPANS] == ["boom"], "use try/finally so that a failing block is still recorded"
+
+def test_stack_recovers_after_an_error():
+    SPANS.clear()
+    try:
+        with span("boom"):
+            raise KeyError("x")
+    except KeyError:
+        pass
+    with span("next"):
+        pass
+    assert SPANS[-1]["parent"] is None, "pop the stack in finally, or later spans get the wrong parent"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Read <code>_stack[-1]</code> for the parent before pushing the new name, then
+        use <code>try</code>, <code>yield</code>, and <code>finally</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import time
+from contextlib import contextmanager
+
+SPANS = []
+_stack = []
+
+@contextmanager
+def span(name):
+    parent = _stack[-1] if _stack else None
+    _stack.append(name)
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        _stack.pop()
+        SPANS.append({"name": name, "parent": parent, "ms": (time.perf_counter() - start) * 1000})</code></pre>
+      </details>
+    </div>
   </section>
 
   <section class="lesson-section" id="mini-project">
@@ -1200,6 +1423,8 @@ class Router:
     <div class="quiz" data-id="m45-quiz">
 <script type="application/json">
 {"title": "Web & APIs quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "The 95th percentile of request time has jumped. Which signal best shows where the time goes inside one slow request?", "options": ["A counter of requests", "A trace", "The README", "The access log's status codes"], "answer": 1, "explanation": "<p>Metrics tell you something is wrong. A trace breaks a single request into timed spans, which shows you where the time went.</p>"},
+  {"type": "single", "prompt": "Why shouldn't you label a request metric with the user id?", "options": ["Metrics can't store text", "Each distinct label value creates a new time series, which can overload the metrics system", "User ids are always integers", "It makes the service slower to start"], "answer": 1, "explanation": "<p>This is high cardinality. Keep metric labels few, and put per-user detail in logs and traces, without personal data.</p>"},
   {"type": "single", "prompt": "What does it mean that HTTP is stateless?", "options": ["Servers cannot use databases", "Each request carries everything needed to handle it; the protocol does not remember earlier requests", "Responses cannot be cached", "Connections close after every request"], "answer": 1, "explanation": "<p>Statelessness means no memory between requests at the protocol level. Identity and context travel with each request (cookies, Authorization headers), which lets any server replica handle any request.</p>"},
   {"type": "multi", "prompt": "Which methods are idempotent?", "options": ["GET", "POST", "PUT", "DELETE"], "answer": [0, 2, 3], "explanation": "<p>Repeating GET, PUT, or DELETE has the same effect as doing it once. Repeating a POST may create duplicates, so it is not idempotent (unless you add an idempotency key).</p>"},
   {"type": "single", "prompt": "A client sends a JSON body that is missing a required field. The best status code is:", "options": ["200", "401", "422 (or 400)", "500"], "answer": 2, "explanation": "<p>It is the client's fault, so 4xx. FastAPI uses 422 Unprocessable Content for validation errors; 400 is also common for malformed requests. 500 would wrongly blame the server.</p>"},
@@ -1224,6 +1449,7 @@ class Router:
     <h2>Recap</h2>
     <ul>
       <li>HTTP is stateless request/response: method + path + headers + body in, status + headers + body out.</li>
+      <li>Metrics show that something is wrong, traces show where, and logs show what. Keep metric labels few, and put a request id on every log line.</li>
       <li>Safe methods do not change state; idempotent ones can be retried. POST is neither.</li>
       <li>4xx means fix the request; 5xx and 429 may be transient. Build URLs with <code>urllib.parse</code>, not string
         concatenation.</li>
@@ -1237,7 +1463,8 @@ class Router:
     </ul>
     <div class="flashcards" data-title="Web & APIs">
 <script type="application/json">
-[{"front": "Safe vs idempotent", "back": "Safe: no state change (GET, HEAD). Idempotent: same effect once or many times (GET, PUT, DELETE)."},
+[{"front": "Metrics, traces, logs", "back": "Metrics: is something wrong? Traces: where is the time going? Logs: what exactly happened?"},
+ {"front": "Safe vs idempotent", "back": "Safe: no state change (GET, HEAD). Idempotent: same effect once or many times (GET, PUT, DELETE)."},
  {"front": "201 Created", "back": "Success for POST that created a resource; include a Location header pointing at it."},
  {"front": "401 vs 403", "back": "401: not authenticated. 403: authenticated but not permitted."},
  {"front": "422", "back": "Unprocessable Content: the request was well-formed but failed validation (FastAPI's default)."},
