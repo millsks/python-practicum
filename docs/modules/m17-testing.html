@@ -276,8 +276,12 @@ def db():
         <p>Temporarily replace attributes, dict items, or environment variables; everything is undone after the test.</p>
         <pre><code class="language-python">def test_reads_api_key(monkeypatch):
     monkeypatch.setenv("API_KEY", "test-key")
+    assert load_settings().api_key == "test-key"
+
+
+def test_total_without_tax(monkeypatch):
     monkeypatch.setattr("shop.pricing.TAX_RATE", 0.0)
-    assert load_settings().api_key == "test-key"</code></pre>
+    assert total_cents(1000) == 1000</code></pre>
       </div>
       <div class="tab" data-label="capsys">
         <p>Captures what the code under test printed to stdout and stderr.</p>
@@ -288,9 +292,9 @@ def db():
     assert err == ""</code></pre>
       </div>
     </div>
-    <div class="runnable" data-local="pytest runs from the command line on files in your workspace." data-title="Fixtures in a real test file">
+    <div class="runnable" data-pytest data-title="Fixtures in a real test file">
 <textarea>
-# tests/unit/test_fixtures_demo.py  ->  pixi run pytest tests/unit/test_fixtures_demo.py -v
+# This cell runs real pytest. Locally: pixi run pytest tests/unit/test_fixtures_demo.py -v
 import json
 import pytest
 
@@ -317,6 +321,8 @@ def test_env(monkeypatch):
     assert os.environ["MODE"] == "test"
 </textarea>
     </div>
+    <p>Cells labeled <em>pytest</em> run the real framework in your browser, not a simplified copy. Break an assertion and
+      read the report you get.</p>
     <p><strong>Remember:</strong> ask for a fixture by naming it as a parameter; <code>yield</code> for teardown; default
       to function scope; reach for <code>tmp_path</code>, <code>monkeypatch</code>, and <code>capsys</code>.</p>
   </section>
@@ -1043,6 +1049,102 @@ def from_roman(s):
     return total</code></pre>
       </details>
     </div>
+
+    <div class="exercise" data-id="m17-e6" data-title="Isolate config with monkeypatch">
+      <div class="exercise-prompt">
+        <p>A module named <code>billing</code> is already written:</p>
+        <pre><code class="language-python">import os
+
+TAX_RATE = 0.20
+
+def total_cents(net):
+    return round(net * (1 + TAX_RATE))
+
+def currency():
+    return os.environ.get("CURRENCY", "USD")</code></pre>
+        <p>Write three real pytest tests. The checker runs them with pytest against the correct module and against three
+          buggy ones:</p>
+        <ul>
+          <li><code>test_total_uses_tax_rate</code>: patch <code>billing.TAX_RATE</code> to <code>0.5</code>, then check
+            that <code>total_cents(100)</code> is <code>150</code>.</li>
+          <li><code>test_currency_from_env</code>: set <code>CURRENCY</code> to <code>"EUR"</code>.</li>
+          <li><code>test_currency_default</code>: check the <code>"USD"</code> default. This must also pass on a machine
+            where <code>CURRENCY</code> is already set, and the checker tries exactly that.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+def test_total_uses_tax_rate(monkeypatch):
+    import billing
+    ...
+
+def test_currency_from_env(monkeypatch):
+    import billing
+    ...
+
+def test_currency_default(monkeypatch):
+    import billing
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+import os as _os
+
+_GOOD = """
+import os
+TAX_RATE = 0.20
+def total_cents(net):
+    return round(net * (1 + TAX_RATE))
+def currency():
+    return os.environ.get("CURRENCY", "USD")
+"""
+
+def _result(source=_GOOD):
+    return run_pytest(learner_source, "-q", modules={"billing": source})
+
+def test_passes_on_the_correct_module():
+    code, report = _result()
+    assert code == 0, "your tests should all pass on the correct module:\n" + report
+
+def test_catches_a_hard_coded_rate():
+    bug = _GOOD.replace("(1 + TAX_RATE)", "(1 + 0.20)")
+    assert _result(bug)[0] == 1, "patch billing.TAX_RATE and check that total_cents uses the new value"
+
+def test_catches_ignoring_the_environment():
+    bug = _GOOD.replace('os.environ.get("CURRENCY", "USD")', '"USD"')
+    assert _result(bug)[0] == 1, "use monkeypatch.setenv and check that currency() returns the new value"
+
+def test_catches_a_wrong_default():
+    bug = _GOOD.replace('"USD"', '"EUR"')
+    assert _result(bug)[0] == 1, "assert that the default is exactly USD"
+
+def test_default_test_is_isolated_from_the_machine():
+    _os.environ["CURRENCY"] = "GBP"
+    try:
+        code, report = _result()
+    finally:
+        del _os.environ["CURRENCY"]
+    assert code == 0, "with CURRENCY=GBP already set, your default test failed. Use monkeypatch.delenv:\n" + report
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>monkeypatch.setattr(billing, "TAX_RATE", 0.5)</code>,
+        <code>monkeypatch.setenv("CURRENCY", "EUR")</code>, and
+        <code>monkeypatch.delenv("CURRENCY", raising=False)</code>. Without <code>raising=False</code>, <code>delenv</code>
+        raises <code>KeyError</code> when the variable is not set.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def test_total_uses_tax_rate(monkeypatch):
+    import billing
+    monkeypatch.setattr(billing, "TAX_RATE", 0.5)
+    assert billing.total_cents(100) == 150
+
+def test_currency_from_env(monkeypatch):
+    import billing
+    monkeypatch.setenv("CURRENCY", "EUR")
+    assert billing.currency() == "EUR"
+
+def test_currency_default(monkeypatch):
+    import billing
+    monkeypatch.delenv("CURRENCY", raising=False)
+    assert billing.currency() == "USD"</code></pre>
+      </details>
+    </div>
   </section>
 
   <section class="lesson-section" id="mini-project">
@@ -1095,6 +1197,7 @@ pixi run test</code></pre>
   {"type": "output", "prompt": "A test is decorated with <code>@pytest.mark.parametrize(\"n\", [1, 2, 3])</code> and another with <code>@pytest.mark.parametrize(\"m\", [\"a\", \"b\"])</code> stacked on top of it. How many test cases does pytest run?", "answer": "6", "explanation": "<p>Stacked parametrize decorators produce the Cartesian product: 3 × 2 = 6.</p>"},
   {"type": "single", "prompt": "What does <code>match=</code> in <code>pytest.raises(ValueError, match=\"negative\")</code> do?", "options": ["Matches the exception type by name", "Searches the exception message with a regular expression", "Requires the message to equal the string exactly", "Filters warnings"], "answer": 1, "explanation": "<p>It is <code>re.search</code> against <code>str(exception)</code>.</p>"},
   {"type": "single", "prompt": "<code>shop/report.py</code> does <code>from datetime import date</code>. Which target should you patch to control <code>date</code> in that module?", "options": ["<code>\"datetime.date\"</code>", "<code>\"shop.report.date\"</code>", "<code>\"date\"</code>", "<code>\"shop.date\"</code>"], "answer": 1, "explanation": "<p>Patch where the name is looked up. The module holds its own reference named <code>date</code>.</p>"},
+  {"type": "single", "prompt": "A test calls <code>monkeypatch.setenv(\"MODE\", \"test\")</code>. What happens to <code>MODE</code> when the test ends?", "options": ["It stays set for the rest of the run", "It is restored to its previous state, even if the test failed", "It is always deleted", "You must restore it yourself"], "answer": 1, "explanation": "<p><code>monkeypatch</code> records the original state and undoes every change at teardown, whether the test passed or failed. That is why it is safer than assigning to <code>os.environ</code> directly.</p>"},
   {"type": "single", "prompt": "What does <code>Mock(spec=PaymentGateway)</code> add over a plain <code>Mock()</code>?", "options": ["It calls the real methods", "Accessing attributes that PaymentGateway lacks raises AttributeError", "It is faster", "It records nothing"], "answer": 1, "explanation": "<p>A spec catches typos and API drift; <code>create_autospec</code> also checks call signatures.</p>"},
   {"type": "multi", "prompt": "Which are good reasons <em>not</em> to use a mock?", "options": ["The dependency can be injected and a simple fake is clearer", "You would be mocking internals of the code under test", "A fast real resource exists, such as <code>tmp_path</code> or in-memory SQLite", "The dependency sends real emails"], "answer": [0, 1, 2], "explanation": "<p>Mocks are right for slow or side-effecting boundaries such as email. Prefer fakes and real lightweight resources otherwise, and never mock what you are testing.</p>"},
   {"type": "single", "prompt": "Your suite reports 100% line coverage. What does that guarantee?", "options": ["The code has no bugs", "Every line ran at least once during the tests", "Every branch was tested", "Every assertion is correct"], "answer": 1, "explanation": "<p>Coverage measures execution, not verification. A test without asserts can still cover lines.</p>"},
