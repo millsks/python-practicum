@@ -60,3 +60,40 @@ def test_timeout() -> None:
 def test_harness_crash() -> None:
     result = check_exercise(make("import os\nos._exit(3)\n", ""))
     assert "harness crashed" in result.detail
+
+
+def test_run_pytest_reports_real_results_and_grades_planted_bugs() -> None:
+    learner = (
+        "def test_rate(monkeypatch):\n"
+        "    import billing\n"
+        "    monkeypatch.setattr(billing, 'RATE', 0.5)\n"
+        "    assert billing.total(100) == 150\n"
+    )
+    tests = (
+        "good = 'RATE = 0.2\\ndef total(c):\\n    return round(c * (1 + RATE))\\n'\n"
+        "bad = 'RATE = 0.2\\ndef total(c):\\n    return c\\n'\n"
+        "def test_correct_version_passes():\n"
+        "    code, report = run_pytest(learner_source, '-q', modules={'billing': good})\n"
+        "    assert code == 0, report\n"
+        "def test_planted_bug_is_caught():\n"
+        "    code, report = run_pytest(learner_source, '-q', modules={'billing': bad})\n"
+        "    assert code == 1, report\n"
+        "    assert 'assert 100 == 150' in report\n"
+    )
+    result = check_exercise(make(learner, tests))
+    assert result.ok, result.detail
+
+
+def test_run_pytest_exposes_builtin_fixtures() -> None:
+    learner = (
+        "import logging\n"
+        "def test_fixtures(tmp_path, capsys, caplog):\n"
+        "    (tmp_path / 'a').write_text('x')\n"
+        "    print('hello')\n"
+        "    assert capsys.readouterr().out == 'hello\\n'\n"
+        "    logging.getLogger('a').warning('careful')\n"
+        "    assert 'careful' in caplog.text\n"
+    )
+    tests = "def test_ok():\n    code, report = run_pytest(learner_source, '-q')\n    assert code == 0, report\n"
+    result = check_exercise(make(learner, tests))
+    assert result.ok, result.detail

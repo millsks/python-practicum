@@ -90,6 +90,9 @@ print("hello")
 - `data-local="reason"`: code that cannot run in the browser (threads needing real parallelism, multiprocessing,
   subprocess, sockets/network, `asyncio.run` with real I/O, packages missing from Pyodide such as torch, polars,
   duckdb, httpx, fastapi, structlog). The reason is shown to the learner.
+- `data-pytest`: run the cell as a real pytest file (`pytest -v`) and show the report. Fixtures, `monkeypatch`,
+  `capsys`, `caplog`, `tmp_path`, `parametrize`, and assertion rewriting all work. `pytest-asyncio` does not work under
+  Pyodide and breaks the event loop for later runs, so async tests must use `data-local`.
 - Browser packages that load automatically on import: numpy, scipy, pandas, scikit-learn, matplotlib, and the stdlib.
 - matplotlib figures are rendered automatically after the cell finishes. Do not call `plt.show()`; it's unnecessary.
 - `asyncio`: use top-level `await main()` in browser cells and explain that local scripts use `asyncio.run(main())`.
@@ -133,6 +136,10 @@ def test_prints():
 - Tests are `test_*` functions that run in the learner's namespace after their code. Every assert carries a helpful
   message. `program_output` holds everything the learner's code printed. `capture_output(func, *args, stdin=None)`
   returns `(result, printed_text)`. Tests must not contain `</script>`.
+- To grade tests the learner writes with real pytest, call `run_pytest(learner_source, "-q", modules={"billing": source})`
+  from a `test_*` function. It returns `(exit_code, report)`, 0 meaning every test passed. Each entry in `modules` becomes
+  an importable file, so run once with the correct implementation (expect 0) and once per planted bug (expect 1). Learner
+  code runs once before the tests, so it must import those modules inside test functions or patch them by string.
 - Verify each solution passes its tests (paste both into `pixi run python` locally).
 
 ### Quizzes

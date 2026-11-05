@@ -422,6 +422,40 @@ def capture_output(func, *args, stdin=None, **kwargs):
         sys.stdin = old_in
     return result, buf.getvalue()
 
+def run_pytest(source, *args, modules=None):
+    # Run source as a real pytest file in a fresh directory; return (exit_code, report_text).
+    import pathlib, tempfile
+    import pytest
+    modules = modules or {}
+    buf = io.StringIO()
+    os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    names = {"test_cell", "conftest", *modules}
+    before = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+        (root / "test_cell.py").write_text(source, encoding="utf-8")
+        for name, text in modules.items():
+            (root / f"{name}.py").write_text(text, encoding="utf-8")
+        for name in names:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, tmp)
+        os.chdir(tmp)
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                code = pytest.main(["test_cell.py", "--color=no", "--capture=sys", "-p", "no:cacheprovider", "--tb=short", *args])
+        finally:
+            os.chdir(before)
+            sys.path.remove(tmp)
+            for name in names:
+                sys.modules.pop(name, None)
+    return int(code), buf.getvalue()
+
+async def _pp_pytest(code):
+    status, report = run_pytest(code, "-v")
+    sys.stdout.write(report)
+    return status in (0, 1)
+
 async def _pp_check(code, tests):
     ns = _pp_new_ns()
     tee = _PPTee(sys.stdout)
@@ -439,6 +473,8 @@ async def _pp_check(code, tests):
         sys.stdout = old
     ns["program_output"] = tee.buffer_text.getvalue()
     ns["capture_output"] = capture_output
+    ns["run_pytest"] = run_pytest
+    ns["learner_source"] = code
     try:
         await _pp_exec(tests, ns, "<tests>")
     except BaseException as e:
@@ -556,8 +592,10 @@ self.onmessage = async (event) => {
   if (stdinLines.length && stdinLines[stdinLines.length - 1] === "") stdinLines.pop();
   try {
     try { await py.loadPackagesFromImports(code, { messageCallback: () => {}, errorCallback: () => {} }); } catch (e) { /* unknown packages surface as ImportError when the code runs */ }
+    if (kind === "pytest" || (tests || "").includes("run_pytest")) await py.loadPackage("pytest", { messageCallback: () => {}, errorCallback: () => {} });
     let result;
     if (kind === "run") result = await py.globals.get("_pp_run")(code);
+    else if (kind === "pytest") result = await py.globals.get("_pp_pytest")(code);
     else if (kind === "check") result = await py.globals.get("_pp_check")(code, tests);
     else if (kind === "trace") result = py.globals.get("_pp_trace")(code, stdin || "");
     py.runPython("import sys; sys.stdout.flush(); sys.stderr.flush()");
@@ -656,7 +694,7 @@ self.onmessage = async (event) => {
     el.innerHTML = "";
     el.classList.add("widget");
     const head = h("div", { class: "widget-head" },
-      h("span", { class: "w-kind", text: isLocal ? (version ? `Python ${version}` : "Run locally") : "Runnable" }),
+      h("span", { class: "w-kind", text: isLocal ? (version ? `Python ${version}` : "Run locally") : el.hasAttribute("data-pytest") ? "pytest" : "Runnable" }),
       el.dataset.title ? h("span", { class: "w-title", text: el.dataset.title }) : null,
       h("span", { class: "spacer" }));
     el.append(head);
@@ -672,7 +710,7 @@ self.onmessage = async (event) => {
       out.innerHTML = "";
       runBtn.disabled = true; stopBtn.hidden = false;
       let printed = "";
-      const res = await Py.request("run", { code: editor.getValue(), stdin: stdinBox ? stdinBox.value : el.dataset.stdin || "" }, (msg) => {
+      const res = await Py.request(el.hasAttribute("data-pytest") ? "pytest" : "run", { code: editor.getValue(), stdin: stdinBox ? stdinBox.value : el.dataset.stdin || "" }, (msg) => {
         if (msg.type === "out") { printed += msg.text; appendOut(out, msg.text); }
         else if (msg.type === "image") appendImage(out, msg.data);
         else if (msg.type === "err") appendOut(out, msg.text, "err");

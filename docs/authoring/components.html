@@ -32,7 +32,25 @@
     return f"Hello, {name}!"</code></pre>
     <pre data-label="Terminal"><code class="language-bash">pixi run python hello.py</code></pre>
 
-    <div class="runnable" data-title="Edit me and press Run">
+    <div class="runnable" data-pytest data-title="A real pytest run">
+<textarea>
+import pytest
+
+@pytest.fixture
+def name(monkeypatch):
+    monkeypatch.setenv("NAME", "Ada")
+    return "Ada"
+
+def test_env(name):
+    import os
+    assert os.environ["NAME"] == name
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_fails_once(n):
+    assert n == 1, "this failure shows pytest's real report"
+</textarea>
+</div>
+<div class="runnable" data-title="Edit me and press Run">
 <textarea>
 import sys
 print(f"Running Python {sys.version.split()[0]}")
