@@ -420,8 +420,8 @@ window.CURRICULUM = {
           "id": "m45",
           "title": "Web & APIs",
           "href": "modules/m45-web-apis.html",
-          "minutes": 180,
-          "summary": "HTTP, consuming REST APIs with httpx, and building APIs with FastAPI."
+          "minutes": 210,
+          "summary": "HTTP, consuming REST APIs with httpx, building APIs with FastAPI, and observability."
         },
         {
           "id": "m46",
