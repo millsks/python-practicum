@@ -1,0 +1,1237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M46b · Testing in Practice · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="m46b">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Module 46b</p>
+    <h1>Testing in Practice</h1>
+    <p class="lede"><a href="m17-testing.html">M17</a> taught you how pytest works. This module teaches you to test real
+      code: code that reads the clock and the environment, logs instead of returning, talks to databases, runs
+      coroutines, and was never designed with tests in mind.</p>
+    <div class="lesson-meta"><span>⏱ ~4 hours</span><span>Prerequisites: <a href="m17-testing.html">M17 Testing</a>, <a href="m38-asyncio.html">M38 asyncio</a>, <a href="m44-data-databases.html">M44 Databases</a>, <a href="m46-design.html">M46 Design</a></span></div>
+    <ul class="objectives">
+      <li>Choose between a real resource, dependency injection, <code>monkeypatch</code>, and <code>patch</code> for each dependency</li>
+      <li>Use every <code>monkeypatch</code> method, and patch where a name is looked up rather than where it is defined</li>
+      <li>Assert on printed output, file descriptors, standard library logs, and structlog events</li>
+      <li>Build factory, autouse, and parametrized fixtures, and control their scope and cleanup</li>
+      <li>Make time, randomness, and coroutines deterministic under test</li>
+      <li>Write integration tests that leave no state behind, and block accidental network calls</li>
+      <li>Diagnose flaky suites, and judge a suite by the bugs it catches rather than by its coverage</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="choosing-a-seam">
+    <h2>Choosing a seam</h2>
+    <p>A <strong>seam</strong> (<a href="m46-design.html">M46</a>) is a place where a test can substitute behavior without
+      editing the code. Most testing trouble comes from picking the wrong kind. Work down this list and stop at the first
+      option that fits.</p>
+    <table>
+      <thead><tr><th>Option</th><th>Use it when</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>The real thing</strong></td><td>It is fast and local</td><td><code>tmp_path</code> rather than a fake <code>open</code>; in-memory SQLite rather than fake SQL</td></tr>
+        <tr><td><strong>Inject a fake</strong></td><td>You own the code and can add a parameter</td><td><code>checkout(cart, gateway=FakeGateway())</code></td></tr>
+        <tr><td><strong><code>monkeypatch</code></strong></td><td>The value is global state you can't or shouldn't change: environment variables, module constants, the current directory</td><td><code>monkeypatch.setenv("REGION", "eu")</code></td></tr>
+        <tr><td><strong><code>patch</code> / <code>Mock</code></strong></td><td>You need to verify an interaction that is the actual behavior, such as "the alert was sent once"</td><td><code>mailer.send.assert_called_once_with(...)</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>monkeypatch</code> and <code>patch</code> overlap. Both replace a name and restore it afterward. The practical
+      difference is that <code>monkeypatch</code> is a pytest fixture that swaps in whatever value you give it, while
+      <code>patch</code> creates a <code>Mock</code> that records its calls. If you don't need the record, a small function
+      passed to <code>monkeypatch.setattr</code> is usually easier to read.</p>
+    <aside class="callout think"><p>A function calls <code>os.environ["API_URL"]</code>, <code>requests.get</code>, and
+      <code>datetime.now()</code>. Which of the three would you remove first if you were allowed to refactor it, and which
+      would you still patch?</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> real if it is fast, injected if you own it, patched if it is
+      global, mocked only when the interaction itself is the behavior.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="monkeypatch">
+    <h2><code>monkeypatch</code> in full</h2>
+    <p>The fixture records the original state of everything it touches and undoes all of it when the test ends, whether
+      the test passed or failed. That automatic cleanup is the reason to use it instead of assigning to
+      <code>os.environ</code> or a module attribute yourself: a forgotten restore leaks into every later test.</p>
+    <table>
+      <thead><tr><th>Method</th><th>What it replaces</th></tr></thead>
+      <tbody>
+        <tr><td><code>setattr(obj, "name", value)</code></td><td>An attribute on a module, class, or instance</td></tr>
+        <tr><td><code>setattr("pkg.mod.name", value)</code></td><td>The same, addressed by a dotted string, so you needn't import the module</td></tr>
+        <tr><td><code>delattr(obj, "name", raising=True)</code></td><td>Removes an attribute</td></tr>
+        <tr><td><code>setenv("NAME", "value", prepend=None)</code></td><td>An environment variable. Values must be strings; <code>prepend=":"</code> adds to the front, as for <code>PATH</code></td></tr>
+        <tr><td><code>delenv("NAME", raising=True)</code></td><td>Removes an environment variable</td></tr>
+        <tr><td><code>setitem(mapping, key, value)</code> / <code>delitem(mapping, key)</code></td><td>One dictionary entry, such as a config setting or <code>sys.modules</code></td></tr>
+        <tr><td><code>chdir(path)</code></td><td>The current working directory</td></tr>
+        <tr><td><code>syspath_prepend(path)</code></td><td>Adds a directory to the front of <code>sys.path</code></td></tr>
+        <tr><td><code>with monkeypatch.context() as m:</code></td><td>Limits patches to one block rather than the whole test</td></tr>
+      </tbody>
+    </table>
+    <p>Two details catch people. <code>setattr</code> raises <code>AttributeError</code> if the attribute doesn't exist,
+      which protects you from patching a typo; pass <code>raising=False</code> only when you mean to create it. And
+      <code>delenv</code> raises <code>KeyError</code> if the variable isn't set, so a test of default behavior should use
+      <code>delenv("NAME", raising=False)</code>. That is also how you keep a test from depending on the machine it runs on.</p>
+    <div class="runnable" data-pytest data-title="Every monkeypatch method">
+<textarea>
+import os
+import sys
+import pathlib
+import pytest
+
+SETTINGS = {"retries": 3}
+
+class Service:
+    timeout = 30
+
+def test_setattr_on_a_class(monkeypatch):
+    monkeypatch.setattr(Service, "timeout", 1)
+    assert Service().timeout == 1
+
+def test_typos_are_caught(monkeypatch):
+    with pytest.raises(AttributeError):
+        monkeypatch.setattr(Service, "timeuot", 1)
+
+def test_setenv_and_delenv(monkeypatch):
+    monkeypatch.setenv("REGION", "eu")
+    assert os.environ["REGION"] == "eu"
+    monkeypatch.delenv("REGION")
+    assert "REGION" not in os.environ
+
+def test_delenv_for_default_behavior(monkeypatch):
+    monkeypatch.delenv("REGION", raising=False)
+    assert os.environ.get("REGION", "us") == "us"
+
+def test_setitem(monkeypatch):
+    monkeypatch.setitem(SETTINGS, "retries", 0)
+    assert SETTINGS["retries"] == 0
+
+def test_setting_is_back():
+    assert SETTINGS["retries"] == 3
+
+def test_chdir(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert pathlib.Path.cwd() == tmp_path.resolve()
+
+def test_syspath_prepend(monkeypatch, tmp_path):
+    (tmp_path / "plugin_demo.py").write_text("VALUE = 42\n")
+    monkeypatch.syspath_prepend(tmp_path)
+    monkeypatch.delitem(sys.modules, "plugin_demo", raising=False)
+    import plugin_demo
+    assert plugin_demo.VALUE == 42
+    monkeypatch.delitem(sys.modules, "plugin_demo")
+
+def test_context_limits_a_patch(monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(Service, "timeout", 5)
+        assert Service.timeout == 5
+    assert Service.timeout == 30
+</textarea>
+    </div>
+    <aside class="callout warn"><p><code>monkeypatch</code> is function-scoped, so a <code>scope="session"</code> fixture
+      can't request it. If a wide-scoped fixture needs a patch, create one with <code>pytest.MonkeyPatch()</code> and call
+      its <code>undo()</code> after the <code>yield</code>.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> all changes are undone automatically. Use
+      <code>delenv(..., raising=False)</code> so that default-value tests don't depend on the machine.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="where-to-patch">
+    <h2>Patch where the name is looked up</h2>
+    <p>This is the most common patching bug, and it fails silently. Suppose you have two modules:</p>
+    <div class="two-col">
+      <pre data-label="prices.py"><code class="language-python">def tax_rate(region):
+    ...  # calls a remote service</code></pre>
+      <pre data-label="report.py"><code class="language-python">from prices import tax_rate
+
+def gross(net, region):
+    return round(net * (1 + tax_rate(region)))</code></pre>
+    </div>
+    <p><code>from prices import tax_rate</code> creates a second name, <code>report.tax_rate</code>, bound to the same
+      function when <code>report</code> is imported. Patching <code>prices.tax_rate</code> afterward rebinds the first name
+      only. <code>report</code> still holds the original, and your test makes the real network call. The fix is to patch the
+      name the code actually uses: <code>report.tax_rate</code>.</p>
+    <p>If the module used <code>import prices</code> and called <code>prices.tax_rate(region)</code>, the lookup would happen
+      in <code>prices</code> at call time, and patching <code>prices.tax_rate</code> would be correct. Read the import
+      statement in the module under test before you choose a target. This cell demonstrates both results:</p>
+    <div class="runnable" data-pytest data-title="The wrong target versus the right target">
+<textarea>
+import sys
+import types
+import pytest
+
+@pytest.fixture
+def report(monkeypatch):
+    prices = types.ModuleType("prices")
+    exec("def tax_rate(region):\n    raise RuntimeError('real network call!')", prices.__dict__)
+    monkeypatch.setitem(sys.modules, "prices", prices)
+    module = types.ModuleType("report")
+    exec(
+        "from prices import tax_rate\n"
+        "def gross(net, region):\n"
+        "    return round(net * (1 + tax_rate(region)))\n",
+        module.__dict__,
+    )
+    return module
+
+def test_patching_the_definition_does_nothing(monkeypatch, report):
+    monkeypatch.setattr(sys.modules["prices"], "tax_rate", lambda region: 0.5)
+    with pytest.raises(RuntimeError, match="real network call"):
+        report.gross(100, "eu")
+
+def test_patching_the_lookup_works(monkeypatch, report):
+    monkeypatch.setattr(report, "tax_rate", lambda region: 0.5)
+    assert report.gross(100, "eu") == 150
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> with <code>from a import b</code>, patch
+      <code>your_module.b</code>. With <code>import a</code>, patch <code>a.b</code>.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="capturing-output">
+    <h2>Capturing output and logs</h2>
+    <p>Output is behavior too. pytest offers a fixture for each place it can go.</p>
+    <table>
+      <thead><tr><th>Fixture or tool</th><th>Captures</th><th>Typical check</th></tr></thead>
+      <tbody>
+        <tr><td><code>capsys</code></td><td><code>sys.stdout</code> and <code>sys.stderr</code></td><td><code>out, err = capsys.readouterr()</code></td></tr>
+        <tr><td><code>capfd</code></td><td>The file descriptors, including output from C extensions and subprocesses</td><td>Same API as <code>capsys</code></td></tr>
+        <tr><td><code>caplog</code></td><td>Records sent through standard library <code>logging</code></td><td><code>caplog.records</code>, <code>caplog.text</code>, <code>caplog.at_level(...)</code></td></tr>
+        <tr><td><code>structlog.testing.capture_logs</code></td><td>structlog events, as dictionaries</td><td><code>with capture_logs() as events:</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>readouterr()</code> drains the buffer, so each call returns only what was written since the previous call. To
+      fake a user typing, replace <code>sys.stdin</code> with <code>monkeypatch</code>. <code>caplog</code> only sees records
+      at or above the active level, and the root logger's default is <code>WARNING</code>. Use
+      <code>caplog.at_level(logging.INFO)</code> to capture lower levels.</p>
+    <div class="runnable" data-pytest data-title="capsys, stdin, and caplog">
+<textarea>
+import io
+import logging
+import sys
+
+logger = logging.getLogger("sync")
+
+def ask_name():
+    return input("name? ").strip().title()
+
+def sync(items):
+    done = 0
+    for item in items:
+        if not item:
+            logger.warning("skipping empty item")
+            continue
+        logger.info("synced %s", item)
+        print(f"synced {item}")
+        done += 1
+    return done
+
+def test_readouterr_drains(capsys):
+    print("first")
+    assert capsys.readouterr().out == "first\n"
+    print("second")
+    assert capsys.readouterr().out == "second\n"
+
+def test_fake_stdin(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("ada lovelace\n"))
+    assert ask_name() == "Ada Lovelace"
+    assert capsys.readouterr().out == "name? "
+
+def test_warning_is_logged(caplog):
+    assert sync(["a", ""]) == 1
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    assert "skipping empty item" in caplog.text
+
+def test_info_needs_a_lower_level(caplog):
+    with caplog.at_level(logging.INFO, logger="sync"):
+        sync(["a"])
+    assert caplog.messages == ["synced a"]
+</textarea>
+    </div>
+    <h3>Testing structlog</h3>
+    <p>This course's professional code logs with structlog (<a href="m42-tooling.html">M42</a>). With its default
+      configuration, structlog doesn't go through standard library logging, so <code>caplog</code> sees nothing. Use
+      <code>capture_logs</code>, which hands you each event as a dictionary. That is easier to assert on than a formatted
+      string, because a change to the log format can't break the test.</p>
+    <div class="runnable" data-local="structlog isn't available in the browser runtime. Add it with pixi add structlog, then run the file with pixi run pytest." data-title="Asserting on structured events">
+<textarea>
+import structlog
+from structlog.testing import capture_logs
+
+log = structlog.get_logger()
+
+def charge(amount):
+    log.info("charged", amount=amount)
+
+def test_charge_logs_the_amount():
+    with capture_logs() as events:
+        charge(5)
+    assert events == [{"amount": 5, "event": "charged", "log_level": "info"}]
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> <code>capsys</code> for prints, <code>capfd</code> for anything
+      below Python, <code>caplog</code> for <code>logging</code>, and <code>capture_logs</code> for structlog.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="fixture-patterns">
+    <h2>Fixture patterns for real suites</h2>
+    <h3>Factories</h3>
+    <p>A fixture normally gives each test one fixed object. When tests need several objects, or small variations, return a
+      <strong>function</strong> instead. This is the <em>factory fixture</em>. It lets each test state only the fields it
+      cares about, which keeps irrelevant data out of the test.</p>
+    <h3>Autouse</h3>
+    <p><code>@pytest.fixture(autouse=True)</code> applies a fixture to every test in its scope without being requested.
+      Reserve it for true safety rules, such as resetting global state or blocking the network. Anything else should be
+      requested by name, because hidden setup makes a test harder to read.</p>
+    <h3>Parametrized fixtures</h3>
+    <p><code>@pytest.fixture(params=[...])</code> runs every dependent test once per value, available as
+      <code>request.param</code>. This is how you run the same contract tests against each adapter, as in
+      <a href="../projects/p06-habit-tracker.html">Project 6</a>.</p>
+    <h3>Cleanup and scope</h3>
+    <p>Code after <code>yield</code> runs even if the test fails, but not if the fixture itself raised before reaching the
+      <code>yield</code>. <code>request.addfinalizer(fn)</code> registers cleanup one resource at a time, so you can build
+      several resources safely. Fixtures tear down in reverse order of setup. A fixture may only request fixtures of the same
+      or a wider scope, and <code>tmp_path_factory</code> is the session-scoped counterpart of <code>tmp_path</code>.</p>
+    <div class="runnable" data-pytest data-title="Factory, autouse, params, and cleanup">
+<textarea>
+import pytest
+
+EVENTS = []
+USERS = []
+
+@pytest.fixture(autouse=True)
+def fresh_users(monkeypatch):
+    monkeypatch.setattr(f"{__name__}.USERS", [])
+
+@pytest.fixture
+def make_user():
+    def _make(name="ada", admin=False):
+        user = {"name": name, "admin": admin}
+        USERS.append(user)
+        return user
+    return _make
+
+def test_only_states_what_matters(make_user):
+    assert make_user(admin=True)["admin"] is True
+
+def test_several_objects(make_user):
+    make_user("ada")
+    make_user("alan")
+    assert len(USERS) == 2
+
+def test_autouse_gave_a_clean_list():
+    assert USERS == []
+
+class MemoryStore:
+    def __init__(self):
+        self.rows = {}
+    def put(self, key, value):
+        self.rows[key] = value
+    def get(self, key):
+        return self.rows[key]
+
+class ListStore:
+    def __init__(self):
+        self.rows = []
+    def put(self, key, value):
+        self.rows.append((key, value))
+    def get(self, key):
+        return next(v for k, v in reversed(self.rows) if k == key)
+
+@pytest.fixture(params=[MemoryStore, ListStore], ids=["memory", "list"])
+def store(request):
+    return request.param()
+
+def test_contract_latest_value_wins(store):
+    store.put("a", 1)
+    store.put("a", 2)
+    assert store.get("a") == 2
+
+@pytest.fixture
+def first():
+    EVENTS.append("first up")
+    yield
+    EVENTS.append("first down")
+
+@pytest.fixture
+def second(first):
+    EVENTS.append("second up")
+    yield
+    EVENTS.append("second down")
+
+def test_uses_both(second):
+    assert EVENTS == ["first up", "second up"]
+
+def test_teardown_ran_in_reverse():
+    assert EVENTS == ["first up", "second up", "second down", "first down"]
+</textarea>
+    </div>
+    <aside class="callout warn"><p>That last test relies on running after the previous one, purely to show you the teardown
+      order. Real tests must never depend on order; see <a href="#suite-health">suite health</a>.</p></aside>
+    <h3>Where fixtures live</h3>
+    <p>pytest looks for a fixture in the test file, then in each <code>conftest.py</code> walking up the directory tree, then
+      in plugins and built-ins. The closest definition wins, so <code>tests/integration/conftest.py</code> can provide a real
+      <code>db</code> while <code>tests/unit/conftest.py</code> provides a fake with the same name. To see where each fixture
+      a test uses comes from, run <code>pixi run pytest --fixtures-per-test tests/unit/test_cart.py</code>.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> factories for variation, autouse only for safety, params for
+      contract tests, and the closest <code>conftest.py</code> wins.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="parametrize-patterns">
+    <h2>Parametrize beyond the basics</h2>
+    <p>Readable test ids turn a failure report into documentation. <code>test_fee[at-threshold]</code> tells you what broke;
+      <code>test_fee[5000-0]</code> makes you go and look. <code>pytest.param</code> attaches an id and marks to a single case,
+      and <code>indirect=True</code> sends the values through a fixture rather than straight to the test.</p>
+    <div class="runnable" data-pytest data-title="Named cases, per-case marks, and indirect">
+<textarea>
+import pytest
+
+def fee(cents):
+    if cents < 0:
+        raise ValueError("negative total")
+    return 0 if cents >= 5000 else 499
+
+@pytest.mark.parametrize(
+    "cents, expected",
+    [
+        pytest.param(0, 499, id="empty-cart"),
+        pytest.param(4999, 499, id="just-below"),
+        pytest.param(5000, 0, id="at-threshold"),
+        pytest.param(10**9, 1, id="known-wrong", marks=pytest.mark.xfail(reason="shows a per-case mark")),
+    ],
+)
+def test_fee(cents, expected):
+    assert fee(cents) == expected
+
+@pytest.fixture
+def account(request):
+    return {"balance": request.param, "open": True}
+
+@pytest.mark.parametrize("account", [0, 100], indirect=True, ids=["empty", "funded"])
+def test_new_accounts_are_open(account):
+    assert account["open"]
+</textarea>
+    </div>
+    <aside class="callout warn"><p>In a real project, an <code>xfail</code> must link to an open issue that explains it.
+      Otherwise it hides a bug forever. Add <code>strict=True</code> so that the suite fails if the test starts passing and the
+      mark is out of date.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> name your cases. Keep logic out of the parameter table, and split
+      a table in two when its rows need different assertions.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="time-and-randomness">
+    <h2>Taming time and randomness</h2>
+    <p>A test that reads the real clock passes today and fails on a weekend, at midnight, or on February 29. You have three
+      ways to control time, listed from most to least preferred.</p>
+    <ol>
+      <li><strong>Pass time in.</strong> <code>is_overdue(due, today)</code> is a pure function and needs no tricks at all.</li>
+      <li><strong>Inject a clock.</strong> <code>Library(clock=FixedClock(...))</code>, as in
+        <a href="../projects/p02-library-system.html">Project 2</a>.</li>
+      <li><strong>Freeze the clock from outside.</strong> Use this for code you can't change yet. You can't set attributes on
+        the built-in <code>date</code> type, so replace the module's <em>name</em> with a small subclass, or use the
+        <code>time-machine</code> library.</li>
+    </ol>
+    <div class="runnable" data-pytest data-title="Freezing today with a subclass">
+<textarea>
+import sys
+import types
+from datetime import date
+import pytest
+
+@pytest.fixture
+def loans(monkeypatch):
+    module = types.ModuleType("loans")
+    exec(
+        "from datetime import date\n"
+        "def is_overdue(due):\n"
+        "    return date.today() > due\n",
+        module.__dict__,
+    )
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 3, 1)
+
+    monkeypatch.setattr(module, "date", FrozenDate)
+    return module
+
+@pytest.mark.parametrize(
+    "due, overdue",
+    [
+        pytest.param(date(2026, 2, 28), True, id="yesterday"),
+        pytest.param(date(2026, 3, 1), False, id="due-today"),
+        pytest.param(date(2026, 3, 2), False, id="tomorrow"),
+    ],
+)
+def test_is_overdue(loans, due, overdue):
+    assert loans.is_overdue(due) is overdue
+</textarea>
+    </div>
+    <p><code>time-machine</code> changes the time at the C level, so it also covers libraries you don't control and every
+      way of asking for the time. Add it to your dev dependencies with <code>pixi add --feature dev time-machine</code>.</p>
+    <div class="runnable" data-local="time-machine is a compiled library that isn't available in the browser runtime. Run this with pixi run pytest." data-title="Freezing the whole process">
+<textarea>
+import datetime as dt
+import time_machine
+
+@time_machine.travel(dt.datetime(2026, 3, 1, 12, tzinfo=dt.UTC), tick=False)
+def test_frozen_everywhere():
+    assert dt.datetime.now(dt.UTC).year == 2026
+    assert dt.date.today() == dt.date(2026, 3, 1)
+</textarea>
+    </div>
+    <h3>Randomness</h3>
+    <p>Don't assert on one lucky seed against the global <code>random</code> module, since any other code that draws a number
+      changes your result. Give the code its own generator, <code>random.Random(seed)</code>, as a parameter. Then test either
+      exact results from a fixed seed, or properties that hold for any seed.</p>
+    <div class="runnable" data-pytest data-title="Seeded generators and properties">
+<textarea>
+import random
+import pytest
+
+def sample_discount_codes(codes, k, rng):
+    return rng.sample(codes, k)
+
+def test_same_seed_same_result():
+    codes = list("abcdefgh")
+    assert sample_discount_codes(codes, 3, random.Random(7)) == sample_discount_codes(codes, 3, random.Random(7))
+
+@pytest.mark.parametrize("seed", range(5))
+def test_property_holds_for_any_seed(seed):
+    codes = list("abcdefgh")
+    chosen = sample_discount_codes(codes, 3, random.Random(seed))
+    assert len(set(chosen)) == 3
+    assert set(chosen) <= set(codes)
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> pass time and randomness in where you can. Boundaries such as
+      "due today" are where the bugs live, so test them explicitly.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="async-tests">
+    <h2>Testing async code</h2>
+    <p>A coroutine test needs an event loop (<a href="m38-asyncio.html">M38</a>), and plain pytest doesn't provide one. A test
+      declared with <code>async def</code> and no plugin doesn't run its body; pytest reports it as a failure. The usual solution is
+      <code>pytest-asyncio</code>:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi add --feature dev pytest-asyncio</code></pre>
+    <pre data-label="pyproject.toml"><code class="language-toml">[tool.pytest.ini_options]
+asyncio_mode = "strict"                         # tests opt in with @pytest.mark.asyncio
+asyncio_default_fixture_loop_scope = "function"</code></pre>
+    <p>For the dependencies themselves, <code>unittest.mock.AsyncMock</code> is a mock whose calls return awaitables. Use
+      <code>assert_awaited_once_with</code> rather than <code>assert_called_once_with</code>, because a coroutine that was
+      called but never awaited did no work. This cell runs in the browser:</p>
+    <div class="runnable" data-title="AsyncMock records awaits">
+<textarea>
+from unittest.mock import AsyncMock
+
+async def fetch_price(client, sku):
+    response = await client.get(sku)
+    return response["cents"]
+
+client = AsyncMock()
+client.get.return_value = {"cents": 250}
+
+print("price:", await fetch_price(client, "A1"))
+client.get.assert_awaited_once_with("A1")
+print("awaits:", client.get.await_count)
+
+client.get.side_effect = TimeoutError("slow upstream")
+try:
+    await fetch_price(client, "A2")
+except TimeoutError as exc:
+    print("side_effect raised:", exc)
+</textarea>
+    </div>
+    <p>The same logic as a real test file, including a timeout check. Timeouts in tests should be tiny: patch the delay down or
+      use a very short limit, so the suite never actually waits.</p>
+    <div class="runnable" data-local="pytest-asyncio doesn't work under the browser's event loop. Run this with pixi run pytest." data-title="pytest-asyncio test file">
+<textarea>
+import asyncio
+from unittest.mock import AsyncMock
+import pytest
+
+async def fetch_price(client, sku):
+    response = await client.get(sku)
+    return response["cents"]
+
+@pytest.mark.asyncio
+async def test_fetch_price():
+    client = AsyncMock()
+    client.get.return_value = {"cents": 250}
+    assert await fetch_price(client, "A1") == 250
+    client.get.assert_awaited_once_with("A1")
+
+@pytest.mark.asyncio
+async def test_timeout_is_enforced():
+    async def never_finishes():
+        await asyncio.sleep(10)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await never_finishes()
+</textarea>
+    </div>
+    <aside class="callout tip"><p><strong>Remember:</strong> mark async tests, use <code>AsyncMock</code> and the
+      <code>assert_awaited_*</code> family, and never let a test really sleep.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="integration-tests">
+    <h2>Integration tests that clean up after themselves</h2>
+    <p>An integration test uses real resources, so it can also leave real state behind. The next test then fails, or worse,
+      passes only because of what the previous one left. Every integration test must leave the world as it found it.</p>
+    <p>For a database, the cleanest pattern is to share a schema and wrap each test in a transaction that always rolls back.
+      This is far faster than rebuilding the database per test.</p>
+    <div class="runnable" data-pytest data-title="Rollback per test">
+<textarea>
+import sqlite3
+import pytest
+
+@pytest.fixture(scope="module")
+def connection():
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.execute("create table users (name text unique)")
+    yield conn
+    conn.close()
+
+@pytest.fixture
+def db(connection):
+    connection.execute("begin")
+    yield connection
+    connection.execute("rollback")
+
+def count(db):
+    return db.execute("select count(*) from users").fetchone()[0]
+
+def test_insert(db):
+    db.execute("insert into users values ('ada')")
+    assert count(db) == 1
+
+def test_starts_empty_again(db):
+    assert count(db) == 0
+
+def test_unique_name_rejected(db):
+    db.execute("insert into users values ('ada')")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("insert into users values ('ada')")
+</textarea>
+    </div>
+    <h3>Block the network by default</h3>
+    <p>An accidental real HTTP call makes a suite slow and flaky, and it might even charge a card. A small autouse fixture in
+      the top-level <code>conftest.py</code> turns that mistake into an immediate failure. HTTP code is then tested through the
+      seams from <a href="m45-web-apis.html">M45</a>: <code>httpx.MockTransport</code>, <code>respx</code>, and FastAPI's
+      <code>TestClient</code>.</p>
+    <div class="runnable" data-pytest data-title="A network guard">
+<textarea>
+import socket
+import pytest
+
+class NetworkBlocked(RuntimeError):
+    pass
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise NetworkBlocked("this test tried to open a socket")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+
+def fetch_homepage():
+    with socket.socket() as conn:
+        conn.connect(("example.test", 80))
+
+def test_real_call_fails_fast():
+    with pytest.raises(NetworkBlocked):
+        fetch_homepage()
+</textarea>
+    </div>
+    <aside class="callout pro"><p>Mark integration tests with <code>@pytest.mark.integration</code> and keep them in
+      <code>tests/integration/</code>, so <code>pixi run test</code> stays fast and <code>pixi run cov</code> runs both. Use
+      real infrastructure in these tests rather than mocks; that is the point of them.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> roll back after every test, and make the network an explicit
+      opt-in.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="suite-health">
+    <h2>Suite health: speed, flakiness, and quality</h2>
+    <h3>Daily commands</h3>
+    <pre data-label="Terminal"><code class="language-bash">pixi run pytest -x                # stop at the first failure
+pixi run pytest --lf              # rerun only the tests that failed last time
+pixi run pytest --ff              # run failures first, then everything else
+pixi run pytest -k "fee and not negative"   # select by name
+pixi run pytest -m "not integration"        # select by mark
+pixi run pytest --pdb             # open the debugger at a failure
+pixi run pytest --durations=10    # list the 10 slowest tests
+pixi run pytest -vv               # show full diffs</code></pre>
+    <h3>Flaky tests</h3>
+    <p>A <strong>flaky</strong> test passes and fails without any change in the code. Don't just rerun until it goes green,
+      because that teaches the team to ignore red builds. Almost every flaky test has one of a few causes:</p>
+    <table>
+      <thead><tr><th>Cause</th><th>Symptom</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Shared state</td><td>Fails only after a certain other test</td><td>Function-scoped fixtures; <code>monkeypatch</code> rather than direct assignment</td></tr>
+        <tr><td>Real time</td><td>Fails at midnight or at month end</td><td>Inject or freeze the clock</td></tr>
+        <tr><td>Real randomness</td><td>Fails about one run in a hundred</td><td>Seeded generator; print the seed on failure</td></tr>
+        <tr><td>Sleeps and races</td><td>Fails on a busy CI machine</td><td>Wait on an event, not on a duration</td></tr>
+        <tr><td>Set or file ordering</td><td>Differs per run or per OS</td><td>Sort before comparing</td></tr>
+        <tr><td>Real network</td><td>Fails when a service is down</td><td>The network guard above</td></tr>
+      </tbody>
+    </table>
+    <p>Two plugins expose these problems. <code>pytest-randomly</code> shuffles test order and reseeds <code>random</code> on
+      each run, which reveals hidden order dependence and prints the seed so that you can reproduce it.
+      <code>pytest-xdist</code> runs tests in parallel with <code>-n auto</code>, which speeds up large suites but only
+      works once your tests are truly isolated. Both are on conda-forge:
+      <code>pixi add --feature dev pytest-randomly pytest-xdist</code>.</p>
+    <h3>Coverage measures what ran, not what was checked</h3>
+    <p>This test achieves 100% line coverage of <code>fee</code> and can't fail:</p>
+    <pre><code class="language-python">def test_fee_runs():
+    fee(0)
+    fee(5000)</code></pre>
+    <p>Coverage finds code that no test touched, which makes it useful for locating gaps but weak as a measure of quality. The
+      stronger question is <strong>"if this code broke, would a test fail?"</strong> Mutation testing asks exactly that: make a
+      small change to the code, such as <code>&gt;=</code> to <code>&gt;</code>, and see whether the suite notices. A change
+      that survives shows a missing check. Every "write the tests" exercise in this course grades you this way, and tools such
+      as <code>mutmut</code> and <code>cosmic-ray</code> automate it across a project. This cell does it by hand:</p>
+    <div class="runnable" data-title="A mutation test by hand">
+<textarea>
+def correct(cents):
+    return 0 if cents >= 5000 else 499
+
+def mutant(cents):
+    return 0 if cents > 5000 else 499     # >= became >
+
+def weak_suite(fee):
+    assert fee(0) == 499
+    assert fee(9000) == 0
+
+def strong_suite(fee):
+    weak_suite(fee)
+    assert fee(5000) == 0                 # the boundary
+
+for name, suite in [("weak", weak_suite), ("strong", strong_suite)]:
+    suite(correct)
+    try:
+        suite(mutant)
+        print(name, "suite: mutant SURVIVED")
+    except AssertionError:
+        print(name, "suite: mutant caught")
+</textarea>
+    </div>
+    <h3>Characterization tests for code without tests</h3>
+    <p>When you inherit untested code, you can't write tests from a spec, because the code <em>is</em> the only spec. Write
+      <strong>characterization tests</strong> instead: run the code, record what it actually does, and pin that behavior with
+      assertions, even the parts that look odd. Then you can refactor safely, and fix bugs as deliberate, visible changes to a
+      test. You will do exactly this in <a href="../projects/p06b-test-rescue.html">Project 6b</a>.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> treat a flaky test as a bug to diagnose, and trust a suite for the
+      bugs it catches, not for its coverage number.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="practice">
+    <h2>Practice</h2>
+    <p>Every exercise here runs what you write through real pytest, first against a correct module and then against buggy
+      versions. Your tests must pass on the first and fail on each of the others. Because the checker also runs your code once
+      before pytest does, import the provided modules <em>inside</em> your test functions or fixtures.</p>
+
+    <div class="exercise" data-id="m46b-e1" data-title="Patch where it is looked up">
+      <div class="exercise-prompt">
+        <p>Two modules are provided. The real <code>tax_rate</code> raises <code>RuntimeError</code> to stand in for a network
+          call.</p>
+        <pre><code class="language-python"># prices.py
+def tax_rate(region):
+    raise RuntimeError("real network call")
+
+# report.py
+from prices import tax_rate
+
+def gross(net, region):
+    return round(net * (1 + tax_rate(region)))</code></pre>
+        <p>Write <code>test_gross</code>. Replace the rate lookup with a fake that returns <code>0.5</code> for region
+          <code>"eu"</code> and <code>0.0</code> for any other region. Then check that <code>gross(100, "eu")</code> is
+          <code>150</code>.</p>
+      </div>
+<textarea class="starter">
+def test_gross(monkeypatch):
+    import report
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_PRICES = 'def tax_rate(region):\n    raise RuntimeError("real network call")\n'
+_REPORT = (
+    "from prices import tax_rate\n"
+    "def gross(net, region):\n"
+    "    return round(net * (1 + tax_rate(region)))\n"
+)
+
+def _result(report=_REPORT):
+    return run_pytest(learner_source, "-q", modules={"prices": _PRICES, "report": report})
+
+def test_passes_on_the_correct_module():
+    code, text = _result()
+    assert code == 0, "your test should pass on the correct code. Did you patch report.tax_rate?\n" + text
+
+def test_catches_ignoring_the_tax():
+    bug = _REPORT.replace("(1 + tax_rate(region))", "1")
+    assert _result(bug)[0] == 1, "check the value that gross returns"
+
+def test_catches_the_wrong_region():
+    bug = _REPORT.replace("tax_rate(region)", 'tax_rate("us")')
+    assert _result(bug)[0] == 1, "make your fake depend on the region it receives"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>report.py</code> uses <code>from prices import tax_rate</code>, so
+        the name to patch is <code>report.tax_rate</code>. A lambda works:
+        <code>lambda region: 0.5 if region == "eu" else 0.0</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def test_gross(monkeypatch):
+    import report
+    monkeypatch.setattr(report, "tax_rate", lambda region: 0.5 if region == "eu" else 0.0)
+    assert report.gross(100, "eu") == 150</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46b-e2" data-title="Assert on output and logs">
+      <div class="exercise-prompt">
+        <p>The module <code>syncer</code> is provided:</p>
+        <pre><code class="language-python">import logging
+
+logger = logging.getLogger("sync")
+
+def sync(items):
+    for item in items:
+        if not item:
+            logger.warning("skipping empty item")
+            continue
+        print(f"synced {item}")</code></pre>
+        <p>Write <code>test_prints_each_item</code>, which checks that <code>sync(["a", "b"])</code> writes exactly
+          <code>"synced a\nsynced b\n"</code> to standard output. Then write <code>test_warns_on_empty</code>, which checks that
+          <code>sync([""])</code> logs one <code>WARNING</code> record containing <code>"skipping empty item"</code>.</p>
+      </div>
+<textarea class="starter">
+def test_prints_each_item(capsys):
+    import syncer
+    ...
+
+def test_warns_on_empty(caplog):
+    import syncer
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_GOOD = """
+import logging
+logger = logging.getLogger("sync")
+def sync(items):
+    for item in items:
+        if not item:
+            logger.warning("skipping empty item")
+            continue
+        print(f"synced {item}")
+"""
+
+def _result(source=_GOOD):
+    return run_pytest(learner_source, "-q", modules={"syncer": source})
+
+def test_passes_on_the_correct_module():
+    code, text = _result()
+    assert code == 0, "your tests should pass on the correct module:\n" + text
+
+def test_catches_a_missing_warning():
+    bug = _GOOD.replace('logger.warning("skipping empty item")', "pass")
+    assert _result(bug)[0] == 1, "assert that the warning was actually logged"
+
+def test_catches_writing_to_stderr():
+    bug = _GOOD.replace('print(f"synced {item}")', 'import sys; print(f"synced {item}", file=sys.stderr)')
+    assert _result(bug)[0] == 1, "check capsys.readouterr().out exactly"
+
+def test_catches_a_wrong_level():
+    bug = _GOOD.replace("logger.warning", "logger.error")
+    assert _result(bug)[0] == 1, "check the record's levelname as well as its message"
+
+def test_catches_a_wrong_message():
+    bug = _GOOD.replace("synced {item}", "done {item}")
+    assert _result(bug)[0] == 1, "compare the output with the exact expected text"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>capsys.readouterr().out</code> gives you the printed text.
+        <code>caplog.records</code> is a list of records with <code>.levelname</code> and <code>.getMessage()</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">def test_prints_each_item(capsys):
+    import syncer
+    syncer.sync(["a", "b"])
+    assert capsys.readouterr().out == "synced a\nsynced b\n"
+
+def test_warns_on_empty(caplog):
+    import syncer
+    syncer.sync([""])
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    assert "skipping empty item" in caplog.text</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46b-e3" data-title="Factory and autouse fixtures">
+      <div class="exercise-prompt">
+        <p>The module <code>registry</code> keeps global state:</p>
+        <pre><code class="language-python">USERS = []
+
+def register(name, admin=False):
+    user = {"name": name, "admin": admin}
+    USERS.append(user)
+    return user</code></pre>
+        <p>Write two fixtures; the checker supplies the tests that use them.</p>
+        <ul>
+          <li><code>fresh_registry</code>: an <em>autouse</em> fixture that gives every test its own empty
+            <code>registry.USERS</code>.</li>
+          <li><code>make_user</code>: a factory fixture. <code>make_user()</code> registers and returns a user named
+            <code>"ada"</code> who is not an admin, and <code>make_user(name="alan", admin=True)</code> overrides those values.</li>
+        </ul>
+      </div>
+<textarea class="starter">
+import pytest
+
+@pytest.fixture
+def fresh_registry(monkeypatch):
+    import registry
+    ...
+
+@pytest.fixture
+def make_user():
+    import registry
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_REGISTRY = '''
+USERS = []
+def register(name, admin=False):
+    user = {"name": name, "admin": admin}
+    USERS.append(user)
+    return user
+'''
+
+_USAGE = '''
+
+def test_factory_defaults(make_user):
+    assert make_user() == {"name": "ada", "admin": False}
+
+def test_factory_overrides(make_user):
+    assert make_user(name="alan", admin=True) == {"name": "alan", "admin": True}
+
+def test_factory_registers(make_user):
+    import registry
+    user = make_user()
+    assert registry.USERS == [user]
+
+def test_each_test_starts_empty_1():
+    import registry
+    registry.register("x")
+    assert len(registry.USERS) == 1
+
+def test_each_test_starts_empty_2():
+    import registry
+    registry.register("x")
+    assert len(registry.USERS) == 1
+'''
+
+def test_your_fixtures_work():
+    code, text = run_pytest(learner_source + _USAGE, "-q", modules={"registry": _REGISTRY})
+    assert code == 0, "the checker's tests failed against your fixtures:\n" + text
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Add <code>autouse=True</code> and call
+        <code>monkeypatch.setattr(registry, "USERS", [])</code>. For the factory, define an inner function with default
+        arguments and <code>return</code> it without calling it.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pytest
+
+@pytest.fixture(autouse=True)
+def fresh_registry(monkeypatch):
+    import registry
+    monkeypatch.setattr(registry, "USERS", [])
+
+@pytest.fixture
+def make_user():
+    import registry
+    def _make(name="ada", admin=False):
+        return registry.register(name, admin=admin)
+    return _make</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46b-e4" data-title="Name your boundary cases">
+      <div class="exercise-prompt">
+        <p>The module <code>shipping</code> has one function. Shipping is free from 5000 cents upward, costs 499 cents below that,
+          and a negative total raises <code>ValueError</code>.</p>
+        <pre><code class="language-python">def fee(cents):
+    if cents &lt; 0:
+        raise ValueError("negative total")
+    return 0 if cents &gt;= 5000 else 499</code></pre>
+        <p>Write a parametrized <code>test_fee</code> using <code>pytest.param</code> with exactly these ids:
+          <code>empty</code> (0), <code>just-below</code> (4999), and <code>at-threshold</code> (5000). Then write
+          <code>test_negative</code> using <code>pytest.raises</code>.</p>
+      </div>
+<textarea class="starter">
+import pytest
+
+@pytest.mark.parametrize(
+    "cents, expected",
+    [
+        ...
+    ],
+)
+def test_fee(cents, expected):
+    import shipping
+    ...
+
+def test_negative():
+    import shipping
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_GOOD = """
+def fee(cents):
+    if cents < 0:
+        raise ValueError("negative total")
+    return 0 if cents >= 5000 else 499
+"""
+
+def _result(source=_GOOD):
+    return run_pytest(learner_source, "-v", modules={"shipping": source})
+
+def test_passes_on_the_correct_module():
+    code, text = _result()
+    assert code == 0, "your tests should pass on the correct module:\n" + text
+
+def test_uses_the_requested_ids():
+    text = _result()[1]
+    for name in ("empty", "just-below", "at-threshold"):
+        assert f"test_fee[{name}]" in text, f"add pytest.param(..., id={name!r})"
+
+def test_catches_a_threshold_bug():
+    assert _result(_GOOD.replace(">= 5000", "> 5000"))[0] == 1, "test exactly 5000"
+
+def test_catches_a_low_threshold():
+    assert _result(_GOOD.replace(">= 5000", ">= 4999"))[0] == 1, "test exactly 4999"
+
+def test_catches_a_wrong_fee():
+    assert _result(_GOOD.replace("else 499", "else 500"))[0] == 1, "check the fee below the threshold"
+
+def test_catches_missing_validation():
+    bug = _GOOD.replace('raise ValueError("negative total")', "return 0")
+    assert _result(bug)[0] == 1, "use pytest.raises(ValueError) for negative totals"
+      </script>
+      <details class="hint"><summary>Hint</summary><p><code>pytest.param(5000, 0, id="at-threshold")</code> is one row of the
+        table.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">import pytest
+
+@pytest.mark.parametrize(
+    "cents, expected",
+    [
+        pytest.param(0, 499, id="empty"),
+        pytest.param(4999, 499, id="just-below"),
+        pytest.param(5000, 0, id="at-threshold"),
+    ],
+)
+def test_fee(cents, expected):
+    import shipping
+    assert shipping.fee(cents) == expected
+
+def test_negative():
+    import shipping
+    with pytest.raises(ValueError):
+        shipping.fee(-1)</code></pre>
+      </details>
+    </div>
+
+    <div class="exercise" data-id="m46b-e5" data-title="Freeze the clock">
+      <div class="exercise-prompt">
+        <p>The module <code>loans</code> reads the real date, and you may not change it:</p>
+        <pre><code class="language-python">from datetime import date
+
+def is_overdue(due):
+    return date.today() &gt; due</code></pre>
+        <p>Write tests that make <code>loans</code> believe today is 2026-03-01. Check that a loan due 2026-02-28 is overdue and
+          that a loan due 2026-03-01 is not. The checker also runs your tests against a copy of the module whose clock reads a
+          different date, so comparing against the real <code>date.today()</code> won't pass.</p>
+      </div>
+<textarea class="starter">
+from datetime import date
+import pytest
+
+@pytest.fixture
+def loans(monkeypatch):
+    import loans as module
+
+    class FrozenDate(date):
+        ...
+
+    ...
+    return module
+
+def test_yesterday_is_overdue(loans):
+    ...
+
+def test_due_today_is_not_overdue(loans):
+    ...
+</textarea>
+      <script type="text/x-python" class="tests">
+_GOOD = """
+from datetime import date
+def is_overdue(due):
+    return date.today() > due
+"""
+
+_OTHER_CLOCK = """
+from datetime import date as _real
+class date(_real):
+    @classmethod
+    def today(cls):
+        return _real(2031, 1, 1)
+def is_overdue(due):
+    return date.today() > due
+"""
+
+def _result(source=_GOOD):
+    return run_pytest(learner_source, "-q", modules={"loans": source})
+
+def test_passes_on_the_correct_module():
+    code, text = _result()
+    assert code == 0, "your tests should pass on the correct module:\n" + text
+
+def test_ignores_the_real_clock():
+    code, text = _result(_OTHER_CLOCK)
+    assert code == 0, "your tests depend on the real date. Replace loans.date with your frozen class:\n" + text
+
+def test_catches_the_boundary_bug():
+    assert _result(_GOOD.replace("> due", ">= due"))[0] == 1, "test the loan that is due today"
+
+def test_catches_a_reversed_comparison():
+    assert _result(_GOOD.replace("> due", "< due"))[0] == 1, "test the loan that was due yesterday"
+
+def test_catches_always_false():
+    assert _result(_GOOD.replace("date.today() > due", "False"))[0] == 1, "one of your loans must be overdue"
+      </script>
+      <details class="hint"><summary>Hint</summary><p>Give <code>FrozenDate</code> a <code>today</code> classmethod that returns
+        <code>cls(2026, 3, 1)</code>, then call <code>monkeypatch.setattr(module, "date", FrozenDate)</code>.</p></details>
+      <details class="solution"><summary>Show solution</summary>
+<pre><code class="language-python">from datetime import date
+import pytest
+
+@pytest.fixture
+def loans(monkeypatch):
+    import loans as module
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 3, 1)
+
+    monkeypatch.setattr(module, "date", FrozenDate)
+    return module
+
+def test_yesterday_is_overdue(loans):
+    assert loans.is_overdue(date(2026, 2, 28)) is True
+
+def test_due_today_is_not_overdue(loans):
+    assert loans.is_overdue(date(2026, 3, 1)) is False</code></pre>
+      </details>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="mini-project">
+    <h2>Mini-project: harden a suite you already have</h2>
+    <div class="project-box">
+      <div class="widget-head"><span class="w-kind">Mini-project</span><span class="w-title">Audit and harden a test suite</span></div>
+      <div class="widget-body">
+        <p>Pick a project with tests you wrote yourself. The string calculator from <a href="m17-testing.html">M17</a> or the
+          notes API from <a href="m45-web-apis.html">M45</a> both work. Make the suite faster, safer, and harder to fool.</p>
+        <pre data-label="Terminal"><code class="language-bash">pixi add --feature dev pytest-randomly pytest-xdist
+pixi run pytest -q                    # pytest-randomly now shuffles every run; repeat this a few times
+pixi run pytest -n auto -q            # does it still pass in parallel?
+pixi run pytest --durations=10</code></pre>
+        <ul class="checklist" data-id="m46b-mini">
+          <li>A top-level <code>conftest.py</code> has an autouse fixture that blocks the network</li>
+          <li>The suite passes five runs in a row under <code>pytest-randomly</code></li>
+          <li>The suite passes under <code>pytest-xdist</code> with <code>-n auto</code></li>
+          <li>Nothing reads the real clock or the global <code>random</code> generator</li>
+          <li>Parametrized tests have readable ids</li>
+          <li>You planted three bugs by hand. If any survived, you added the missing test</li>
+          <li>The three slowest tests are faster, or you can explain why they aren't</li>
+        </ul>
+        <p><strong>Stretch goals:</strong> convert one mock-heavy test into a fake or a pure function. Add
+          <code>--strict-markers</code> and <code>--strict-config</code> to your pytest options. Try a mutation testing tool on
+          one module.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Quiz</h2>
+    <div class="quiz" data-id="m46b-quiz">
+<script type="application/json">
+{"title": "Testing in Practice", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "<code>shop/report.py</code> contains <code>from shop.prices import tax_rate</code>. Which target replaces the function that <code>report</code> calls?", "options": ["<code>shop.prices.tax_rate</code>", "<code>shop.report.tax_rate</code>", "<code>tax_rate</code>", "<code>builtins.tax_rate</code>"], "answer": 1, "explanation": "<p><code>from ... import</code> creates a name in <code>report</code>. Patch the name where it is looked up, which is <code>shop.report.tax_rate</code>.</p>"},
+  {"type": "single", "prompt": "A test checks a default value that applies when <code>REGION</code> is unset. It passes on your laptop and fails on a CI machine that sets <code>REGION</code>. What is the best fix?", "options": ["Unset the variable in CI", "<code>monkeypatch.delenv(\"REGION\", raising=False)</code>", "Mark the test <code>xfail</code>", "<code>del os.environ[\"REGION\"]</code> at the top of the test"], "answer": 1, "explanation": "<p>The test must control its own environment. <code>raising=False</code> means it also works when the variable isn't set, and the change is undone afterward.</p>"},
+  {"type": "single", "prompt": "Which fixture captures output written directly to file descriptor 1 by a C extension?", "options": ["<code>capsys</code>", "<code>capfd</code>", "<code>caplog</code>", "<code>tmp_path</code>"], "answer": 1, "explanation": "<p><code>capsys</code> replaces the Python <code>sys.stdout</code> object. <code>capfd</code> works at the file descriptor level, so it also sees output from below Python.</p>"},
+  {"type": "single", "prompt": "With default configuration, why does <code>caplog</code> see nothing from <code>structlog.get_logger().info(\"x\")</code>?", "options": ["The INFO level is too low", "structlog doesn't send events through standard library logging by default", "<code>caplog</code> only works on classes", "structlog buffers until the process exits"], "answer": 1, "explanation": "<p>structlog has its own output path by default. Use <code>structlog.testing.capture_logs</code>, which gives you each event as a dictionary.</p>"},
+  {"type": "multi", "prompt": "Which are good reasons to use <code>autouse=True</code>?", "options": ["Blocking network access for every test", "Resetting a global registry between tests", "Avoiding having to type a fixture name", "Creating sample data that only some tests need"], "answer": [0, 1], "explanation": "<p>Autouse suits safety rules that apply to everything. Hidden setup that only some tests need makes those tests harder to read and slows the others.</p>"},
+  {"type": "single", "prompt": "What does a factory fixture return?", "options": ["A class instance created once per session", "A function that tests call to build objects", "A list of every object in the database", "A <code>Mock</code>"], "answer": 1, "explanation": "<p>Returning a function lets a test build several objects and state only the fields that matter to it.</p>"},
+  {"type": "output", "prompt": "Fixture <code>b</code> requests fixture <code>a</code>, and both use <code>yield</code>. Each appends its name plus <code>+</code> before the <code>yield</code> and its name plus <code>-</code> after it. A test requests <code>b</code>. What is the final order, written with single spaces?", "answer": "a+ b+ b- a-", "explanation": "<p>Dependencies set up first, and teardown runs in reverse order of setup.</p>"},
+  {"type": "single", "prompt": "What is the most testable way to give a function the current date?", "options": ["Call <code>date.today()</code> inside it", "Pass the date in as a parameter", "Read it from a global variable", "Patch the system clock in CI"], "answer": 1, "explanation": "<p>A function that receives the date is pure and needs no patching at all. Freezing the clock is for code you can't change yet.</p>"},
+  {"type": "single", "prompt": "Which assertion proves that a coroutine on an <code>AsyncMock</code> really ran?", "options": ["<code>assert_called_once()</code>", "<code>assert_awaited_once()</code>", "<code>assert_not_called()</code>", "<code>call_count == 1</code>"], "answer": 1, "explanation": "<p>Calling a coroutine function only creates a coroutine object, and no work happens until it is awaited. <code>assert_awaited_*</code> checks the await.</p>"},
+  {"type": "single", "prompt": "A test passes alone but fails when the whole suite runs. What is the most likely cause?", "options": ["The Python version", "State shared with another test", "Too few assertions", "The test name"], "answer": 1, "explanation": "<p>Passing alone and failing in a group points to order dependence, usually a leaked global, environment variable, or database row. <code>pytest-randomly</code> helps expose it.</p>"},
+  {"type": "single", "prompt": "A module has 100% line coverage, but changing <code>&gt;=</code> to <code>&gt;</code> breaks no test. What does this show?", "options": ["The change is harmless", "Coverage shows what ran, not what was checked", "Coverage tools can't read comparisons", "The tests are too slow"], "answer": 1, "explanation": "<p>The line ran, but no test checked the boundary. A surviving mutation like this one shows exactly which test is missing.</p>"},
+  {"type": "text", "prompt": "What is the term for a test that pins down what existing code actually does, even if it looks wrong, so that you can refactor safely? (one word, then \"test\")", "answer": ["characterization test", "characterization", "characterisation test", "characterisation"], "explanation": "<p>Characterization tests treat current behavior as the baseline. Bug fixes then become deliberate, visible changes to a test.</p>"}
+]}
+</script>
+    </div>
+  </section>
+
+  <section class="lesson-section" id="recap">
+    <h2>Recap</h2>
+    <ul>
+      <li>Choose a seam in this order: the real thing if fast, an injected fake if you own the code, <code>monkeypatch</code> for
+        global state, and <code>Mock</code> only when the interaction is the behavior.</li>
+      <li><code>monkeypatch</code> undoes everything automatically and covers attributes, environment variables, dictionary
+        entries, the working directory, and <code>sys.path</code>.</li>
+      <li>Patch the name where it is looked up. <code>from a import b</code> means you patch <code>your_module.b</code>.</li>
+      <li><code>capsys</code>, <code>capfd</code>, <code>caplog</code>, and <code>capture_logs</code> each capture a different
+        output path.</li>
+      <li>Factories give variation, autouse enforces safety, <code>params</code> runs contract tests, and the closest
+        <code>conftest.py</code> wins.</li>
+      <li>Pass in time and randomness where possible, and test boundaries explicitly.</li>
+      <li>Async tests need a plugin and <code>assert_awaited_*</code>. Integration tests must roll back. Block the network by
+        default.</li>
+      <li>Diagnose flaky tests rather than rerunning them. Judge a suite by the bugs it catches.</li>
+    </ul>
+    <div class="flashcards" data-title="Testing in practice">
+<script type="application/json">
+[{"front": "Where do you patch after <code>from a import b</code>?", "back": "In the module that did the import: <code>your_module.b</code>, not <code>a.b</code>."},
+ {"front": "<code>monkeypatch.delenv(\"X\", raising=False)</code>", "back": "Removes X if it is set and does nothing otherwise, so a default-value test doesn't depend on the machine."},
+ {"front": "<code>capsys</code> vs <code>capfd</code>", "back": "<code>capsys</code> replaces <code>sys.stdout</code> and <code>sys.stderr</code>. <code>capfd</code> captures the file descriptors, including C extensions and subprocesses."},
+ {"front": "How do you test structlog events?", "back": "<code>with structlog.testing.capture_logs() as events:</code> gives you a list of dictionaries."},
+ {"front": "Factory fixture", "back": "A fixture that returns a function, so tests can build several objects and vary their fields."},
+ {"front": "<code>autouse=True</code>", "back": "Applies a fixture to every test in scope without being requested. Reserve it for safety rules."},
+ {"front": "<code>request.param</code>", "back": "The current value inside <code>@pytest.fixture(params=[...])</code>. Every dependent test runs once per value."},
+ {"front": "<code>AsyncMock</code> checks", "back": "Use <code>assert_awaited_once_with</code>, because a coroutine that was called but never awaited did no work."},
+ {"front": "Database test isolation", "back": "Share the schema, begin a transaction per test, and always roll back."},
+ {"front": "Flaky test causes", "back": "Shared state, real time, real randomness, sleeps and races, unsorted ordering, and real network calls."},
+ {"front": "Mutation testing", "back": "Make a small change to the code and see whether a test fails. A surviving change shows a missing check."},
+ {"front": "Characterization test", "back": "Pins what existing code actually does, so that you can refactor safely."}]
+</script>
+    </div>
+    <h3>Going further</h3>
+    <ul>
+      <li><a href="https://docs.pytest.org/en/stable/how-to/monkeypatch.html">pytest: how to monkeypatch</a></li>
+      <li><a href="https://docs.pytest.org/en/stable/how-to/fixtures.html">pytest: how to use fixtures</a></li>
+      <li><a href="https://docs.pytest.org/en/stable/how-to/logging.html">pytest: how to manage logging</a></li>
+      <li><a href="https://docs.python.org/3/library/unittest.mock.html#where-to-patch"><code>unittest.mock</code>: where to patch</a></li>
+      <li><a href="https://www.structlog.org/en/stable/testing.html">structlog: testing</a></li>
+      <li><a href="https://pytest-asyncio.readthedocs.io/">pytest-asyncio documentation</a></li>
+      <li><a href="https://time-machine.readthedocs.io/">time-machine documentation</a></li>
+    </ul>
+    <p>Next, put all of this to work on untested code in <a href="../projects/p06b-test-rescue.html">Project 6b: Test Rescue</a>.</p>
+  </section>
+</main>
+</body>
+</html>

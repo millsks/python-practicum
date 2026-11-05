@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project 6b: Test Rescue · Python Practicum</title>
+<link rel="stylesheet" href="../assets/css/course.css">
+<script src="../assets/js/curriculum.js"></script>
+<script src="../assets/js/viz.js" defer></script>
+<script src="../assets/js/viz-ds.js" defer></script>
+<script src="../assets/js/viz-algo.js" defer></script>
+<script src="../assets/js/viz-data.js" defer></script>
+<script src="../assets/js/course.js" defer></script>
+</head>
+<body data-root="../" data-module="p06b">
+<main class="lesson">
+  <header class="lesson-hero">
+    <p class="eyebrow">Part 6 · Professional Python · Graded project</p>
+    <h1>Project 6b: Test Rescue</h1>
+    <p class="lede">In every other project, the tests are handed to you and the code is your job. Here it is the reverse. The
+      code already exists and has no tests, and your test suite is what gets graded: it must pass on the real code and catch
+      28 planted bugs.</p>
+    <div class="lesson-meta"><span>⏱ ~4–6 hours</span><span>Prerequisites: <a href="../modules/m46b-testing-in-practice.html">M46b Testing in Practice</a></span></div>
+    <ul class="objectives">
+      <li>Read unfamiliar code and list its hidden dependencies</li>
+      <li>Write characterization tests that pin down what the code actually does</li>
+      <li>Isolate the environment, clock, randomness, network, and filesystem with <code>monkeypatch</code> and <code>tmp_path</code></li>
+      <li>Test retries and backoff without ever really waiting</li>
+      <li>Assert on standard output, standard error, logs, and exit codes</li>
+      <li>Judge your own suite by the bugs it catches</li>
+    </ul>
+  </header>
+
+  <section class="lesson-section" id="scenario">
+    <h2>The scenario</h2>
+    <p>A colleague left and handed you <code>invoicer</code>, a small tool that reads line items, adds tax, converts the
+      currency, and saves an invoice as JSON. It works, as far as anyone knows. It has no tests, and next month the team wants
+      to change how tax is calculated. Nobody is willing to touch it until a test suite can prove that nothing else broke.</p>
+    <aside class="callout think"><p>Before you read the code in full, open <code>invoices.py</code> and list everything
+      <code>build_invoice</code> depends on that isn't one of its arguments. You should find at least five things. Each one is
+      something your tests have to control.</p></aside>
+  </section>
+
+  <section class="lesson-section" id="spec">
+    <h2>What the code does</h2>
+    <p>This is the behavior your suite needs to pin down. You must not edit the package, and the grader ignores any edits you
+      make.</p>
+    <table>
+      <thead><tr><th>Module</th><th>Behavior</th></tr></thead>
+      <tbody>
+        <tr><td><code>config.load_config()</code></td><td>Reads <code>INVOICER_CURRENCY</code> (default <code>USD</code>, upper-cased) and <code>INVOICER_TAX</code> (default <code>0.2</code>). A tax value that isn't a number, or is outside 0 up to but not including 1, raises <code>ValueError</code>.</td></tr>
+        <tr><td><code>rates.fetch_rate(currency, retries=3)</code></td><td>Reads <code>{"rate": ...}</code> with <code>urllib.request.urlopen</code>. On <code>URLError</code>, it sleeps 1 second, then 2 seconds, then raises <code>RateError</code> after the third failed attempt.</td></tr>
+        <tr><td><code>invoices.build_invoice(customer, lines)</code></td><td>No lines raises <code>ValueError</code>. Computes net from quantity times cents, then tax. USD uses a rate of 1 and looks nothing up; other currencies call <code>fetch_rate</code> and convert <code>net</code>, <code>tax</code>, and <code>total</code>. The number is <code>INV-YYYYMMDD-NNNN</code> with a random 1000–9999 suffix. Due 30 days after today. A total above 1,000,000 logs a warning. Appends the number to <code>HISTORY</code>.</td></tr>
+        <tr><td><code>invoices.is_overdue(invoice)</code></td><td>True from the day after the due date onward.</td></tr>
+        <tr><td><code>invoices.save_invoice(invoice)</code></td><td>Writes JSON under <code>INVOICER_DIR</code> (default <code>invoices</code>), creating the directory. Logs a warning when overwriting. Prints <code>saved PATH</code>.</td></tr>
+        <tr><td><code>cli.main(argv=None)</code></td><td>Takes one customer argument and reads <code>description,qty,cents</code> lines from stdin, skipping blank lines. Saves the invoice, prints <code>NUMBER total TOTAL CURRENCY</code>, and returns 0. A usage error returns 2 with the message on stderr. A bad line or no lines returns 2 with <code>error: ...</code> on stderr.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="setup">
+    <h2>Setup and grading</h2>
+    <pre data-label="Terminal"><code class="language-bash">pixi run start p06b     # copies the code to work/p06b_test_rescue/
+pixi run grade p06b     # run the grader against your tests</code></pre>
+    <p>Write your tests in <code>work/p06b_test_rescue/tests/</code>. To run them directly while you work:</p>
+    <pre data-label="Terminal"><code class="language-bash">cd work/p06b_test_rescue
+PYTHONPATH=. pixi run pytest tests -q</code></pre>
+    <p>The grader copies a pristine package and your tests into a sandbox with network connections blocked, then checks the
+      following:</p>
+    <ul>
+      <li>Your suite passes on the original code, in under 20 seconds, with at least 90% coverage.</li>
+      <li>It still passes with <code>INVOICER_*</code> variables already set, with a different real date, and in reverse order.</li>
+      <li>It leaves no files behind.</li>
+      <li>It fails on each of 28 versions of the package that contain one planted bug. When a bug survives, the failure message
+        names the behavior you haven't tested.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="milestones">
+    <h2>Milestones</h2>
+    <h3>1. Control the world</h3>
+    <ul class="checklist" data-id="p06b-m1">
+      <li>An autouse fixture clears <code>INVOICER_CURRENCY</code> and <code>INVOICER_TAX</code></li>
+      <li>The same fixture points <code>INVOICER_DIR</code> at <code>tmp_path</code></li>
+      <li>It freezes <code>invoices.date</code>, fixes the random suffix, and gives each test a fresh <code>HISTORY</code></li>
+    </ul>
+    <h3>2. The pure-ish parts</h3>
+    <ul class="checklist" data-id="p06b-m2">
+      <li><code>load_config</code>: defaults, overrides, normalization, and all the bad tax values</li>
+      <li><code>is_overdue</code>: yesterday, today, and tomorrow</li>
+      <li><code>parse_line</code>: a valid line</li>
+    </ul>
+    <h3>3. The network</h3>
+    <ul class="checklist" data-id="p06b-m3">
+      <li><code>fetch_rate</code> with a fake <code>urlopen</code>, on success</li>
+      <li>Retries and exact backoff delays, with <code>time.sleep</code> replaced</li>
+      <li>Recovery after one failure, and <code>RateError</code> after the last</li>
+    </ul>
+    <h3>4. Invoices and the CLI</h3>
+    <ul class="checklist" data-id="p06b-m4">
+      <li>A full USD invoice, compared as a whole dictionary</li>
+      <li>Conversion to another currency, using a fake rate</li>
+      <li>Warnings through <code>caplog</code>, with the threshold tested on both sides</li>
+      <li>Files and printed messages from <code>save_invoice</code></li>
+      <li>Every exit code from <code>main</code>, and whether its text went to stdout or stderr</li>
+    </ul>
+    <h3>5. Close the gaps</h3>
+    <ul class="checklist" data-id="p06b-m5">
+      <li><code>pixi run grade p06b</code> passes every check</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="hints">
+    <h2>Hints</h2>
+    <details class="reveal"><summary>Which name do I patch for <code>fetch_rate</code>?</summary>
+      <p><code>invoices.py</code> uses <code>from invoicer.rates import fetch_rate</code>, so patch
+        <code>invoicer.invoices.fetch_rate</code>. To test <code>fetch_rate</code> itself, patch
+        <code>urllib.request.urlopen</code> instead.</p></details>
+    <details class="reveal"><summary>What can stand in for an HTTP response?</summary>
+      <p>The code uses the response as a context manager and passes it to <code>json.load</code>.
+        <code>io.BytesIO(b'{"rate": 0.5}')</code> supports both. The fake must accept the same arguments, so
+        write <code>def fake(url, timeout): ...</code>.</p></details>
+    <details class="reveal"><summary>How do I record backoff delays?</summary>
+      <p><code>sleeps = []</code> and then <code>monkeypatch.setattr(rates.time, "sleep", sleeps.append)</code>. That also makes
+        the test instant. Then check <code>sleeps == [1, 2]</code>.</p></details>
+    <details class="reveal"><summary>How do I freeze <code>date.today()</code>?</summary>
+      <p>You can't patch a method on the built-in type. Define a subclass with a <code>today</code> classmethod and replace
+        <code>invoicer.invoices.date</code>, exactly as in the <a href="../modules/m46b-testing-in-practice.html#time-and-randomness">M46b section on time</a>.</p></details>
+    <details class="reveal"><summary>How do I feed stdin to <code>main</code>?</summary>
+      <p><code>monkeypatch.setattr(sys, "stdin", io.StringIO("pens,2,500\n"))</code>.</p></details>
+    <details class="reveal"><summary>My order test fails but the normal run passes</summary>
+      <p>Two tests share state. The usual suspects are <code>HISTORY</code>, an invoice file that one test expects another to
+        have written, and <code>os.environ</code> assigned directly rather than through <code>monkeypatch</code>.</p></details>
+  </section>
+
+  <section class="lesson-section" id="rubric">
+    <h2>Rubric</h2>
+    <table>
+      <thead><tr><th>Area</th><th>What good looks like</th></tr></thead>
+      <tbody>
+        <tr><td>Bug detection</td><td>All 28 planted bugs are caught, by tests that check behavior rather than internals</td></tr>
+        <tr><td>Isolation</td><td>No test depends on the machine, the date, the order, or any other test</td></tr>
+        <tr><td>Readability</td><td>Test names say what behavior they cover, and parametrized cases have ids</td></tr>
+        <tr><td>Fixtures</td><td>Shared setup lives in fixtures, and autouse is limited to safety rules</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="lesson-section" id="stretch">
+    <h2>Stretch goals</h2>
+    <ul>
+      <li>Now refactor. Add a <code>clock</code> and a <code>rate_lookup</code> parameter to <code>build_invoice</code>, and see how
+        many of your patches disappear.</li>
+      <li>Run your suite under <code>pytest-randomly</code> and <code>pytest-xdist</code>.</li>
+      <li>Plant three bugs of your own in a copy of the package. If any survive, find out what you missed.</li>
+      <li>Add a real integration test that starts a local HTTP server in a thread and calls <code>fetch_rate</code> against it.</li>
+    </ul>
+  </section>
+
+  <section class="lesson-section" id="quiz">
+    <h2>Check your understanding</h2>
+    <div class="quiz" data-id="p06b-quiz">
+<script type="application/json">
+{"title": "Test Rescue", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why does the grader run your suite with a different real date?", "options": ["To test leap years", "To prove that your tests control the clock instead of depending on it", "To slow the suite down", "To check the invoice format"], "answer": 1, "explanation": "<p>A test that compares against the real <code>date.today()</code> can pass by luck and fail later. If your tests truly control the clock, the real date can't affect them.</p>"},
+  {"type": "single", "prompt": "Your suite has 95% coverage, but the <code>due-date</code> bug (31 days instead of 30) survives. What is missing?", "options": ["More coverage", "An assertion on the due date", "A faster computer", "A mock of <code>timedelta</code>"], "answer": 1, "explanation": "<p>The line ran, so coverage counted it, but nothing checked the result. Comparing the whole invoice dictionary would catch this.</p>"},
+  {"type": "single", "prompt": "Why must a default-value test call <code>monkeypatch.delenv(\"INVOICER_TAX\", raising=False)</code>?", "options": ["It makes the test faster", "A developer or CI machine might already have that variable set", "<code>load_config</code> requires it", "pytest needs it to collect the test"], "answer": 1, "explanation": "<p>Without it, the test silently depends on the machine's environment and fails only for some people.</p>"},
+  {"type": "single", "prompt": "<code>build_invoice</code> is in <code>invoices.py</code>, which uses <code>from invoicer.rates import fetch_rate</code>. Which patch affects it?", "options": ["<code>invoicer.rates.fetch_rate</code>", "<code>invoicer.invoices.fetch_rate</code>", "Both", "Neither"], "answer": 1, "explanation": "<p>The import created a separate name in <code>invoices</code>, and that is the name <code>build_invoice</code> looks up.</p>"}
+]}
+</script>
+    </div>
+  </section>
+</main>
+</body>
+</html>

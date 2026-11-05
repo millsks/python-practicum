@@ -12,14 +12,14 @@ algorithms, data science, machine learning, and data engineering. Everything is 
 
 ## What's inside
 
-- **64 interactive lesson modules** in 10 parts, published as static HTML in [`docs/`](docs/):
+- **65 interactive lesson modules** in 10 parts, published as static HTML in [`docs/`](docs/):
   0 Orientation · 1 Foundations · 2 Intermediate Python · 3 Data Structures · 4 Algorithms · 5 Advanced Python ·
   6 Professional Python · 7 Scientific Computing & Data Science · 8 Machine Learning · 9 Data Engineering · 10 Capstone
 - **Real Python 3.14 and real pytest in the browser** (Pyodide). Lessons include editable runnable cells, predict-the-output
   challenges, a step-through execution tracer, and animated visualizers for data structures and algorithms.
 - **Graded exercises, end-of-module quizzes, flashcards, and mini-projects** in every module. Progress, notes, and
   scores are saved in your browser.
-- **Nine graded projects plus a capstone** in [`projects/`](projects/): starter code, a test suite, and a
+- **Ten graded projects plus a capstone** in [`projects/`](projects/): starter code, a test suite, and a
   reference solution for each.
 - **Reference pages**: what's new in 3.14, a 3.15 preview, plus Pixi, Python, and complexity cheat sheets and a glossary.
 
