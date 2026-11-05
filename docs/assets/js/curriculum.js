@@ -386,7 +386,7 @@ window.CURRICULUM = {
       "number": 6,
       "title": "Professional Python",
       "level": "Professional",
-      "summary": "Packaging with Pixi, tooling and CI, debugging and security, data, web APIs, and software design.",
+      "summary": "Packaging with Pixi, tooling and CI, debugging and security, data, web APIs, software design, and testing in practice.",
       "modules": [
         {
           "id": "m41",
@@ -429,6 +429,13 @@ window.CURRICULUM = {
           "href": "modules/m46-design.html",
           "minutes": 180,
           "summary": "SOLID in Python, design patterns, dependency injection, layered architecture, and refactoring."
+        },
+        {
+          "id": "m46b",
+          "title": "Testing in Practice",
+          "href": "modules/m46b-testing-in-practice.html",
+          "minutes": 240,
+          "summary": "monkeypatch in full, patching targets, logs, advanced fixtures, time, async tests, and flaky suites."
         }
       ],
       "projects": [
@@ -436,6 +443,11 @@ window.CURRICULUM = {
           "id": "p06",
           "title": "Project 6: Habit Tracker Service",
           "href": "projects/p06-habit-tracker.html"
+        },
+        {
+          "id": "p06b",
+          "title": "Project 6b: Test Rescue",
+          "href": "projects/p06b-test-rescue.html"
         }
       ]
     },
