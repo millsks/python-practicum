@@ -1,10 +1,11 @@
 """Whole-repository quality gates: the site is valid, every exercise and project is solvable."""
 
+import re
 from pathlib import Path
 
 import pytest
 
-from practicum.exercises import check_page_exercises
+from practicum.exercises import HARNESS, check_page_exercises
 from practicum.projects import Source, discover_projects, grade_project
 from practicum.site import check_site
 from tests.conftest import REPO_ROOT
@@ -43,3 +44,12 @@ def test_library_styles_load_before_course_styles() -> None:
     load_css = course_js[course_js.index("function loadCss") : course_js.index("const icon")]
     assert "first.before(link)" in load_css
     assert "head.append(h(" not in load_css
+
+
+def test_run_pytest_matches_the_browser_runtime() -> None:
+    pattern = re.compile(r"^def run_pytest\(.*?^    return int\(code\), buf\.getvalue\(\)$", re.S | re.M)
+    course_js = (REPO_ROOT / "docs" / "assets" / "js" / "course.js").read_text(encoding="utf-8")
+    browser, local = pattern.search(course_js), pattern.search(HARNESS)
+    assert browser is not None
+    assert local is not None
+    assert browser.group() == local.group()

@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 HARNESS = r"""
-import ast, asyncio, contextlib, inspect, io, json, sys
+import ast, asyncio, contextlib, inspect, io, json, os, sys
 
 payload = json.loads(sys.stdin.read())
 
@@ -24,6 +24,35 @@ def capture_output(func, *args, stdin=None, **kwargs):
     finally:
         sys.stdin = old_in
     return result, buf.getvalue()
+
+def run_pytest(source, *args, modules=None):
+    # Run source as a real pytest file in a fresh directory; return (exit_code, report_text).
+    import pathlib, tempfile
+    import pytest
+    modules = modules or {}
+    buf = io.StringIO()
+    os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    names = {"test_cell", "conftest", *modules}
+    before = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+        (root / "test_cell.py").write_text(source, encoding="utf-8")
+        for name, text in modules.items():
+            (root / f"{name}.py").write_text(text, encoding="utf-8")
+        for name in names:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, tmp)
+        os.chdir(tmp)
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                code = pytest.main(["test_cell.py", "--color=no", "--capture=sys", "-p", "no:cacheprovider", "--tb=short", *args])
+        finally:
+            os.chdir(before)
+            sys.path.remove(tmp)
+            for name in names:
+                sys.modules.pop(name, None)
+    return int(code), buf.getvalue()
 
 async def run(code, ns, filename):
     compiled = compile(code, filename, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
@@ -44,6 +73,8 @@ async def main():
         return {"error": f"solution raised {type(e).__name__}: {e}"}
     ns["program_output"] = out.getvalue()
     ns["capture_output"] = capture_output
+    ns["run_pytest"] = run_pytest
+    ns["learner_source"] = payload["code"]
     try:
         await run(payload["tests"], ns, "<tests>")
     except BaseException as e:
