@@ -20,7 +20,7 @@
     <p class="lede">Before you can learn to program, you need a place to run programs. In this module you will learn how
       this course works, install Pixi, use it to get Python 3.14, and run your very first script. Every professional
       Python developer does this same setup, so nothing here is "just for beginners".</p>
-    <div class="lesson-meta"><span>⏱ ~1 hour</span><span>Prerequisites: none, just a computer and curiosity</span></div>
+    <div class="lesson-meta"><span>⏱ ~1.25 hours</span><span>Prerequisites: none, just a computer and curiosity</span></div>
     <ul class="objectives">
       <li>Use this course effectively: read, run, predict, practise, quiz, build</li>
       <li>Explain what a package manager and an environment are, and why we use Pixi</li>
@@ -448,6 +448,37 @@ print("I am learning " + langauge)
       where.</p>
   </section>
 
+  <section class="lesson-section" id="git-basics">
+    <h2>Save your work with Git</h2>
+    <p><strong>Git</strong> is a version-control system: it records snapshots of your project, called
+      <strong>commits</strong>, so you can see what changed and get back to any earlier state. Start using it now, while your
+      projects are small. It lets you experiment without fear, because a working version is always one command away. Professional
+      Python work assumes it.</p>
+    <p>Install Git from <a href="https://git-scm.com/downloads">git-scm.com</a>. Then tell it who you are, once per computer:</p>
+    <pre data-label="Terminal"><code class="language-bash">git config --global user.name "Your Name"
+git config --global user.email "you@example.com"</code></pre>
+    <p>Inside your <code>hello</code> workspace, create a repository and make your first commit:</p>
+    <pre data-label="Terminal"><code class="language-bash">git init -b main          # start tracking this folder
+git status                # what has changed?
+git add .                 # choose everything for the next snapshot
+git commit -m "feat: first working version"
+git log --oneline         # list the snapshots</code></pre>
+    <p><code>git add</code> and <code>git commit</code> are separate steps on purpose. <code>add</code> places changes in the
+      <strong>staging area</strong>, and <code>commit</code> saves what is staged, so you can decide exactly what goes into each
+      snapshot. Commit <code>pixi.toml</code> and <code>pixi.lock</code>, because together they let anyone rebuild your
+      environment. Don't commit <code>.pixi/</code>, which Pixi has already added to its generated <code>.gitignore</code>.</p>
+    <p>Now the everyday loop. Break your program on purpose, look at the change, and throw it away:</p>
+    <pre data-label="Terminal"><code class="language-bash">git diff                  # what did I change since the last commit?
+git restore hello.py      # discard those changes</code></pre>
+    <aside class="callout warn"><p><code>git restore</code> permanently discards uncommitted changes in that file. Never commit
+      passwords, API keys, or <code>.env</code> files: removing a secret from Git's history later is hard, so treat any
+      committed secret as leaked.</p></aside>
+    <p>That is all you need for now. <a href="m42-tooling.html">M42</a> adds branches, pull requests, and commit
+      conventions.</p>
+    <aside class="callout tip"><p><strong>Remember:</strong> work, <code>git status</code>, <code>git add</code>,
+      <code>git commit</code>. Commit small and often, each time something works.</p></aside>
+  </section>
+
   <section class="lesson-section" id="python-315">
     <h2>A peek at Python 3.15</h2>
     <p>Python releases a new version every October. While 3.14 is current, 3.15 is in development, and you can try it
@@ -629,6 +660,7 @@ print("Python", sys.version.split()[0])</code></pre></li>
           <li>Your editor uses the interpreter in <code>.pixi/envs/default</code></li>
           <li>The course repository is cloned and <code>pixi run serve</code> opens this site locally</li>
           <li>You ran <code>pixi run projects</code> and saw the list of projects</li>
+          <li><code>git log --oneline</code> in your workspace shows at least one commit</li>
         </ul>
         <h4>Stretch goals</h4>
         <ul>
@@ -645,6 +677,7 @@ print("Python", sys.version.split()[0])</code></pre></li>
     <div class="quiz" data-id="m00-quiz">
 <script type="application/json">
 {"title": "Setup quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Which of these should you <em>not</em> commit to Git?", "options": ["<code>pixi.toml</code>", "<code>pixi.lock</code>", "<code>.pixi/</code>", "Your Python source files"], "answer": 2, "explanation": "<p><code>.pixi/</code> holds the installed environment, which anyone can rebuild from <code>pixi.toml</code> and <code>pixi.lock</code>. Those two files are what you commit.</p>"},
   {"type": "single", "prompt": "What is an <em>environment</em>?", "options": ["A text editor for Python", "An isolated folder containing one Python interpreter and a set of packages", "The internet connection Python uses", "A Python error type"], "answer": 1, "explanation": "<p>An environment isolates one project's interpreter and packages from every other project, so upgrading one never breaks another.</p>"},
   {"type": "single", "prompt": "Which command runs <code>app.py</code> with the workspace's Python?", "options": ["<code>python app.py</code>", "<code>pixi run python app.py</code>", "<code>pixi add app.py</code>", "<code>pixi init app.py</code>"], "answer": 1, "explanation": "<p><code>pixi run</code> runs the command inside the workspace environment (creating or updating it first if needed). Bare <code>python</code> might find some other interpreter.</p>"},
   {"type": "multi", "prompt": "Which statements about <code>pixi.lock</code> are true?", "options": ["It records the exact version of every package", "You edit it by hand to add packages", "It should be committed to version control", "Pixi updates it when you run <code>pixi add</code>"], "answer": [0, 2, 3], "explanation": "<p>The lockfile pins exact versions so everyone gets the same environment. Pixi writes it; you never edit it by hand. You change <code>pixi.toml</code> (usually via <code>pixi add</code>) and Pixi regenerates the lock.</p>"},

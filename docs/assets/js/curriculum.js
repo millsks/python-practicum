@@ -15,8 +15,8 @@ window.CURRICULUM = {
           "id": "m00",
           "title": "Setup: Python 3.14 with Pixi",
           "href": "modules/m00-setup.html",
-          "minutes": 60,
-          "summary": "Pixi workspaces, the Python 3.14 REPL, editors, and how to learn with this course."
+          "minutes": 75,
+          "summary": "Pixi workspaces, the Python 3.14 REPL, editors, Git basics, and how to learn with this course."
         }
       ],
       "projects": []
