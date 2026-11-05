@@ -392,8 +392,8 @@ window.CURRICULUM = {
           "id": "m41",
           "title": "Packaging & Environments with Pixi",
           "href": "modules/m41-pixi-packaging.html",
-          "minutes": 150,
-          "summary": "Workspaces, features and environments, tasks, lockfiles, pyproject.toml, building and publishing."
+          "minutes": 180,
+          "summary": "Workspaces, features and environments, tasks, lockfiles, pyproject.toml, publishing, and containers."
         },
         {
           "id": "m42",

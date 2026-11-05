@@ -21,7 +21,7 @@
       every dependency, reproduce an environment on any machine, test across Python versions, and ship a package
       other people can install. It uses this course's own <code>pixi.toml</code> and <code>pyproject.toml</code> as
       the worked example.</p>
-    <div class="lesson-meta"><span>⏱ ~2.5 hours</span><span>Prerequisites: <a href="m08-modules.html">M08 Modules</a>, <a href="m17-testing.html">M17 Testing</a>, <a href="m40-stdlib.html">M40 Standard Library</a></span></div>
+    <div class="lesson-meta"><span>⏱ ~3 hours</span><span>Prerequisites: <a href="m08-modules.html">M08 Modules</a>, <a href="m17-testing.html">M17 Testing</a>, <a href="m40-stdlib.html">M40 Standard Library</a></span></div>
     <ul class="objectives">
       <li>Explain dependency conflicts and why reproducible environments need a lockfile</li>
       <li>Choose between conda-forge and PyPI packages, and declare each correctly in <code>pixi.toml</code></li>
@@ -941,6 +941,73 @@ tests:
       dependencies or want first-class Pixi and conda installs.</p>
   </section>
 
+  <section class="lesson-section" id="containers">
+    <h2>Shipping a service in a container</h2>
+    <p>A wheel suits a library, because someone else installs it. A service is different: you need to run it on a server, along
+      with the right Python and every native library. A <strong>container</strong> packages your program with that whole
+      userland into one <strong>image</strong>, which runs the same way on a laptop, in CI, and in production. Docker is the most
+      common tool for building and running images.</p>
+    <p>Pixi and containers fit together well. The lockfile already says exactly which packages to install, so an image build only
+      has to install from it. First, make sure the lockfile covers the platform the container runs on, and split out a production
+      environment that leaves out your test tools:</p>
+    <pre data-label="Terminal"><code class="language-bash">pixi workspace platform add linux-64 linux-aarch64</code></pre>
+    <pre data-label="pixi.toml"><code class="language-toml">[dependencies]
+python = "3.14.*"
+
+[feature.test.dependencies]
+pytest = "*"
+
+[environments]
+default = { features = ["test"], solve-group = "main" }
+prod = { features = [], solve-group = "main" }</code></pre>
+    <p>The shared <code>solve-group</code> means <code>prod</code> gets exactly the versions you tested in
+      <code>default</code>. The Dockerfile then has two <strong>stages</strong>: the first has Pixi and builds the environment, and
+      the second copies only the result into a small base image, so neither Pixi nor its caches ship to production.</p>
+    <pre data-label="Dockerfile"><code>FROM ghcr.io/prefix-dev/pixi:0.83.0 AS build
+WORKDIR /app
+COPY pixi.toml pixi.lock ./
+RUN pixi install --locked --environment prod
+RUN pixi shell-hook --environment prod --shell bash &gt; /shell-hook.sh
+RUN echo 'exec "$@"' &gt;&gt; /shell-hook.sh
+
+FROM ubuntu:24.04
+WORKDIR /app
+COPY --from=build /app/.pixi/envs/prod /app/.pixi/envs/prod
+COPY --from=build /shell-hook.sh /shell-hook.sh
+COPY src/ ./src/
+USER nobody
+ENTRYPOINT ["/bin/bash", "/shell-hook.sh"]
+CMD ["python", "src/app.py"]</code></pre>
+    <pre data-label=".dockerignore"><code>.git
+.pixi
+__pycache__
+.env</code></pre>
+    <pre data-label="Terminal"><code class="language-bash">docker build -t my-service .
+docker run --rm my-service                    # runs the default CMD
+docker run --rm my-service python --version   # replaces the CMD
+docker run --rm -e LOG_LEVEL=debug my-service # passes configuration in
+docker images my-service                      # check the size</code></pre>
+    <p>Each line in that Dockerfile is there for a reason:</p>
+    <ul>
+      <li><strong><code>--locked</code></strong> makes the build fail if <code>pixi.lock</code> is out of date, rather than quietly
+        solving for different versions.</li>
+      <li><strong>Copy <code>pixi.toml</code> and <code>pixi.lock</code> before your code.</strong> Docker caches each step until its
+        inputs change, so editing your code doesn't reinstall every dependency.</li>
+      <li><strong>The shell hook</strong> sets the variables that <code>pixi run</code> would normally set, so the runtime image can
+        use the environment without having Pixi installed. <code>exec "$@"</code> then runs your command in place of the shell, so
+        it receives stop signals directly.</li>
+      <li><strong><code>USER nobody</code></strong> means a compromised process isn't running as root.</li>
+      <li><strong><code>.dockerignore</code></strong> keeps your local environment, history, and secrets out of the build.</li>
+    </ul>
+    <aside class="callout danger"><p>Never <code>COPY</code> a <code>.env</code> file or pass a secret with <code>ENV</code> or
+      <code>--build-arg</code>. Anyone with the image can read its layers. Provide secrets when the container starts, through your
+      platform's secret store or <code>docker run -e</code>.</p></aside>
+    <aside class="callout warn"><p>Pin the Pixi image to a version you've tested, and update it deliberately. A floating tag such as
+      <code>latest</code> means the same Dockerfile can produce a different image next month.</p></aside>
+    <aside class="callout tip"><p><strong>Remember:</strong> install from the lockfile with <code>--locked</code>, use two stages, run
+      as a non-root user, and keep secrets out of the image.</p></aside>
+  </section>
+
   <!-- ============================================================ -->
   <section class="lesson-section" id="practice">
     <h2>Practice</h2>
@@ -1375,6 +1442,8 @@ raise SystemExit(main())
     <div class="quiz" data-id="m41-quiz">
 <script type="application/json">
 {"title": "Packaging & environments quiz", "passScore": 0.7, "questions": [
+  {"type": "single", "prompt": "Why does the Dockerfile copy <code>pixi.toml</code> and <code>pixi.lock</code> before your source code?", "options": ["Pixi refuses to run otherwise", "Docker's layer cache then skips reinstalling dependencies when only your code changed", "It makes the image more secure", "Source code must always be copied last by rule"], "answer": 1, "explanation": "<p>Docker reuses a cached step until its inputs change. With the lockfile copied first, a code edit doesn't invalidate the install step.</p>"},
+  {"type": "single", "prompt": "What does <code>pixi install --locked</code> do if <code>pixi.lock</code> doesn't match <code>pixi.toml</code>?", "options": ["Updates the lockfile silently", "Fails", "Ignores the lockfile", "Installs nothing and succeeds"], "answer": 1, "explanation": "<p>A failed build is what you want. It stops an image from being built with versions nobody tested.</p>"},
   {"type": "single", "prompt": "What is the difference between <code>pixi.toml</code> and <code>pixi.lock</code>?", "options": ["They are two copies of the same data", "The manifest states intent with ranges; the lockfile records exact resolved packages and hashes per platform", "The lockfile is only for Windows", "The manifest is generated from the lockfile"], "answer": 1, "explanation": "<p>You edit the manifest (what you want). Pixi writes the lockfile (exactly what it solved). Commit both.</p>"},
   {"type": "single", "prompt": "A package exists on both conda-forge and PyPI. This course's rule says to…", "options": ["<code>pixi add --pypi pkg</code>", "<code>pixi add pkg</code> (conda-forge first)", "<code>pip install pkg</code> inside <code>pixi shell</code>", "vendor the source"], "answer": 1, "explanation": "<p>conda-forge first: the conda solver can then check its native dependencies too. Use <code>--pypi</code> only when conda-forge lacks it, and never pip directly.</p>"},
   {"type": "multi", "prompt": "Which statements about environments are true?", "options": ["Every environment includes the top-level <code>[dependencies]</code> unless <code>no-default-feature = true</code>", "Environments in one solve-group get the same versions of shared packages", "A py312 environment can share a solve-group with a Python 3.14 environment", "Environments are combinations of features"], "answer": [0, 1, 3], "explanation": "<p>The default feature is implicit. Solve-groups share versions, which is impossible when the Python versions differ.</p>"},
@@ -1397,6 +1466,7 @@ raise SystemExit(main())
   <section class="lesson-section" id="recap">
     <h2>Recap</h2>
     <ul>
+      <li>Ship services in a two-stage container image: install with <code>--locked</code>, run as non-root, and keep secrets out.</li>
       <li>Reproducibility needs isolation (one environment per project), a manifest (what you want), and a
         lockfile (what was solved, with hashes, for every platform).</li>
       <li>conda-forge first. Use <code>--pypi</code> only when a package is missing there, and never call
@@ -1415,7 +1485,8 @@ raise SystemExit(main())
     </ul>
     <div class="flashcards" data-title="Packaging and Pixi">
 <script type="application/json">
-[{"front": "Manifest vs lockfile", "back": "Manifest = intent with version ranges (you edit). Lockfile = exact packages, URLs, hashes per platform (Pixi writes). Commit both."},
+[{"front": "Pixi in a Dockerfile", "back": "Build stage: <code>pixi install --locked --environment prod</code>. Runtime stage: copy the environment and the shell hook into a small base image, and run as non-root."},
+ {"front": "Manifest vs lockfile", "back": "Manifest = intent with version ranges (you edit). Lockfile = exact packages, URLs, hashes per platform (Pixi writes). Commit both."},
  {"front": "<code>[dependencies]</code> vs <code>[pypi-dependencies]</code>", "back": "conda-forge packages vs PyPI packages. conda-forge first."},
  {"front": "Feature", "back": "A named bundle of dependencies, tasks, and settings: <code>[feature.test.dependencies]</code>."},
  {"front": "Environment", "back": "A list of features, solved separately and stored in the same lockfile. <code>pixi run -e py312 test</code>."},
