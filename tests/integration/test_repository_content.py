@@ -67,3 +67,15 @@ def test_run_pytest_matches_the_browser_runtime() -> None:
     assert browser is not None
     assert local is not None
     assert browser.group() == local.group()
+
+
+def test_glossary_terms_sit_under_their_own_letter() -> None:
+    glossary = (REPO_ROOT / "docs" / "reference" / "glossary.html").read_text(encoding="utf-8")
+    sections = re.split(r'<h3 id="letter-([a-z])"', glossary)[1:]
+    misplaced = [
+        f"{term} under {letter}"
+        for letter, body in zip(sections[::2], sections[1::2], strict=True)
+        for term in re.findall(r'<dt id="term-[^"]+">([^<]+)', body)
+        if re.sub(r"[^a-z]", "", term.lower())[0] != letter
+    ]
+    assert not misplaced, misplaced
