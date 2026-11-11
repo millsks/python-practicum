@@ -121,7 +121,14 @@
     $("#tabs").innerHTML = b("home", "Overview") + '<span class="sep"></span>' +
       PARTS.map((p) => b(`part-${p.number}`, `${p.number}. ${p.title}`, partDone(p) === partSize(p))).join("") +
       '<span class="sep"></span>' + b("projects", "Projects") + b("reference", "Reference");
-    $("#tabs [aria-current='true']")?.scrollIntoView({ block: "nearest", inline: "center" });
+    centerTab($("#tabs [aria-current='true']"));
+  }
+  function centerTab(tab) {
+    // Scroll only the tab strip: scrollIntoView would also move the page while someone is typing.
+    const strip = tab?.closest(".navscroll");
+    if (!strip) return;
+    const t = tab.getBoundingClientRect(), s = strip.getBoundingClientRect();
+    strip.scrollLeft += t.left - s.left - (s.width - t.width) / 2;
   }
   $("#tabs").addEventListener("click", (e) => { const t = e.target.closest("[data-go]"); if (t) location.hash = t.dataset.go; });
   function updateMeter() { $("#meter").textContent = `${ITEMS.filter((m) => isDone(m.id)).length} / ${ITEMS.length} complete`; }
