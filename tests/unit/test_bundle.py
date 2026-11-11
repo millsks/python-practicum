@@ -174,3 +174,10 @@ def test_write_bundle_creates_parent_dirs(site: Path, tmp_path: Path) -> None:
     count, size = write_bundle(site, out)
     assert count == 4
     assert out.stat().st_size == size
+
+
+def test_engine_tab_bar_never_scrolls_the_page() -> None:
+    engine = (Path(bundle.__file__).parent / "engine" / "engine.js").read_text(encoding="utf-8")
+    render_tabs = engine[engine.index("function renderTabs()") : engine.index("function centerTab(")]
+    assert "scrollIntoView" not in render_tabs
+    assert "strip.scrollLeft" in engine
